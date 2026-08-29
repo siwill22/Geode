@@ -1,0 +1,15 @@
+# Generated archive: ~87 MB of derived data, rebuilt by prep/*.py.
+# See the README for the regeneration commands.
+/archive/
+
+# viewer/public/archive is a relative symlink to /archive and IS tracked,
+# so a fresh clone wires up correctly once the prep scripts have been run.
+
+node_modules/
+dist/
+shots/
+
+__pycache__/
+*.pyc
+
+.DS_Store

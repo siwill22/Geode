@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Geode</title>
+    <style>
+      :root { color-scheme: dark; }
+      html, body {
+        margin: 0; height: 100%; overflow: hidden;
+        background: #0b0d10;
+        font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, sans-serif;
+        color: #d8dee4;
+      }
+      canvas { display: block; }
+      #status {
+        position: fixed; left: 12px; bottom: 12px;
+        padding: 6px 10px; border-radius: 4px;
+        background: rgba(0, 0, 0, 0.6); color: #cfd6dd;
+      }
+      #hint {
+        position: fixed; left: 12px; top: 12px;
+        padding: 6px 10px; border-radius: 4px;
+        background: rgba(0, 0, 0, 0.45); color: #97a3ad;
+        max-width: 30ch;
+      }
+      #credit {
+        position: fixed; right: 12px; bottom: 8px;
+        color: #5d6873; font-size: 11px;
+      }
+      #error {
+        position: fixed; left: 12px; top: 60px; max-width: 60ch;
+        padding: 10px; border-radius: 4px; white-space: pre-wrap;
+        background: #3a1416; color: #ffb4b4;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="hint">
+      Pick a tool in the panel. In Draw, click to add vertices and
+      double-click or Enter to close. Hold <b id="modkey">&#8984;</b> to rotate
+      the globe without leaving the tool.
+    </div>
+    <div id="credit">
+      Topography GEBCO &middot; coastlines &amp; rotations M&uuml;ller et al. 2019 v2
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

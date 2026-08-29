@@ -1,0 +1,18 @@
+import { chromium } from 'playwright';
+const OUT = process.argv[2];
+const b = await chromium.launch({args:['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader']});
+const p = await b.newPage({viewport:{width:900,height:800}});
+await p.goto('http://localhost:5173/',{waitUntil:'load'});
+await p.waitForFunction(()=>window.__geode?.ready===true,{timeout:120000});
+const go = async (f,a)=>{await p.evaluate(([f,a])=>window.__geode[f](a),[f,a]);await p.waitForTimeout(300);};
+const shot = async n=>{await p.waitForTimeout(600);await p.screenshot({path:`${OUT}/${n}.png`});console.log(' ',n);};
+await go('setPolygon',{verts:[[-140,40],[-90,10],[-120,-40],[-180,-20],[-175,25]],depthKm:2890});
+await go('setCamera',{lon:-140,lat:35,dist:2.8});
+console.log(JSON.stringify(await p.evaluate(()=>window.__geode.probeFloor())));
+await go('setVisible',{wall:false,core:false,surface:false,floor:true});
+await shot('a-floor-only');
+await go('setVisible',{wall:true,core:false,surface:false,floor:false});
+await shot('b-wall-only');
+await go('setVisible',{wall:false,core:true,surface:false,floor:false});
+await shot('c-core-only');
+await b.close();
