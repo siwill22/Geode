@@ -11,9 +11,7 @@ distinguished by whether they vary in time:
 - **Tomography Model** — one static volume representing the present day.
   REVEAL, SEMUCB-WM1, S40RTS. Always exactly one Frame.
 - **Convection Model** — a sequence of volumes representing a simulation
-  evolving through geological time. gld37 and siblings. Many Frames.
-
-*Out of scope for the first prototype: Convection Models.*
+  evolving through geological time. Müller 2022 OPT1 and siblings. Many Frames.
 
 ## Frame
 
@@ -46,8 +44,43 @@ One physical field carried by a Model — Vs anomaly, Vp anomaly, density. A
 Model is a *source*, not a source-and-field pair: REVEAL is one Model carrying
 several Variables, not seven Models. Variables of a Model share a grid and a
 depth range, so switching between them changes what is painted on a Cutaway
-without changing its geometry. They do not share units, polarity or sensible
-colour ranges.
+without changing its geometry. They do not share units, Colour Polarity or
+sensible colour ranges.
+
+## Colour Polarity
+
+What a **high** value of a Variable means physically, and therefore which end of
+a diverging colour ramp must be warm.
+
+- *fast* — high means seismically fast, so high means **cold**: velocity anomaly.
+- *hot* — high means hot: temperature anomaly.
+
+A subducted slab is a positive anomaly under one and a negative anomaly under
+the other, so this cannot be derived from the Model, the units, or the data. It
+is declared per Variable and carried through to the ramp.
+
+Not to be confused with **Subduction Polarity**, which is unrelated. The bare
+word "polarity" is avoided for this reason: both meanings appear in this project,
+both are binary, and both are invisible when wrong.
+
+## Subduction Polarity
+
+Which side of a trench the overriding plate lies on, named relative to the
+**vertex order** of the line as stored: `Left` or `Right`. It is what the
+direction symbols on a plate boundary encode, and it is a property of the
+geometry as written, not of the map — reversing a line's vertex order reverses
+its Subduction Polarity without changing where the trench is.
+
+## Boundary Frame
+
+The resolved plate topologies at one time, as a set of lines each carrying a
+boundary type and, for trenches, a Subduction Polarity.
+
+Unlike coastlines, Boundary Frames are **not interpolatable**: resolved
+topologies change discontinuously, segments appear and vanish at triple
+junctions, and the feature count can halve between adjacent frames. There is no
+correspondence between one frame's features and the next's, so they are shown
+with hard cuts.
 
 ## Appearance Age / Disappearance Age
 

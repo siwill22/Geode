@@ -2,7 +2,7 @@
 
 Build a browser-based viewer that renders an archive of 3D mantle models on a spherical Earth, with reconstructable coastlines on the surface and a user-defined polygonal cutaway whose walls are textured with the model interpolated onto the cut surface.
 
-**The first prototype ships seismic tomography models only.** Mantle convection output is a deliberate later addition: the data model accommodates it from the start (§3, `frames`) but nothing in phases 1–3 depends on it. Its primary purpose is exploration — a tool for looking at REVEAL and its siblings directly — with web deployment for others as a secondary goal, and figure generation third. Those priorities are why the archive stays small enough to serve statically and why the UI favours direct manipulation over presets.
+**The first prototype shipped seismic tomography only**, with the data model accommodating convection output from the start (§3, `frames`) but nothing depending on it. That paid off: adding the Müller 2022 OPT1 run at 0–200 Ma (phase 2b) needed a new ingest script and time plumbing, but no change to the manifest schema, the binary format or the shaders. Its primary purpose is exploration — a tool for looking at REVEAL and its siblings directly — with web deployment for others as a secondary goal, and figure generation third. Those priorities are why the archive stays small enough to serve statically and why the UI favours direct manipulation over presets.
 
 Geographic accuracy of the ellipsoid, terrain, and map projections is explicitly **not** required. The Earth is a sphere.
 
@@ -452,16 +452,29 @@ Write it once as `VolumeSurfaceMaterial`. The floor and the walls differ only in
 
 Generate 256×1 RGBA `DataTexture`s from matplotlib colour maps — `RdBu`, `Spectral`, `coolwarm`, `seismic`, `bwr` for diverging; `viridis`, `magma`, `cividis` for sequential. Never compute colours in GLSL. Sourcing from matplotlib rather than an external colour-map distribution keeps the project free of extra data dependencies.
 
-### Polarity is a correctness requirement, not a preference
+### Colour polarity is a correctness requirement, and it is per-variable
 
-Seismic velocity anomaly is signed, and the convention is fixed:
+The physical convention is fixed:
 
-> **fast (positive dV) → cold colours (blue)** — subducting slabs
-> **slow (negative dV) → warm colours (red)** — plumes, hotspots, LLSVPs
+> **subducting slabs → cold colours (blue)**
+> **plumes, hotspots, LLSVPs → warm colours (red)**
 
-The shader maps the low end of the data range to colour index 0, so **index 0 must be red and index 255 must be blue**. That is the reverse of how most diverging maps ship, which run blue-to-red; where that is the case the prep step takes matplotlib's `_r` variant. Getting this backwards paints every slab red and every plume blue, which looks entirely plausible and is entirely wrong — nothing about the render flags it.
+But the *sign* that corresponds to a slab is not fixed, because it depends on the field:
 
-`prep_colormaps.py` therefore **asserts the polarity** of every diverging map it emits, checking that the low end is redder than it is blue and the high end bluer than it is red, and prints a per-map verdict. This caught a genuinely inverted entry when the map set was first assembled.
+| variable | high value means | high end of the ramp |
+|---|---|---|
+| Vs / Vp anomaly | fast, therefore cold | **cool** |
+| temperature anomaly | hot | **warm** |
+
+A slab is a positive anomaly under one and a negative anomaly under the other. So polarity cannot be a property of the project, or of the model, or inferred from the units — it belongs to the **variable**, which declares `high_means: fast | hot`. An earlier version of this spec fixed a single global orientation, which was correct only as long as every model was a velocity anomaly.
+
+Getting this backwards paints every slab red and every plume blue, which looks entirely plausible and is entirely wrong — nothing about the render flags it. So it is machine-checked end to end, in three places:
+
+1. `prep_colormaps.py` emits every diverging map in **both** orientations, tagging each `high_end: warm | cool`. The orientation is **measured from the sampled RGB**, not taken from matplotlib's `_r` naming, and then asserted; a failure aborts the build.
+2. Ingest selects the ramp whose `high_end` matches the variable's `high_means`, and asserts the match.
+3. The viewer offers only ramps of the correct polarity for the loaded variable, so a wrong one is unreachable rather than merely non-default.
+
+This class of bug has now occurred three times in this project. Every occurrence looked plausible on screen and was caught by a machine check, never by eye.
 
 Expose as uniforms so the user can change palette and clip range with no shader recompile. For diverging fields the clip must stay symmetric about the physical zero by default, with a toggle to unlock.
 
@@ -510,6 +523,12 @@ Ship a synthetic volume generator in `/test-data`: a spherical-harmonic checkerb
 **Phase 1 — Globe.** Constants, scene, core and surface spheres, orbit controls. `prep_coastlines.py`; coastline geometry loading, plate rotation in JS, valid-time visibility, continuous reconstruction age slider. No volume.
 
 **Phase 2 — Cutaway.** `prep_model.py`, manifest and binary loading, `Data3DTexture`, tool modes and polygon drawing, spherical scanline mask and discard, wall geometry, **floor cap**, `VolumeSurfaceMaterial`, colormap and variable UI. This is the core deliverable and needs no raymarching — every volume-sampled fragment lies on a surface.
+
+**Phase 2b — Time and plate boundaries.** *(built)* `prep_convection.py`; the Müller 2022 OPT1 run at 0–200 Ma in 11 frames. The `frames` array stops being a formality: one age slider drives coastlines continuously, boundaries at 1 Myr and the volume at 20 Myr, each snapping to what it has and **saying which age it is actually showing**. Volume frames are fetched on demand behind an LRU with neighbour prefetch, and stale responses are discarded so a fast scrub cannot land an old frame after a newer one.
+
+Plate boundaries come from `deep-time-map`, vendored as a submodule and drawn onto a 2D canvas over the WebGL globe. Its entire coupling surface is `project(vec3) -> [x, y, depth] | null`, so integration is a projector and nothing else — the subduction-polarity triangles come across already verified rather than being re-derived in 3D. Three things the projector must get right, all recorded in the README: the geographic→three.js map must be a rotation (det +1) or the polarity mirrors; the horizon is `dot(v, camDir) > R/d`, not `> 0`; and the overlay has no depth buffer, so it culls against the cutaway mask raster rather than a second point-in-polygon.
+
+**Every time-dependent layer must rest on one rotation model.** Müller 2019 and Müller 2022 differ by a whole-Earth rotation of up to 6.4° at 200 Ma — 715 km at the equator, and invisible in any single layer. OPT1 was run on Müller 2022, so the surface uses its `MantleOpt` rotations too.
 
 **Phase 3 — Sections and export.** Standalone great-circle profiles and unclipped constant-depth slices, using the same material. PNG and GeoJSON export. (The *clipped* cap is already built in phase 2 as the cutaway floor.)
 

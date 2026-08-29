@@ -131,6 +131,24 @@ export function rasteriseMask(
   return data;
 }
 
+/**
+ * Is this lon/lat inside the removed region?
+ *
+ * Reads the rasterised mask rather than re-testing the polygon. A second
+ * point-in-polygon implementation would be a second thing to get wrong, and
+ * this raster is the one that check_mask.py holds to account against pygplates
+ * -- so anything that consults it inherits that guarantee. Overlay layers drawn
+ * on the surface use this to lift the pen where the cutaway has removed the
+ * ground beneath them.
+ */
+export function maskAt(mask: Uint8Array, lon: number, lat: number): boolean {
+  let i = Math.floor(((wrapLon(lon) + 180) / 360) * MASK_W);
+  let j = Math.floor(((lat + 90) / 180) * MASK_H);
+  if (i < 0) i = 0; else if (i >= MASK_W) i = MASK_W - 1;
+  if (j < 0) j = 0; else if (j >= MASK_H) j = MASK_H - 1;
+  return mask[j * MASK_W + i] > 127;
+}
+
 /** Fraction of the sphere's area that a polygon's smaller region covers. */
 export function markedAreaFraction(mask: Uint8Array): number {
   let filled = 0;

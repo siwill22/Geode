@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "check:mask": "node scripts/dump_masks.mjs /tmp/geode-masks.json && conda run -n pygmt17 python ../test-data/check_mask.py /tmp/geode-masks.json",
-    "check:render": "node scripts/shoot.mjs shots"
+    "check:render": "node scripts/shoot.mjs shots",
+    "check:boundaries": "cd .. && PYTHONPATH=\"$PYTHONPATH:$PWD/viewer/vendor/deep-time-map/python\" conda run -n pygmt17 python prep/check_boundaries.py"
   },
   "keywords": [],
   "author": "",

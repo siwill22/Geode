@@ -23,6 +23,7 @@ export interface ViewState {
   inverted: boolean;
   surfaceOpacity: number;
   surfaceMode: SurfaceMode;
+  showBoundaries: boolean;
   tool: ToolMode;
 }
 
@@ -36,6 +37,7 @@ export interface UICallbacks {
   onInvert(): void;
   onSurfaceOpacity(v: number): void;
   onSurfaceMode(m: SurfaceMode): void;
+  onBoundaries(on: boolean): void;
   onTool(t: ToolMode): void;
   onClear(): void;
   onExportPNG(): void;
@@ -48,9 +50,12 @@ export class UI {
   private clipMinCtrl!: any;
   private clipMaxCtrl!: any;
   private variableCtrl!: any;
+  private colormapCtrl!: any;
+  private ageCtrl!: any;
   private folderData: GUI;
-  private surfaceModeCtrl!: any;
+  private surfaceModeCtrl: any;
   private status: HTMLDivElement;
+  private timeInfo: HTMLDivElement;
 
   constructor(
     private state: ViewState,
@@ -74,7 +79,8 @@ export class UI {
       .onChange((v: string) => cb.onVariable(v));
 
     const fc = this.gui.addFolder('Colour');
-    fc.add(this.state, 'colormap', colormapNames)
+    this.colormapCtrl = fc
+      .add(this.state, 'colormap', colormapNames)
       .name('colormap')
       .onChange((v: string) => cb.onColormap(v));
     this.clipMinCtrl = fc
@@ -90,8 +96,9 @@ export class UI {
       .onChange(() => this.handleClip('min'));
 
     const ft = this.gui.addFolder('Time');
-    ft.add(this.state, 'reconstructionAge', archive.coastlines.age_min,
-      archive.coastlines.age_max, 0.5)
+    this.ageCtrl = ft
+      .add(this.state, 'reconstructionAge', archive.coastlines.age_min,
+        archive.coastlines.age_max, 0.5)
       .name('age (Ma)')
       .onChange((v: number) => cb.onAge(v));
 
@@ -116,6 +123,9 @@ export class UI {
     fs.add(this.state, 'surfaceOpacity', 0, 1, 0.01)
       .name('surface opacity')
       .onChange((v: number) => cb.onSurfaceOpacity(v));
+    fs.add(this.state, 'showBoundaries')
+      .name('plate boundaries')
+      .onChange((v: boolean) => cb.onBoundaries(v));
 
     const fe = this.gui.addFolder('Export');
     fe.add({ png: () => cb.onExportPNG() }, 'png').name('PNG screenshot');
@@ -127,6 +137,11 @@ export class UI {
     this.status.id = 'status';
     document.body.appendChild(this.status);
     this.setStatus('');
+
+    this.timeInfo = document.createElement('div');
+    this.timeInfo.id = 'timeinfo';
+    document.body.appendChild(this.timeInfo);
+    this.setTimeInfo('');
   }
 
   private handleClip(driver: 'min' | 'max'): void {
@@ -168,8 +183,49 @@ export class UI {
     this.surfaceModeCtrl.updateDisplay();
   }
 
+  /**
+   * Restrict the age slider to what the loaded model can actually show.
+   * A single-frame tomography model still reconstructs its coastlines, so the
+   * range comes from the archive rather than the model's frame list.
+   */
+  setAgeRange(min: number, max: number, step = 0.5): void {
+    this.ageCtrl.min(min).max(max).step(step);
+    if (this.state.reconstructionAge > max) {
+      this.state.reconstructionAge = max;
+    }
+    this.ageCtrl.updateDisplay();
+  }
+
+  /**
+   * Offer only the ramps whose polarity suits the variable.
+   *
+   * A temperature anomaly and a velocity anomaly need opposite orientations,
+   * and picking the wrong one inverts every structure on screen while looking
+   * completely plausible. Filtering makes that unreachable rather than merely
+   * non-default.
+   */
+  setColormapOptions(names: string[], current: string): void {
+    this.colormapCtrl = this.colormapCtrl
+      .options(names)
+      .onChange((v: string) => this.cb.onColormap(v));
+    this.colormapCtrl.setValue(current);
+  }
+
   setStatus(msg: string): void {
     this.status.textContent = msg;
     this.status.style.display = msg ? 'block' : 'none';
+  }
+
+  /**
+   * What each layer is ACTUALLY showing.
+   *
+   * The slider is continuous but the volume steps in 20 Myr and the boundaries
+   * in 1 Myr, so at most ages the mantle on screen is not the age the user
+   * asked for. Saying so is the difference between a snapped frame and a
+   * misleading one.
+   */
+  setTimeInfo(msg: string): void {
+    this.timeInfo.textContent = msg;
+    this.timeInfo.style.display = msg ? 'block' : 'none';
   }
 }

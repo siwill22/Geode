@@ -2,7 +2,9 @@ import {
   Data3DTexture, RedFormat, UnsignedByteType, LinearFilter,
   RepeatWrapping, ClampToEdgeWrapping, DataTexture, RGBAFormat,
 } from 'three';
-import type { ArchiveIndex, ColormapData, Manifest, VariableInfo } from './types';
+import type {
+  ArchiveIndex, ColormapData, FrameInfo, Manifest, VariableInfo,
+} from './types';
 
 export async function loadArchive(base: string): Promise<ArchiveIndex> {
   const r = await fetch(`${base}/archive.json`);
@@ -92,6 +94,91 @@ export async function loadVolume(
   tex.unpackAlignment = 1;
   tex.needsUpdate = true;
   return tex;
+}
+
+/** The frame whose age is closest to `age`. Frames need not be evenly spaced. */
+export function nearestFrame(m: Manifest, age: number): FrameInfo {
+  let best = m.frames[0];
+  let bestGap = Math.abs(best.age_ma - age);
+  for (const f of m.frames) {
+    const gap = Math.abs(f.age_ma - age);
+    if (gap < bestGap) { best = f; bestGap = gap; }
+  }
+  return best;
+}
+
+/**
+ * Volume frames, kept as GPU textures with an LRU bound.
+ *
+ * A convection series is one 12 MB texture per age, so it can neither be
+ * preloaded whole nor re-fetched on every slider move. Four frames is enough to
+ * hold the current one plus its neighbours in both directions, which is the
+ * access pattern scrubbing actually produces.
+ *
+ * The frame on screen is pinned: evicting a texture still bound to a material's
+ * uVolume would leave the wall sampling a disposed texture.
+ */
+const FRAME_LIMIT = 4;
+
+export class FrameCache {
+  private lru = new Map<string, Data3DTexture>();
+  private inflight = new Map<string, Promise<Data3DTexture>>();
+  private pinned: string | null = null;
+
+  constructor(private base: string) {}
+
+  private key(m: Manifest, variableId: string, frameId: string): string {
+    return `${m.id}/${variableId}/${m.default_resolution}/${frameId}`;
+  }
+
+  async get(m: Manifest, variableId: string, frameId: string): Promise<Data3DTexture> {
+    const k = this.key(m, variableId, frameId);
+
+    const hit = this.lru.get(k);
+    if (hit) {                       // refresh recency
+      this.lru.delete(k);
+      this.lru.set(k, hit);
+      return hit;
+    }
+    const pending = this.inflight.get(k);
+    if (pending) return pending;
+
+    const p = loadVolume(this.base, m.id, m, variableId, frameId)
+      .then((tex) => {
+        this.lru.set(k, tex);
+        this.inflight.delete(k);
+        this.evict();
+        return tex;
+      })
+      .catch((e) => { this.inflight.delete(k); throw e; });
+    this.inflight.set(k, p);
+    return p;
+  }
+
+  /** Mark a frame as on-screen so it survives eviction. */
+  pin(m: Manifest, variableId: string, frameId: string): void {
+    this.pinned = this.key(m, variableId, frameId);
+  }
+
+  /** Warm the neighbours of `frameId` in the background; failures are ignored. */
+  prefetchNeighbours(m: Manifest, variableId: string, frameId: string): void {
+    const i = m.frames.findIndex((f) => f.id === frameId);
+    if (i < 0) return;
+    for (const j of [i + 1, i - 1]) {
+      if (j >= 0 && j < m.frames.length) {
+        void this.get(m, variableId, m.frames[j].id).catch(() => {});
+      }
+    }
+  }
+
+  private evict(): void {
+    for (const k of [...this.lru.keys()]) {
+      if (this.lru.size <= FRAME_LIMIT) break;
+      if (k === this.pinned) continue;
+      this.lru.get(k)!.dispose();
+      this.lru.delete(k);
+    }
+  }
 }
 
 /** Physical value -> the 0..1 space the shader clips in. */

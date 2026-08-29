@@ -12,8 +12,16 @@ a wrong render still looks like plausible mantle.  These do not.
                 the half-texel offsets: the ramp's extreme values must land
                 exactly at depth_min_km and depth_max_km, not half a level in.
 
-Both are written through the same manifest schema as a real model, so the
-viewer cannot tell them apart from REVEAL.
+  drift         a blob that moves east with age, over the same 11 frames as the
+                convection model.  Isolates the TIME axis, which nothing else
+                here tests: a real convection series looks entirely plausible
+                with its frames off by one, or in the wrong order altogether.
+                At 0 Ma the blob sits on the prime meridian; at 200 Ma it is
+                100 deg east.  If it starts east and moves west, age and frame
+                index are inverted.
+
+All are written through the same manifest schema as a real model, so the viewer
+cannot tell them apart from REVEAL or OPT1.
 """
 
 import argparse
@@ -24,6 +32,11 @@ import numpy as np
 
 NLON, NLAT, NDEPTH = 360, 181, 192
 DEPTH_MIN, DEPTH_MAX = 0.0, 2840.0
+
+# Match the convection series so the two can be compared frame for frame.
+DRIFT_AGES = list(range(0, 201, 20))
+DRIFT_RATE_DEG_PER_MYR = 0.5
+DRIFT_DEPTH_KM = (500.0, 1500.0)
 
 
 def grids():
@@ -51,15 +64,43 @@ def ramp():
     return np.repeat(np.repeat(t[:, None, None], NLAT, 1), NLON, 2).astype(np.float32)
 
 
-def write(name, display, vol, out_root, colormap="RdBu"):
-    lo, hi = float(vol.min()), float(vol.max())
-    m = max(abs(lo), abs(hi))
-    enc = np.clip((vol + m) / (2 * m) * 255.0, 0, 255).astype(np.uint8)
+def drift(age_ma):
+    """A Gaussian blob on the equator, `age * rate` degrees east of Greenwich."""
+    lon, lat, depth = grids()
+    centre = age_ma * DRIFT_RATE_DEG_PER_MYR
+
+    # Angular distance from the blob centre, on the sphere -- not sqrt(dlon^2 +
+    # dlat^2), which would smear the blob into a band near the poles.
+    dlon = np.radians(((lon - centre + 180.0) % 360.0) - 180.0)
+    la = np.radians(lat)
+    cosd = np.cos(la)[:, None] * np.cos(dlon)[None, :]
+    ang = np.degrees(np.arccos(np.clip(cosd, -1.0, 1.0)))
+    horiz = np.exp(-(ang / 20.0) ** 2)
+
+    d0, d1 = DRIFT_DEPTH_KM
+    mid, half = (d0 + d1) / 2, (d1 - d0) / 2
+    vert = np.exp(-((depth - mid) / half) ** 2)
+
+    return (2.0 * vert[:, None, None] * horiz[None, :, :]).astype(np.float32)
+
+
+def write(name, display, frames, out_root, colormap="RdBu", high_means="fast",
+          units="%"):
+    """`frames` is a list of (age_ma, volume). Encoding range spans them all."""
+    m = max(max(abs(float(v.min())), abs(float(v.max()))) for _, v in frames)
+    lo = min(float(v.min()) for _, v in frames)
+    hi = max(float(v.max()) for _, v in frames)
 
     model_dir = out_root / "models" / name
     frame_dir = model_dir / "frames" / "v" / "std"
     frame_dir.mkdir(parents=True, exist_ok=True)
-    enc.tofile(frame_dir / "000.bin")
+
+    meta = []
+    for age, vol in frames:
+        enc = np.clip((vol + m) / (2 * m) * 255.0, 0, 255).astype(np.uint8)
+        fid = f"{int(round(age)):03d}"
+        enc.tofile(frame_dir / f"{fid}.bin")
+        meta.append({"id": fid, "age_ma": float(age)})
 
     manifest = {
         "id": name, "name": display, "type": "tomography",
@@ -70,12 +111,12 @@ def write(name, display, vol, out_root, colormap="RdBu"):
         "dtype": "uint8",
         "default_resolution": "std",
         "resolutions": [{"id": "std", "nlon": NLON, "nlat": NLAT, "ndepth": NDEPTH}],
-        "frames": [{"id": "000", "age_ma": 0}],
+        "frames": meta,
         "path_template": "frames/{variable}/{resolution}/{frame}.bin",
         "default_variable": "v",
         "variables": [{
             "id": "v", "name": "value", "source_var": "synthetic",
-            "units": "%", "diverging": True,
+            "units": units, "diverging": True, "high_means": high_means,
             "encode_min": -m, "encode_max": m,
             "value_min": lo, "value_max": hi,
             "default_clip_min": -m, "default_clip_max": m,
@@ -83,20 +124,34 @@ def write(name, display, vol, out_root, colormap="RdBu"):
         }],
     }
     (model_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
-    mb = (frame_dir / "000.bin").stat().st_size / 1024 / 1024
-    print(f"  {name:14s} {enc.shape}  {mb:.1f} MB  range [{lo:+.2f}, {hi:+.2f}]")
+    total = sum((frame_dir / f"{f['id']}.bin").stat().st_size for f in meta)
+    print(f"  {name:14s} {len(meta):3d} frame(s)  {total / 1024 / 1024:.1f} MB  "
+          f"range [{lo:+.2f}, {hi:+.2f}]")
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", type=Path, default=Path("archive"))
     args = ap.parse_args()
-    write("fixture-check", "Fixture: checkerboard", checkerboard(), args.out)
-    write("fixture-ramp", "Fixture: depth ramp", ramp(), args.out)
+
+    write("fixture-check", "Fixture: checkerboard",
+          [(0, checkerboard())], args.out)
+    write("fixture-ramp", "Fixture: depth ramp",
+          [(0, ramp())], args.out)
+    write("fixture-drift", "Fixture: drifting blob",
+          [(a, drift(a)) for a in DRIFT_AGES], args.out,
+          colormap="RdBu_hot", high_means="hot", units="K")
+
     print("\nExpected on a cutaway wall:")
     print("  checkerboard  30 deg cells; sign inverts crossing 660 and 1800 km")
     print("  ramp          smooth top-to-bottom gradient, no lon/lat variation;")
     print("                extremes exactly at 0 and 2840 km")
+    print("  drift         one warm blob at 500-1500 km, on the equator, at")
+    print(f"                lon = age x {DRIFT_RATE_DEG_PER_MYR}: 0 deg at 0 Ma, "
+          f"{DRIFT_AGES[-1] * DRIFT_RATE_DEG_PER_MYR:.0f} deg E at "
+          f"{DRIFT_AGES[-1]} Ma.")
+    print("                Moving west with increasing age means the frame")
+    print("                order is inverted.")
 
 
 if __name__ == "__main__":

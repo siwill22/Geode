@@ -15,9 +15,10 @@ import { Cutaway, removedFraction } from './cutaway';
 import { Coastlines, loadCoastlines } from './coastlines';
 import { setMaskMode } from './material';
 import {
-  loadArchive, loadColormaps, loadManifest, loadVolume,
-  makeColormapTexture, physicalToEncoded,
+  FrameCache, loadArchive, loadColormaps, loadManifest,
+  makeColormapTexture, nearestFrame, physicalToEncoded,
 } from './volume';
+import { BoundaryOverlay } from './boundaries';
 import { UI, type SurfaceMode, type ToolMode, type ViewState } from './ui';
 import type { ArchiveIndex, ColormapData, CutawayState, Manifest, VariableInfo } from './types';
 
@@ -62,10 +63,13 @@ const cutaway = new Cutaway(maskTexture);
 scene.add(core, surface.mesh, pick, cutaway.wall, cutaway.floor,
   cutaway.outline, cutaway.handles);
 
+const boundaries = new BoundaryOverlay(camera);
+
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  boundaries.resize();
 });
 
 // --- state ------------------------------------------------------------------
@@ -75,10 +79,11 @@ const cut: CutawayState = {
 };
 
 const view: ViewState = {
-  modelId: '', variableId: '', colormap: 'vik',
+  modelId: '', variableId: '', colormap: 'RdBu',
   clipMin: -2, clipMax: 2, symmetricClip: true,
   reconstructionAge: 0, cutDepthKm: 2890, inverted: false,
-  surfaceOpacity: 1, surfaceMode: 'topography', tool: 'drag',
+  surfaceOpacity: 1, surfaceMode: 'topography', showBoundaries: true,
+  tool: 'drag',
 };
 
 let archive: ArchiveIndex;
@@ -88,6 +93,14 @@ let variable: VariableInfo;
 let coastlines: Coastlines | null = null;
 let topography: import('three').Texture | null = null;
 let ui: UI;
+
+const frames = new FrameCache(ARCHIVE);
+/**
+ * Guards against a fast scrub landing an older frame after a newer one. Every
+ * age change takes a ticket; a load whose ticket is stale is discarded rather
+ * than applied, because fetches do not necessarily complete in issue order.
+ */
+let ageToken = 0;
 
 // --- material plumbing ------------------------------------------------------
 
@@ -128,17 +141,30 @@ function applyVolume(tex: Data3DTexture): void {
   cutaway.floorMaterial.uniforms.uMask.value = maskTexture;
 }
 
+/** Ramps whose polarity matches what a high value means for this variable. */
+function colormapOptions(v: VariableInfo): string[] {
+  const want = (v.high_means ?? 'fast') === 'hot' ? 'warm' : 'cool';
+  return Object.keys(colormaps).filter((n) => {
+    const c = colormaps[n];
+    return c.diverging ? c.high_end === want : true;
+  });
+}
+
 async function selectVariable(id: string): Promise<void> {
   variable = manifest.variables.find((v) => v.id === id) ?? manifest.variables[0];
   ui.setStatus(`loading ${manifest.name} / ${variable.name}...`);
-  const tex = await loadVolume(
-    ARCHIVE, manifest.id, manifest, variable.id, manifest.frames[0].id,
-  );
-  applyVolume(tex);
+
+  const frame = nearestFrame(manifest, view.reconstructionAge);
+  frames.pin(manifest, variable.id, frame.id);
+  applyVolume(await frames.get(manifest, variable.id, frame.id));
+
   view.colormap = variable.default_colormap;
   ui.setVariable(variable);
+  ui.setColormapOptions(colormapOptions(variable), view.colormap);
   applyColormap(view.colormap);
   applyClip();
+  updateTimeInfo();
+  frames.prefetchNeighbours(manifest, variable.id, frame.id);
   ui.setStatus('');
 }
 
@@ -175,12 +201,60 @@ function reconcileSurfaceWithAge(age: number): void {
   }
 }
 
+/**
+ * Report the age each layer is really showing.
+ *
+ * Coastlines interpolate continuously, boundary frames step in 1 Myr and the
+ * convection volume in 20 Myr, so the three rarely agree with the slider or with
+ * each other. Snapping silently would let someone read a 40 Ma mantle as a
+ * 37 Ma one.
+ */
+function updateTimeInfo(): void {
+  if (!manifest || manifest.frames.length < 2) { ui.setTimeInfo(''); return; }
+  const age = view.reconstructionAge;
+  const vol = nearestFrame(manifest, age).age_ma;
+  const parts = [`age ${age.toFixed(1)} Ma`, `mantle ${vol.toFixed(0)} Ma`];
+  if (boundaries.frameTime !== null) {
+    parts.push(`boundaries ${boundaries.frameTime.toFixed(0)} Ma`);
+  }
+  ui.setTimeInfo(parts.join('  ·  '));
+}
+
+/**
+ * One age drives every time-dependent layer. Each snaps to what it has:
+ * coastlines are rotated continuously, boundaries and the volume take their
+ * nearest frame.
+ */
+function applyAge(age: number): void {
+  view.reconstructionAge = age;
+  const token = ++ageToken;
+
+  coastlines?.setAge(age);
+  reconcileSurfaceWithAge(age);
+  void boundaries.setAge(age, () => { if (token === ageToken) updateTimeInfo(); });
+
+  if (manifest && manifest.frames.length > 1) {
+    const frame = nearestFrame(manifest, age);
+    frames.pin(manifest, variable.id, frame.id);
+    void frames.get(manifest, variable.id, frame.id).then((tex) => {
+      // A slower earlier request must not overwrite a faster later one.
+      if (token !== ageToken) return;
+      for (const m of volumeMaterials()) m.uniforms.uVolume.value = tex;
+      frames.prefetchNeighbours(manifest, variable.id, frame.id);
+    }).catch((e) => ui.setStatus(String(e)));
+  }
+  updateTimeInfo();
+}
+
 // --- cutaway ----------------------------------------------------------------
 
 function rebuildCutaway(): void {
   cut.depthKm = view.cutDepthKm;
   cut.inverted = view.inverted;
   cutaway.update(cut);
+  // The overlay has no depth buffer, so it culls against the same raster the
+  // surface shader discards on. Re-read it: update() replaces the array.
+  boundaries.setMask(cut.closed ? cutaway.mask : null);
 }
 
 function closePolygon(): void {
@@ -329,9 +403,21 @@ function download(name: string, blob: Blob): void {
   URL.revokeObjectURL(a.href);
 }
 
+/**
+ * The boundaries live on a separate 2D canvas, so a screenshot has to composite
+ * the two or it silently drops a layer the user can see on screen.
+ */
 function exportPNG(): void {
   renderer.render(scene, camera);
-  renderer.domElement.toBlob((b) => b && download('geode.png', b));
+  boundaries.draw();
+  const gl = renderer.domElement;
+  const out = document.createElement('canvas');
+  out.width = gl.width;
+  out.height = gl.height;
+  const ctx = out.getContext('2d')!;
+  ctx.drawImage(gl, 0, 0);
+  ctx.drawImage(boundaries.canvas, 0, 0, out.width, out.height);
+  out.toBlob((b) => b && download('geode.png', b));
 }
 
 function exportPolygon(): void {
@@ -382,13 +468,14 @@ async function boot(): Promise<void> {
     onVariable: (id) => void selectVariable(id),
     onColormap: (n) => applyColormap(n),
     onClip: () => applyClip(),
-    onAge: (age) => { coastlines?.setAge(age); reconcileSurfaceWithAge(age); },
+    onAge: (age) => applyAge(age),
     onCutDepth: () => rebuildCutaway(),
     onInvert: () => rebuildCutaway(),
     onSurfaceOpacity: (v) => {
       surface.material.uniforms.uOpacity.value = v;
     },
     onSurfaceMode: (m) => { applySurfaceMode(m); ui.setStatus(''); },
+    onBoundaries: (on) => { boundaries.visible = on; },
     onTool: () => { controls.enabled = !toolActive(); },
     onClear: () => { cut.vertices = []; cut.closed = false; rebuildCutaway(); },
     onExportPNG: exportPNG,
@@ -396,7 +483,18 @@ async function boot(): Promise<void> {
     onImportPolygon: importPolygon,
   });
 
+  ui.setAgeRange(archive.coastlines.age_min, archive.coastlines.age_max);
   await selectModel(view.modelId);
+
+  if (archive.boundaries) {
+    ui.setStatus('loading plate boundaries...');
+    try {
+      await boundaries.load(`${ARCHIVE}/${archive.boundaries}`);
+      await boundaries.setAge(view.reconstructionAge);
+    } catch {
+      // Boundaries are a layer, not a prerequisite; the globe still works.
+    }
+  }
 
   ui.setStatus('loading topography...');
   try {
@@ -413,6 +511,7 @@ async function boot(): Promise<void> {
   coastlines.setAge(view.reconstructionAge);
   applySurfaceMode(topography ? view.surfaceMode : 'flat');
   ui.setStatus('');
+  updateTimeInfo();
 
   rebuildCutaway();
   if (window.__geode) window.__geode.ready = true;
@@ -441,12 +540,112 @@ function refreshGUI(): void {
 
 window.__geode = {
   ready: false,
-  setAge: (a: number) => {
-    view.reconstructionAge = a;
-    coastlines?.setAge(a);
-    reconcileSurfaceWithAge(a);
+  setAge: async (a: number) => {
+    applyAge(a);
+    // Settle the async layers so a screenshot taken straight after this shows
+    // the age that was asked for rather than whatever was up before.
+    if (manifest && manifest.frames.length > 1) {
+      await frames.get(manifest, variable.id, nearestFrame(manifest, a).id);
+    }
+    await boundaries.setAge(a);
+    updateTimeInfo();
     refreshGUI();
   },
+  setBoundaries: (on: boolean) => {
+    view.showBoundaries = on;
+    boundaries.visible = on;
+    refreshGUI();
+  },
+  /**
+   * Decode one voxel of the volume texture that is CURRENTLY BOUND.
+   *
+   * Reads the array actually uploaded to the GPU, so it answers "which frame is
+   * on screen", not "which frame did we mean to load". That is the question the
+   * drift fixture exists to ask: at 0 Ma its blob sits on the prime meridian and
+   * at 200 Ma at 100 E, so a frame off by one -- or a reversed series -- shows
+   * up as a number here rather than as a plausible-looking render.
+   */
+  probeVolume: (lon: number, lat: number, depthKm: number) => {
+    const tex = cutaway.wallMaterial.uniforms.uVolume.value as Data3DTexture;
+    const data = tex.image.data as Uint8Array;
+    const res = manifest.resolutions.find(
+      (r) => r.id === manifest.default_resolution,
+    )!;
+    const i = ((Math.round(((lon + 180) / 360) * res.nlon) % res.nlon) + res.nlon)
+      % res.nlon;
+    const j = Math.max(0, Math.min(res.nlat - 1,
+      Math.round(((lat + 90) / 180) * (res.nlat - 1))));
+    const t = (depthKm - manifest.depth_min_km)
+      / (manifest.depth_max_km - manifest.depth_min_km);
+    const k = Math.max(0, Math.min(res.ndepth - 1,
+      Math.round(t * (res.ndepth - 1))));
+    const code = data[k * res.nlat * res.nlon + j * res.nlon + i];
+    return {
+      code,
+      value: variable.encode_min
+        + (code / 255) * (variable.encode_max - variable.encode_min),
+      units: variable.units,
+    };
+  },
+  /**
+   * Test the projector's horizon directly, at the boundary condition.
+   *
+   * This is the one part that could not be borrowed from deep-time-map: its
+   * reference projector is orthographic, where the visible cap ends at
+   * dot(v, camDir) = 0, but under perspective it ends at R/d. The tempting
+   * check -- "is anything drawn outside the silhouette" -- does NOT catch the
+   * mistake: points between the two horizons are behind the tangent circle and
+   * project INSIDE the disc, painting the far side over the near one. So probe
+   * the projector at three known angles instead.
+   *
+   * `beyond` is the discriminator: past the true horizon but well short of 90
+   * degrees, so an orthographic test would wrongly accept it.
+   */
+  probeHorizon: () => {
+    boundaries.projector.update(innerWidth, innerHeight);
+    const d = camera.position.length();
+    const c = camera.position.clone().normalize();
+    // three.js -> geographic is the inverse of (gx, gy, gz) -> (gx, gz, -gy).
+    const g = [c.x, -c.z, c.y];
+    // Any unit vector perpendicular to g.
+    const t = Math.abs(g[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+    let p = [
+      g[1] * t[2] - g[2] * t[1],
+      g[2] * t[0] - g[0] * t[2],
+      g[0] * t[1] - g[1] * t[0],
+    ];
+    const pn = Math.hypot(p[0], p[1], p[2]);
+    p = p.map((x) => x / pn);
+
+    // The cutaway also returns null, for a different and correct reason. Lift it
+    // so this measures the horizon alone.
+    const savedMask = boundaries.projector.mask;
+    boundaries.projector.mask = null;
+
+    const at = (theta: number) => {
+      const cs = Math.cos(theta), sn = Math.sin(theta);
+      return boundaries.projector.project([
+        g[0] * cs + p[0] * sn, g[1] * cs + p[1] * sn, g[2] * cs + p[2] * sn,
+      ]) !== null;
+    };
+    const thetaH = Math.acos(Math.min(1, R_SURFACE / d));
+    const out = {
+      cameraDistance: d,
+      horizonDeg: (thetaH * 180) / Math.PI,
+      inside: at(thetaH - 0.02),       // must be true
+      outside: at(thetaH + 0.02),      // must be false
+      beyond: at(thetaH + (Math.PI / 2 - thetaH) * 0.5), // must be false
+    };
+    boundaries.projector.mask = savedMask;
+    return out;
+  },
+  probeBoundaries: () => ({
+    age: view.reconstructionAge,
+    frameTime: boundaries.frameTime,
+    timeRange: boundaries.timeRange,
+    visible: boundaries.visible,
+    volumeFrame: manifest ? nearestFrame(manifest, view.reconstructionAge) : null,
+  }),
   setSurfaceMode: (m: SurfaceMode) => { applySurfaceMode(m); refreshGUI(); },
   setModel: async (id: string) => { await selectModel(id); refreshGUI(); },
   setVariable: async (id: string) => { await selectVariable(id); refreshGUI(); },
@@ -525,6 +724,9 @@ function animate(): void {
   requestAnimationFrame(animate);
   controls.update();
   renderer.render(scene, camera);
+  // Redrawn every frame: the overlay is in screen space, so it is stale the
+  // moment the camera moves.
+  boundaries.draw();
 }
 
 boot().catch((e) => {

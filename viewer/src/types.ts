@@ -6,6 +6,15 @@ export interface VariableInfo {
   source_var: string;
   units: string;
   diverging: boolean;
+  /**
+   * What a HIGH value means physically, which fixes the colour polarity.
+   * 'fast' -> cold material at the high end (velocity anomaly);
+   * 'hot'  -> warm material at the high end (temperature anomaly).
+   * A slab is positive in one and negative in the other, so this cannot be
+   * inferred from the model. Absent means 'fast': every model ingested before
+   * the convection series was a velocity anomaly.
+   */
+  high_means?: 'fast' | 'hot';
   /** Range the uint8 quantisation spans. Fixed at ingest; clip cannot exceed it. */
   encode_min: number;
   encode_max: number;
@@ -69,10 +78,17 @@ export interface ArchiveIndex {
     age_min: number;
     age_max: number;
   };
+  /** deep-time-map series manifest, absent if the boundaries were not exported. */
+  boundaries?: string;
 }
 
 export interface ColormapData {
-  [name: string]: { diverging: boolean; colors: [number, number, number][] };
+  [name: string]: {
+    diverging: boolean;
+    /** Which end of the ramp is warm; null for sequential maps. */
+    high_end?: 'warm' | 'cool' | null;
+    colors: [number, number, number][];
+  };
 }
 
 /**

@@ -353,6 +353,42 @@ def choose_clip(data, diverging, percentile, override):
 # ---------------------------------------------------------------------------
 
 
+def choose_colormap(base, high_means, archive, diverging):
+    """Pick the ramp orientation that matches what HIGH VALUES MEAN.
+
+    The polarity convention is not a property of the model, it is a property of
+    the variable:
+
+        high_means='fast'  positive = fast = cold material -> cold at the high
+                           end (velocity anomaly)
+        high_means='hot'   positive = hot                  -> warm at the high
+                           end (temperature anomaly)
+
+    A slab is a positive anomaly in one and a negative anomaly in the other, so
+    pairing the wrong ramp with a variable inverts every structure on screen
+    while looking entirely plausible.  prep_colormaps.py emits both orientations
+    of every diverging map and tags each with `high_end`; this reads that tag
+    rather than trusting a naming convention.
+    """
+    if not diverging:
+        return base
+    want = {"fast": "cool", "hot": "warm"}[high_means]
+    path = archive / "colormaps.json"
+    if not path.exists():
+        raise SystemExit(f"{path} not found -- run prep_colormaps.py first")
+    maps = json.loads(path.read_text())
+
+    if base in maps and maps[base].get("high_end") == want:
+        return base
+    for name, entry in maps.items():
+        if entry.get("high_end") == want and name.startswith(base):
+            return name
+    raise SystemExit(
+        f"no diverging colormap based on {base!r} has high_end={want!r}; "
+        f"available: {sorted(n for n, e in maps.items() if e.get('high_end'))}"
+    )
+
+
 def parse_var_spec(spec):
     """--var source[:id[:display name]]"""
     parts = spec.split(":")
@@ -379,6 +415,10 @@ def main():
     ap.add_argument("--sequential", action="store_true",
                     help="treat fields as sequential rather than diverging")
     ap.add_argument("--colormap", default=None)
+    ap.add_argument("--high-means", default="fast", choices=["fast", "hot"],
+                    help="what a HIGH value means physically; selects the "
+                         "diverging ramp's orientation. 'fast' for velocity "
+                         "anomaly, 'hot' for temperature anomaly")
     ap.add_argument("--nlon", type=int, default=DEFAULT_NLON)
     ap.add_argument("--nlat", type=int, default=DEFAULT_NLAT)
     ap.add_argument("--ndepth", type=int, default=DEFAULT_NDEPTH)
@@ -403,7 +443,10 @@ def main():
 
     dmin, dmax = args.depth_range
     diverging = not args.sequential
-    colormap = args.colormap or ("RdBu" if diverging else "viridis")
+    base = args.colormap or ("RdBu" if diverging else "viridis")
+    colormap = choose_colormap(base, args.high_means, args.out, diverging)
+    if diverging:
+        print(f"colormap    {colormap}  (high = {args.high_means})")
 
     model_dir = args.out / "models" / args.id
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -486,6 +529,7 @@ def main():
             "source_var": source_var,
             "units": args.units,
             "diverging": diverging,
+            "high_means": args.high_means,
             "encode_min": round(clip_lo, 4),
             "encode_max": round(clip_hi, 4),
             "value_min": round(raw_min, 4),

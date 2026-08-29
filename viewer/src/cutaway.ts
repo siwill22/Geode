@@ -35,6 +35,13 @@ export class Cutaway {
   private maskData: Uint8Array;
 
   /**
+   * The rasterised cutaway, for consumers that have to cull against it on the
+   * CPU rather than in a shader -- the boundary overlay, which has no depth
+   * buffer. Re-read it after every update(): the array is replaced, not mutated.
+   */
+  get mask(): Uint8Array { return this.maskData; }
+
+  /**
    * Deepest depth the loaded volume is valid to. The cut is clamped to this so
    * the floor cap never sits below the data: at a full-depth cut the cap would
    * otherwise land at 2890 km, outside REVEAL's 2840 km range, and the shader
