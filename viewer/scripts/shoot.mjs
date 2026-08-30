@@ -225,6 +225,144 @@ await apply('setPolygon', {
 await apply('setCamera', { lon: -140, lat: 20, dist: 2.8 });
 await shot('16-boundaries-over-cutaway');
 
+// --- isosurfaces ------------------------------------------------------------
+
+console.log('\nisosurfaces:');
+
+/** Same as apply(), without the settle delay -- for tight probe loops. */
+async function call(fn, arg) {
+  return page.evaluate(([f, a]) => window.__geode[f](a), [fn, arg]);
+}
+
+// 17. Where is the isosurface, really?
+//
+// fixture-ramp is linear in depth from -1 at 0 km to +1 at 2840 km, so an
+// isosurface at V is exactly a sphere at depth (V+1)/2 x 2840. Measuring that
+// sphere on screen is not accurate enough to be worth much: at a normal camera
+// distance one pixel of silhouette radius is ~17 km of depth, and half a depth
+// texel -- the error a second, subtly different sampling convention would
+// produce -- is only ~7 km.
+//
+// So locate it against the cutaway floor instead. The floor cap is a sphere at
+// depthToRadius(cutDepthKm), and bisecting the cut depth for the moment the
+// isosurface stops poking through it is limited by the bisection, not by the
+// screen. It also couples the two samplers: the floor reads the volume through
+// the same volumeUVW the isosurface marches.
+await apply('setModel', 'fixture-ramp');
+await apply('setPolygon', {
+  verts: [[-40, 40], [40, 40], [40, -40], [-40, -40]], depthKm: 1600,
+});
+await apply('setCamera', { lon: 0, lat: 0, dist: 2.6 });
+
+async function flipDepthKm(V) {
+  await call('setIsosurface', {
+    coldEnabled: true, hotEnabled: false, coldValue: V,
+    depthMinKm: 0, depthMaxKm: 2840, steps: 96,
+  });
+  let lo = 100;    // floor shallow -> floor hides the isosurface
+  let hi = 2800;   // floor deep    -> isosurface pokes through
+  for (let i = 0; i < 12; i++) {
+    const mid = 0.5 * (lo + hi);
+    await call('setCutDepth', mid);
+    const r = await call('probeIsoAboveFloor');
+    if (r.chromatic > r.boxPixels / 2) hi = mid; else lo = mid;
+  }
+  return 0.5 * (lo + hi);
+}
+
+const isoV = [-0.5, 0, 0.5];
+const isoD = [];
+for (const V of isoV) isoD.push(await flipDepthKm(V));
+
+// Fit depth = slope * pDep + intercept, with pDep = (V+1)/2. Splitting the two
+// matters: a half- or whole-texel sampling error moves the INTERCEPT by 7.4 or
+// 14.9 km and leaves the slope alone. The slope carries a small excess of its
+// own -- the software rasteriser's linear filtering of the uint8 volume is good
+// to roughly half a code, which is ~5 km of depth at the deep end -- so it gets
+// the loose bound and the intercept gets the tight one.
+const isoSlope = (isoD[2] - isoD[0]) / 0.5;
+const isoIntercept = isoD[0] - 0.25 * isoSlope;
+console.log('  ramp flip depths: '
+  + isoV.map((v, i) => `V=${v} -> ${isoD[i].toFixed(2)} km`).join(', '));
+check('isosurface depth mapping has no texel offset',
+  Math.abs(isoIntercept) < 3,
+  `intercept ${isoIntercept.toFixed(2)} km (half a texel is 7.4 km)`);
+check('isosurface depth mapping is to scale',
+  Math.abs(isoSlope / 2840 - 1) < 0.01,
+  `slope ${isoSlope.toFixed(1)} km vs 2840`);
+
+// 18. The isosurface must sort against the rest of the scene by the depth of
+// its HIT, not of its proxy sphere. Both directions, because only writing
+// gl_FragDepth at all gets one of them right by accident.
+await call('setIsosurface', {
+  coldEnabled: true, hotEnabled: false, coldValue: 0,
+  depthMinKm: 0, depthMaxKm: 2840, steps: 96,
+});
+await apply('setCutDepth', 500);
+const above = await call('probeScreen');
+await apply('setCutDepth', 2890);
+const below = await call('probeScreen');
+const isBlue = (p) => p.rgb[2] - p.rgb[0] > 30;
+check('isosurface sorts by its hit depth, not its proxy',
+  !isBlue(above) && isBlue(below),
+  `floor at 500 km -> ${above.rgb}, floor at 2832 km -> ${below.rgb}`);
+
+// 19. Two surfaces at once, on a field that is symmetric by construction: the
+// checkerboard is +-2 everywhere, so isosurfaces at -1 and +1 must both appear
+// and in comparable amounts. A single shared or mirrored isovalue shows up here
+// as one colour missing.
+await apply('setModel', 'fixture-check');
+await apply('setPolygon', { verts: [[-40, 40], [40, 40], [40, -40], [-40, -40]], depthKm: 2890 });
+await apply('setCamera', { lon: 0, lat: 20, dist: 3.2 });
+await apply('setSurfaceOpacity', 0.12);
+await call('setIsosurface', {
+  coldEnabled: true, hotEnabled: true, coldValue: -1, hotValue: 1,
+  depthMinKm: 200, depthMaxKm: 2800, steps: 96,
+});
+await shot('17-isosurface-checkerboard');
+const chk = await call('probeSilhouette');
+check('both isosurfaces drawn, independently',
+  chk.coldPixels > 1000 && chk.hotPixels > 1000
+  && Math.max(chk.coldPixels, chk.hotPixels)
+     / Math.min(chk.coldPixels, chk.hotPixels) < 2.5,
+  `cold ${chk.coldPixels} px, hot ${chk.hotPixels} px`);
+
+// 20. The isosurface has to follow the time axis, not just the age label. The
+// drift blob sits at lon = age x 0.5, so with the camera between 0 and 100 E
+// its silhouette must cross the centre of the frame as the age is scrubbed. A
+// material left pointing at the previous frame's texture does not move.
+await apply('setModel', 'fixture-drift');
+await apply('setCamera', { lon: 50, lat: 0, dist: 3.0 });
+await call('setIsosurface', {
+  coldEnabled: false, hotEnabled: true, hotValue: 1,
+  depthMinKm: 200, depthMaxKm: 2800, steps: 96,
+});
+const driftX = [];
+for (const age of [0, 200]) {
+  await apply('setAge', age);
+  driftX.push(await call('probeSilhouette'));
+}
+check('isosurface tracks the loaded frame',
+  driftX[0].pixels > 500 && driftX[1].pixels > 500
+  && driftX[0].centroidOffsetX * driftX[1].centroidOffsetX < 0,
+  `0 Ma centroid ${driftX[0].centroidOffsetX?.toFixed(0)} px, `
+  + `200 Ma ${driftX[1].centroidOffsetX?.toFixed(0)} px`);
+
+// 21. The figure the feature exists for: slabs and plumes in the convection
+// model, seen through a globe made transparent.
+await apply('setAge', 0);
+await apply('setModel', 'opt1');
+await apply('setSurfaceOpacity', 0.1);
+await apply('setCamera', { lon: -60, lat: 20, dist: 3.0 });
+await call('setIsosurface', {
+  coldEnabled: true, hotEnabled: true, coldValue: -250, hotValue: 250,
+  depthMinKm: 200, depthMaxKm: 2800, steps: 128,
+});
+await shot('18-opt1-isosurfaces-0Ma');
+await apply('setAge', 120);
+await shot('19-opt1-isosurfaces-120Ma');
+await apply('setSurfaceOpacity', 1);
+
 const stats = await page.evaluate(() => window.__geode.stats());
 console.log('\nstats:', JSON.stringify(stats, null, 2));
 if (errors.length) {

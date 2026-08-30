@@ -532,7 +532,11 @@ Plate boundaries come from `deep-time-map`, vendored as a submodule and drawn on
 
 **Phase 3 — Sections and export.** Standalone great-circle profiles and unclipped constant-depth slices, using the same material. PNG and GeoJSON export. (The *clipped* cap is already built in phase 2 as the cutaway floor.)
 
-**Phase 4 — Isosurfaces.** Ray-marched first-hit isosurface on a box or shell proxy, with an isovalue uniform the user can drag. Only introduce raymarching here; do not build phase 2 on top of it. If lit, exportable geometry is needed later, generate it offline with `skimage.measure.marching_cubes` and load as glTF instead.
+**Phase 4 — Isosurfaces.** *(built)* Ray-marched first-hit isosurface with bisection refinement, on a back-face **shell** proxy — a sphere at the search range's outer radius, with the march interval taken from analytic ray/sphere intersections rather than from a box. **Two** surfaces with independent isovalues, one enclosing cold downwellings and one hot upwellings, found in a single march so their depth ordering is correct by construction. Raymarching is introduced here and nowhere else. If lit, exportable geometry is needed later, generate it offline with `skimage.measure.marching_cubes` and load as glTF instead.
+
+Two things this phase pinned down that are not obvious. The isosurface must write `gl_FragDepth` from its **hit**, and in the **ordinary NDC encoding** — the renderer is constructed with `logarithmicDepthBuffer: true`, but every material here is a hand-written `ShaderMaterial` and none include three's `logdepthbuf` chunks, so nothing in the scene actually writes a log depth; a fragment that helpfully did would sit at ~0.26 where the walls sit at ~0.99 and float in front of everything. And the search range is **not** the whole mantle by default: any isovalue that resolves deep structure also encloses the entire lithosphere, so the first run would be an opaque ball.
+
+Its depth mapping is checked against the ramp fixture by bisecting the **cutaway floor** for the depth at which the isosurface stops poking through — the screen is far too coarse a ruler, at ~17 km of depth per pixel of silhouette radius against a half-texel of ~7 km.
 
 ---
 
@@ -547,6 +551,9 @@ Plate boundaries come from `deep-time-map`, vendored as a submodule and drawn on
 - The scanline mask agrees with `pygplates.PolygonOnSphere.is_point_in_polygon` on random points, for every polygon in the awkward set.
 - Coastlines vanish exactly at the hole boundary, with no fringe of line fragments hanging over the cut.
 - No seam artefact at ±180°: the duplicate longitude column has been dropped and the half-texel offset applied.
+- On the ramp fixture an isosurface at value `V` is a sphere at depth `(V+1)/2 × 2840 km`. Bisecting the cutaway floor for the depth at which it stops poking through, over several `V`, must fit that line with **zero intercept** — half a depth texel is 7.4 km, so an isosurface sampling the volume even slightly differently from the wall shows up there. The fitted slope carries a small excess (~0.3 %) from the software rasteriser's filtering of the uint8 volume, so only the intercept gets a tight bound.
+- The isosurface sorts against the floor, walls and core by the depth of its **hit**, not of its proxy sphere: a floor above it must hide it, and a floor below it must not.
+- Both isosurfaces draw at once and independently. On the checkerboard, which is ±2 everywhere, isovalues at −1 and +1 produce comparable amounts of each colour.
 
 **Cutaway behaviour**
 
@@ -581,3 +588,11 @@ Plate boundaries come from `deep-time-map`, vendored as a submodule and drawn on
 ## 11. Non-goals
 
 Ellipsoid or terrain accuracy; map projections; vertical exaggeration; cutting the core; server-side rendering; CPU resampling of the volume for display (per-pixel work stays on the GPU — keep the raw typed array only for numerical readout at clicked points).
+
+**On the 3-D plate carrée box view** (depth as the vertical axis, with adjustable vertical exaggeration), which has been asked for and costed but not scheduled. It is roughly 2.5–3× the isosurface work, and unlike isosurfaces it is multiplicative rather than additive — it touches every module. Three costs that are not obvious up front:
+
+- Every geometry is built as a sphere — core, surface, pick target, cutaway walls, floor cap, coastlines, land fill — and each needs a parameterised builder.
+- The boundary overlay loses its occlusion model. It works because a sphere has a horizon, `dot(v, camDir) > R/d`. A box has none, so that machinery does not transfer and the overlay would need real depth testing, which it cannot do.
+- The antimeridian stops being free. `deep-time-map` deliberately does not split lines at ±180° because it works in 3-D unit vectors, where the dateline is not special. In plate carrée it is, and every feature crossing it draws a full-width streak. Coastlines and the cutaway polygon need the same treatment; the poles become lines.
+
+Worth stating plainly, because it is the thing most likely to be misread: this would be a **display** choice, not a change of model. All the spherical geometry — great-circle densification, the scanline mask, the rotations — stays exactly as it is and keeps being computed on the sphere. Only the final world-position mapping changes, and vertical exaggeration would be a factor applied there, never in the data. The one shared prerequisite, a single canonical geographic mapping in GLSL, has already been paid down in `viewer/src/glsl/geographic.ts`.

@@ -1,4 +1,5 @@
 import GUI from 'lil-gui';
+import { MAX_STEPS, type IsosurfaceState } from './isosurface';
 import type { ArchiveIndex, Manifest, VariableInfo } from './types';
 
 export type ToolMode = 'drag' | 'draw' | 'edit';
@@ -25,6 +26,7 @@ export interface ViewState {
   surfaceMode: SurfaceMode;
   showBoundaries: boolean;
   tool: ToolMode;
+  iso: IsosurfaceState;
 }
 
 export interface UICallbacks {
@@ -38,6 +40,7 @@ export interface UICallbacks {
   onSurfaceOpacity(v: number): void;
   onSurfaceMode(m: SurfaceMode): void;
   onBoundaries(on: boolean): void;
+  onIsosurface(): void;
   onTool(t: ToolMode): void;
   onClear(): void;
   onExportPNG(): void;
@@ -52,6 +55,8 @@ export class UI {
   private variableCtrl!: any;
   private colormapCtrl!: any;
   private ageCtrl!: any;
+  private isoColdCtrl!: any;
+  private isoHotCtrl!: any;
   private folderData: GUI;
   private surfaceModeCtrl: any;
   private status: HTMLDivElement;
@@ -114,6 +119,37 @@ export class UI {
       .onChange(() => cb.onInvert());
     fx.add({ clear: () => cb.onClear() }, 'clear').name('clear polygon');
 
+    // Two isosurfaces, not one with a mirrored partner: a cold downwelling and
+    // a hot upwelling are unrelated objects at unrelated magnitudes, and tying
+    // their isovalues together would be a claim about the data.
+    const fi = this.gui.addFolder('Isosurfaces');
+    fi.add(this.state.iso, 'coldEnabled')
+      .name('cold surface')
+      .onChange(() => cb.onIsosurface());
+    this.isoColdCtrl = fi
+      .add(this.state.iso, 'coldValue', -1, 1, 0.001)
+      .name('cold isovalue')
+      .onChange(() => cb.onIsosurface());
+    fi.add(this.state.iso, 'hotEnabled')
+      .name('hot surface')
+      .onChange(() => cb.onIsosurface());
+    this.isoHotCtrl = fi
+      .add(this.state.iso, 'hotValue', -1, 1, 0.001)
+      .name('hot isovalue')
+      .onChange(() => cb.onIsosurface());
+    // "iso depth", never bare "depth": the Cutaway's cut depth is a different
+    // quantity in the same units, and the two must not read as the same control.
+    fi.add(this.state.iso, 'depthMinKm', 0, 2890, 10)
+      .name('iso depth min (km)')
+      .onChange(() => cb.onIsosurface());
+    fi.add(this.state.iso, 'depthMaxKm', 0, 2890, 10)
+      .name('iso depth max (km)')
+      .onChange(() => cb.onIsosurface());
+    fi.add(this.state.iso, 'steps', 32, MAX_STEPS, 8)
+      .name('quality (steps)')
+      .onChange(() => cb.onIsosurface());
+    fi.close();
+
     const fs = this.gui.addFolder('Scene');
     this.surfaceModeCtrl = fs
       .add(this.state, 'surfaceMode',
@@ -168,7 +204,14 @@ export class UI {
     this.setVariable(variable);
   }
 
-  /** Clip sliders are bounded by the encode range: outside it the data is clamped. */
+  /**
+   * Clip sliders are bounded by the encode range: outside it the data is clamped.
+   *
+   * The isovalues are re-seeded from the same defaults for a blunter reason:
+   * they are absolute numbers in the variable's own units, and REVEAL is in per
+   * cent while OPT1 is in kelvin. Carrying "2" across that switch would silently
+   * mean something 400 times smaller.
+   */
   setVariable(v: VariableInfo): void {
     this.state.clipMin = v.default_clip_min;
     this.state.clipMax = v.default_clip_max;
@@ -176,6 +219,14 @@ export class UI {
     this.clipMaxCtrl.min(0).max(v.encode_max).setValue(v.default_clip_max);
     this.clipMinCtrl.name(`clip min (${v.units})`);
     this.clipMaxCtrl.name(`clip max (${v.units})`);
+
+    const step = (v.encode_max - v.encode_min) / 1000;
+    this.isoColdCtrl.min(v.encode_min).max(v.encode_max).step(step)
+      .setValue(v.default_clip_min);
+    this.isoHotCtrl.min(v.encode_min).max(v.encode_max).step(step)
+      .setValue(v.default_clip_max);
+    this.isoColdCtrl.name(`cold isovalue (${v.units})`);
+    this.isoHotCtrl.name(`hot isovalue (${v.units})`);
   }
 
   setSurfaceMode(m: SurfaceMode): void {

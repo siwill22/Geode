@@ -3,6 +3,7 @@ import {
   DoubleSide, type Texture,
 } from 'three';
 import { passthroughColor } from './material';
+import { GEOGRAPHIC_GLSL } from './glsl/geographic';
 import { LIGHT_DIR } from './globe';
 import { R_SURFACE } from './constants';
 import type { CoastlineLine, RotationTable } from './types';
@@ -95,40 +96,40 @@ void main() {
 `;
 
 const LINE_FRAG = /* glsl */ `
+${GEOGRAPHIC_GLSL}
+
 uniform sampler2D uMask;
 uniform vec3 uColor;
 uniform float uUseMask;
+uniform float uOpacity;
 varying vec3 vWorldPos;
-const float PI = 3.141592653589793;
 void main() {
   if (uUseMask > 0.5) {
-    float r = length(vWorldPos);
-    float lat = asin(clamp(vWorldPos.y / r, -1.0, 1.0));
-    float lon = atan(-vWorldPos.z, vWorldPos.x);
-    if (texture2D(uMask, vec2((lon + PI) / (2.0 * PI), (lat + PI * 0.5) / PI)).r > 0.5) discard;
+    vec2 uv = geographicToUV(worldToGeographic(vWorldPos));
+    if (texture2D(uMask, uv).r > 0.5) discard;
   }
-  gl_FragColor = vec4(uColor, 1.0);
+  gl_FragColor = vec4(uColor, uOpacity);
 }
 `;
 
 /** Land fill takes the same key light as the globe so it sits on the sphere. */
 const LAND_FRAG = /* glsl */ `
+${GEOGRAPHIC_GLSL}
+
 uniform sampler2D uMask;
 uniform vec3 uColor;
 uniform float uUseMask;
+uniform float uOpacity;
 uniform vec3 uLightDir;
 varying vec3 vWorldPos;
-const float PI = 3.141592653589793;
 void main() {
-  float r = length(vWorldPos);
-  float lat = asin(clamp(vWorldPos.y / r, -1.0, 1.0));
-  float lon = atan(-vWorldPos.z, vWorldPos.x);
   if (uUseMask > 0.5) {
-    if (texture2D(uMask, vec2((lon + PI) / (2.0 * PI), (lat + PI * 0.5) / PI)).r > 0.5) discard;
+    vec2 uv = geographicToUV(worldToGeographic(vWorldPos));
+    if (texture2D(uMask, uv).r > 0.5) discard;
   }
   vec3 n = normalize(vWorldPos);
   float ndl = dot(n, normalize(uLightDir)) * 0.5 + 0.5;
-  gl_FragColor = vec4(uColor * (0.5 + 0.5 * ndl * ndl), 1.0);
+  gl_FragColor = vec4(uColor * (0.5 + 0.5 * ndl * ndl), uOpacity);
 }
 `;
 
@@ -191,6 +192,7 @@ export class Coastlines {
         uMask: { value: maskTexture },
         uColor: { value: passthroughColor(0x24303a) },
         uUseMask: { value: 1 },
+        uOpacity: { value: 1 },
       },
     });
     this.landMat = new ShaderMaterial({
@@ -204,6 +206,7 @@ export class Coastlines {
         uMask: { value: maskTexture },
         uColor: { value: passthroughColor(0x9c9268) },
         uUseMask: { value: 1 },
+        uOpacity: { value: 1 },
         uLightDir: { value: LIGHT_DIR.clone() },
       },
     });
@@ -291,6 +294,30 @@ export class Coastlines {
   setMaskEnabled(on: boolean): void {
     this.lineMat.uniforms.uUseMask.value = on ? 1 : 0;
     this.landMat.uniforms.uUseMask.value = on ? 1 : 0;
+  }
+
+  /**
+   * Fade with the globe surface.
+   *
+   * The land fill sits a fraction above the surface sphere and is opaque, so
+   * without this, turning the surface down to see the isosurfaces leaves the
+   * continents painted solidly over them -- the control appears to half-work,
+   * which is worse than not working.
+   *
+   * `transparent` is only switched on when it is actually needed. Left on
+   * permanently it would move these meshes into the sorted transparent pass at
+   * full opacity too, and that changes what the existing renders look like for
+   * no reason.
+   */
+  setOpacity(v: number): void {
+    for (const m of [this.lineMat, this.landMat]) {
+      m.uniforms.uOpacity.value = v;
+      const wantTransparent = v < 1;
+      if (m.transparent !== wantTransparent) {
+        m.transparent = wantTransparent;
+        m.needsUpdate = true;
+      }
+    }
   }
 }
 

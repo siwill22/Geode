@@ -4,6 +4,7 @@ import {
   Vector3, type Texture,
 } from 'three';
 import { passthroughColor } from './material';
+import { GEOGRAPHIC_GLSL } from './glsl/geographic';
 import { R_CMB, R_SURFACE } from './constants';
 
 /** Shared key-light direction, so surface and core agree on where the sun is. */
@@ -30,6 +31,8 @@ void main() {
  * a terminator and a bright limb, which is what makes the curvature legible.
  */
 const SURFACE_FRAG = /* glsl */ `
+${GEOGRAPHIC_GLSL}
+
 uniform sampler2D uMask;
 uniform sampler2D uTopography;
 uniform vec3 uColor;
@@ -40,13 +43,9 @@ uniform vec3 uLightDir;
 uniform float uShadeStrength;
 varying vec3 vWorldPos;
 varying vec3 vNormal;
-const float PI = 3.141592653589793;
 
 void main() {
-  float r = length(vWorldPos);
-  float lat = asin(clamp(vWorldPos.y / r, -1.0, 1.0));
-  float lon = atan(-vWorldPos.z, vWorldPos.x);
-  vec2 uv = vec2((lon + PI) / (2.0 * PI), (lat + PI * 0.5) / PI);
+  vec2 uv = geographicToUV(worldToGeographic(vWorldPos));
 
   if (uUseMask > 0.5 && texture2D(uMask, uv).r > 0.5) discard;
 

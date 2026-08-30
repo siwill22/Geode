@@ -5,7 +5,8 @@ import {
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 import {
-  R_CMB, R_SURFACE, densifyPolygon, lonLatToVec3, vec3ToLonLat, type LonLat,
+  R_CMB, R_SURFACE, densifyPolygon, lonLatToVec3, radiusToDepth, vec3ToLonLat,
+  type LonLat,
 } from './constants';
 import {
   createCoreSphere, createPickSphere, createSurfaceSphere, loadTopography,
@@ -19,6 +20,7 @@ import {
   makeColormapTexture, nearestFrame, physicalToEncoded,
 } from './volume';
 import { BoundaryOverlay } from './boundaries';
+import { DEFAULT_ISOSURFACE, Isosurface, type IsosurfaceState } from './isosurface';
 import { UI, type SurfaceMode, type ToolMode, type ViewState } from './ui';
 import type { ArchiveIndex, ColormapData, CutawayState, Manifest, VariableInfo } from './types';
 
@@ -59,9 +61,10 @@ const core = createCoreSphere();
 const surface = createSurfaceSphere(maskTexture);
 const pick = createPickSphere();
 const cutaway = new Cutaway(maskTexture);
+const isosurface = new Isosurface();
 
 scene.add(core, surface.mesh, pick, cutaway.wall, cutaway.floor,
-  cutaway.outline, cutaway.handles);
+  cutaway.outline, cutaway.handles, isosurface.mesh);
 
 const boundaries = new BoundaryOverlay(camera);
 
@@ -83,7 +86,7 @@ const view: ViewState = {
   clipMin: -2, clipMax: 2, symmetricClip: true,
   reconstructionAge: 0, cutDepthKm: 2890, inverted: false,
   surfaceOpacity: 1, surfaceMode: 'topography', showBoundaries: true,
-  tool: 'drag',
+  tool: 'drag', iso: { ...DEFAULT_ISOSURFACE },
 };
 
 let archive: ArchiveIndex;
@@ -124,6 +127,22 @@ function applyClip(): void {
   }
 }
 
+/**
+ * Isovalues are entered in physical units but the shader marches the encoded
+ * 0..1 field, so the conversion happens here -- through the same
+ * physicalToEncoded the colour clip uses, so an isovalue and a clip bound with
+ * the same number mean the same thing.
+ */
+function applyIso(): void {
+  if (variable) {
+    isosurface.setEncodedIso(
+      physicalToEncoded(variable, view.iso.coldValue),
+      physicalToEncoded(variable, view.iso.hotValue),
+    );
+  }
+  isosurface.update(view.iso);
+}
+
 function applyVolume(tex: Data3DTexture): void {
   const res = manifest.resolutions.find(
     (r) => r.id === manifest.default_resolution,
@@ -134,6 +153,9 @@ function applyVolume(tex: Data3DTexture): void {
     m.uniforms.uDepthMin.value = manifest.depth_min_km;
     m.uniforms.uDepthMax.value = manifest.depth_max_km;
   }
+  isosurface.setVolume(tex);
+  isosurface.setGrid(res.nlon, res.nlat, res.ndepth);
+  isosurface.setModelDepthRange(manifest.depth_min_km, manifest.depth_max_km);
   cutaway.setVolumeDepthRange(manifest.depth_max_km);
   rebuildCutaway();
   setMaskMode(cutaway.wallMaterial, 'none');
@@ -163,6 +185,7 @@ async function selectVariable(id: string): Promise<void> {
   ui.setColormapOptions(colormapOptions(variable), view.colormap);
   applyColormap(view.colormap);
   applyClip();
+  applyIso();
   updateTimeInfo();
   frames.prefetchNeighbours(manifest, variable.id, frame.id);
   ui.setStatus('');
@@ -177,6 +200,18 @@ async function selectModel(id: string): Promise<void> {
     ?? manifest.variables[0];
   ui.setModel(manifest, variable);
   await selectVariable(variable.id);
+}
+
+/**
+ * One control fades the whole crust: the surface sphere and the coastline
+ * layers that sit just above it. This is how the isosurfaces are seen -- the
+ * cutaway is not required, and a partly-faded globe with fully opaque
+ * continents painted on it would hide exactly the interior being looked for.
+ */
+function setSurfaceOpacity(v: number): void {
+  view.surfaceOpacity = v;
+  surface.material.uniforms.uOpacity.value = v;
+  coastlines?.setOpacity(v);
 }
 
 function applySurfaceMode(m: SurfaceMode): void {
@@ -240,6 +275,9 @@ function applyAge(age: number): void {
       // A slower earlier request must not overwrite a faster later one.
       if (token !== ageToken) return;
       for (const m of volumeMaterials()) m.uniforms.uVolume.value = tex;
+      // The isosurface marches its own copy of the binding, so it has to be
+      // repointed too or it keeps rendering the frame the walls have left.
+      isosurface.setVolume(tex);
       frames.prefetchNeighbours(manifest, variable.id, frame.id);
     }).catch((e) => ui.setStatus(String(e)));
   }
@@ -471,11 +509,10 @@ async function boot(): Promise<void> {
     onAge: (age) => applyAge(age),
     onCutDepth: () => rebuildCutaway(),
     onInvert: () => rebuildCutaway(),
-    onSurfaceOpacity: (v) => {
-      surface.material.uniforms.uOpacity.value = v;
-    },
+    onSurfaceOpacity: (v) => setSurfaceOpacity(v),
     onSurfaceMode: (m) => { applySurfaceMode(m); ui.setStatus(''); },
     onBoundaries: (on) => { boundaries.visible = on; },
+    onIsosurface: () => applyIso(),
     onTool: () => { controls.enabled = !toolActive(); },
     onClear: () => { cut.vertices = []; cut.closed = false; rebuildCutaway(); },
     onExportPNG: exportPNG,
@@ -509,6 +546,7 @@ async function boot(): Promise<void> {
   );
   scene.add(coastlines.lines, coastlines.land);
   coastlines.setAge(view.reconstructionAge);
+  setSurfaceOpacity(view.surfaceOpacity);   // coastlines only exist from here
   applySurfaceMode(topography ? view.surfaceMode : 'flat');
   ui.setStatus('');
   updateTimeInfo();
@@ -647,6 +685,7 @@ window.__geode = {
     volumeFrame: manifest ? nearestFrame(manifest, view.reconstructionAge) : null,
   }),
   setSurfaceMode: (m: SurfaceMode) => { applySurfaceMode(m); refreshGUI(); },
+  setSurfaceOpacity: (v: number) => { setSurfaceOpacity(v); refreshGUI(); },
   setModel: async (id: string) => { await selectModel(id); refreshGUI(); },
   setVariable: async (id: string) => { await selectVariable(id); refreshGUI(); },
   setCutDepth: (km: number) => {
@@ -661,6 +700,195 @@ window.__geode = {
     if ('floor' in o) cutaway.floor.visible = o.floor;
     if ('core' in o) core.visible = o.core;
     if ('surface' in o) surface.mesh.visible = o.surface;
+    if ('isosurface' in o) isosurface.mesh.visible = o.isosurface;
+  },
+  setIsosurface: (o: Partial<IsosurfaceState>) => {
+    Object.assign(view.iso, o);
+    applyIso();
+    refreshGUI();
+    return { ...view.iso, shell: isosurface.shell };
+  },
+  /**
+   * Measure the isosurface's drawn silhouette and report it as a RADIUS.
+   *
+   * This is the check the fixtures were built for. fixture-ramp is linear in
+   * depth from -1 at 0 km to +1 at 2840 km, so an isosurface at value V is
+   * exactly a sphere at depth (V+1)/2 x 2840 -- a number that can be predicted
+   * before rendering and compared against. Half a texel of depth is ~15 km, or
+   * several pixels at a normal camera distance, so this also decides whether
+   * the isosurface samples the volume the same way the cutaway wall does:
+   * both invert the one volumeUVW, and a second convention would land here.
+   *
+   * Everything else in the scene is hidden first. A single lit pixel of core or
+   * coastline inside the frame would be counted as isosurface and inflate the
+   * radius, which is precisely the kind of quietly-wrong number this exists to
+   * avoid producing.
+   *
+   * Pass 'core' instead to measure the core sphere, whose radius is the constant
+   * R_CMB. That calibrates this measurement against something already known, so
+   * a disagreement can be attributed to the isosurface rather than to the ruler.
+   */
+  probeSilhouette: (target: 'isosurface' | 'core' = 'isosurface') => {
+    const gl = renderer.getContext();
+    const w = renderer.domElement.width;
+    const h = renderer.domElement.height;
+
+    const keep = target === 'core' ? core : isosurface.mesh;
+    const others = [
+      core, surface.mesh, cutaway.wall, cutaway.floor, cutaway.outline,
+      cutaway.handles, coastlines?.lines, coastlines?.land, isosurface.mesh,
+    ].filter((o) => !!o && o !== keep) as import('three').Object3D[];
+    const wasVisible = others.map((o) => o.visible);
+    for (const o of others) o.visible = false;
+    const keptVisible = keep.visible;
+    keep.visible = true;
+
+    renderer.render(scene, camera);
+    const px = new Uint8Array(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+
+    others.forEach((o, i) => { o.visible = wasVisible[i]; });
+    keep.visible = keptVisible;
+
+    // The clear colour goes through three's colour management, so read the
+    // background from a corner rather than assuming the hex it was set from.
+    const bg = [px[0], px[1], px[2]];
+
+    // Screen position of the globe's centre, in the bottom-left pixel frame
+    // readPixels uses.
+    const o = new Vector3(0, 0, 0).project(camera);
+    const cx = (o.x * 0.5 + 0.5) * w;
+    const cy = (o.y * 0.5 + 0.5) * h;
+
+    let n = 0; let cold = 0; let hotN = 0;
+    let sx = 0; let sy = 0; let rMax = 0;
+    for (let i = 0; i < w * h; i++) {
+      const r = px[i * 4]; const g = px[i * 4 + 1]; const b = px[i * 4 + 2];
+      if (Math.max(Math.abs(r - bg[0]), Math.abs(g - bg[1]), Math.abs(b - bg[2])) < 12) {
+        continue;
+      }
+      n++;
+      // The two isosurface colours are strongly and oppositely saturated, so
+      // the blue/red comparison classifies them without a distance metric.
+      if (b > r) cold++; else hotN++;
+      const x = i % w; const y = Math.floor(i / w);
+      sx += x; sy += y;
+      const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
+      if (d > rMax) rMax = d;
+    }
+
+    // Pixels -> world radius. A sphere of radius R at camera distance d has a
+    // silhouette at angular radius asin(R/d) from the view axis, and a pinhole
+    // camera puts angle theta at (h/2) * tan(theta) / tan(fov/2) pixels.
+    const d = camera.position.length();
+    const toRadius = (rPx: number) => d * Math.sin(
+      Math.atan((rPx / (h / 2)) * Math.tan((camera.fov * Math.PI) / 360)),
+    );
+
+    // Two estimators of the same silhouette. The extreme-pixel radius is valid
+    // even when the disc runs off the edge of the frame; the area estimator is
+    // not, but it averages over the whole boundary and so is far less sensitive
+    // to any one edge pixel. Report both in pixels as well, because the
+    // antialiased edge biases the count by a fraction of a pixel and only a
+    // pixel figure can be calibrated against a known object.
+    const radiusPx = n ? rMax : 0;
+    const radiusPxFromArea = n ? Math.sqrt(n / Math.PI) : 0;
+
+    return {
+      pixels: n,
+      coldPixels: cold,
+      hotPixels: hotN,
+      radiusPx,
+      radiusPxFromArea,
+      radius: toRadius(radiusPx),
+      radiusFromArea: toRadius(radiusPxFromArea),
+      depthFromAreaKm: n ? radiusToDepth(toRadius(radiusPxFromArea)) : null,
+      depthKm: n ? radiusToDepth(toRadius(radiusPx)) : null,
+      centroidOffsetX: n ? sx / n - cx : null,
+      centroidOffsetY: n ? sy / n - cy : null,
+      cameraDistance: d,
+      fovDeg: camera.fov,
+      viewportHeight: h,
+      shell: isosurface.shell,
+    };
+  },
+  /**
+   * How many pixels of isosurface poke up through the cutaway floor.
+   *
+   * The silhouette measurement above is limited by the screen: at a normal
+   * camera distance one pixel of radius is ~17 km of depth, so it cannot resolve
+   * half a depth texel (~7 km) -- which is exactly the error a second, subtly
+   * different copy of the sampling convention would produce.
+   *
+   * This measurement is not pixel-limited. The floor cap is a sphere placed at
+   * depthToRadius(cutDepthKm), so sweeping the cut depth and watching for the
+   * moment the isosurface disappears behind it locates the isosurface against a
+   * known radius, to whatever precision the sweep is run at. It also couples the
+   * two samplers directly: the floor reads the volume through volumeUVW, and the
+   * flip happens where the isosurface says the same field has the same value.
+   *
+   * The volume surfaces are put into debug mode so they render greyscale; that
+   * makes "is this pixel isosurface" a question about chroma rather than about
+   * which end of a diverging colormap a blue pixel came from.
+   *
+   * Only a small box at the centre of the frame is counted. The camera has to
+   * be aimed into the cut, and restricting the count keeps the answer a local
+   * radius comparison between two concentric spheres -- independent of the
+   * polygon's shape and of whatever is drawn out at the limb.
+   */
+  probeIsoAboveFloor: (halfBoxPx = 20) => {
+    const gl = renderer.getContext();
+    const w = renderer.domElement.width;
+    const h = renderer.domElement.height;
+
+    const hide = [
+      core, surface.mesh, cutaway.outline, cutaway.handles,
+      coastlines?.lines, coastlines?.land,
+    ].filter(Boolean) as import('three').Object3D[];
+    const wasVisible = hide.map((o) => o.visible);
+    for (const o of hide) o.visible = false;
+    const wasDebug = cutaway.wallMaterial.uniforms.uDebug.value as number;
+    for (const m of volumeMaterials()) m.uniforms.uDebug.value = 1;
+
+    const o = new Vector3(0, 0, 0).project(camera);
+    const cx = Math.round((o.x * 0.5 + 0.5) * (w - 1));
+    const cy = Math.round((o.y * 0.5 + 0.5) * (h - 1));
+    const x0 = Math.max(0, cx - halfBoxPx);
+    const y0 = Math.max(0, cy - halfBoxPx);
+    const bw = Math.min(w, cx + halfBoxPx + 1) - x0;
+    const bh = Math.min(h, cy + halfBoxPx + 1) - y0;
+
+    renderer.render(scene, camera);
+    const px = new Uint8Array(bw * bh * 4);
+    gl.readPixels(x0, y0, bw, bh, gl.RGBA, gl.UNSIGNED_BYTE, px);
+
+    hide.forEach((o2, i) => { o2.visible = wasVisible[i]; });
+    for (const m of volumeMaterials()) m.uniforms.uDebug.value = wasDebug;
+
+    let chromatic = 0;
+    for (let i = 0; i < bw * bh; i++) {
+      if (px[i * 4 + 2] - px[i * 4] > 30) chromatic++;
+    }
+    return { chromatic, boxPixels: bw * bh, cutDepthKm: view.cutDepthKm };
+  },
+  /**
+   * The colour of the fully composed scene at one NDC point.
+   *
+   * Used to check that the isosurface writes the depth of its HIT rather than of
+   * its proxy sphere. The proxy is a back-face sphere, so its rasterised depth
+   * lies behind the core; leave gl_FragDepth alone and the core wins the depth
+   * test at the centre of the globe even though the isosurface is in front of it.
+   */
+  probeScreen: (o: { nx?: number; ny?: number } = {}) => {
+    const gl = renderer.getContext();
+    const w = renderer.domElement.width;
+    const h = renderer.domElement.height;
+    renderer.render(scene, camera);
+    const x = Math.round(((o.nx ?? 0) * 0.5 + 0.5) * (w - 1));
+    const y = Math.round(((o.ny ?? 0) * 0.5 + 0.5) * (h - 1));
+    const px = new Uint8Array(4);
+    gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    return { x, y, rgb: [px[0], px[1], px[2]] };
   },
   probeFloor: () => ({
     floorVisible: cutaway.floor.visible,

@@ -2,7 +2,7 @@ import {
   ShaderMaterial, DoubleSide, Vector3, Color, LinearSRGBColorSpace,
   type Texture, type Data3DTexture,
 } from 'three';
-import { EARTH_RADIUS_KM, R_SURFACE } from './constants';
+import { GEOGRAPHIC_GLSL } from './glsl/geographic';
 
 /**
  * Specify a colour that lands on screen as the literal hex given.
@@ -38,6 +38,8 @@ void main() {
 const FRAG = /* glsl */ `
 precision highp sampler3D;
 
+${GEOGRAPHIC_GLSL}
+
 uniform sampler3D uVolume;
 uniform sampler2D uColormap;
 uniform sampler2D uMask;
@@ -53,24 +55,17 @@ uniform float uDebug;   // 0 off, 1 pDep, 2 lat, 3 raw sample
 
 varying vec3 vWorldPos;
 
-const float PI = 3.141592653589793;
-const float R_SURFACE = ${R_SURFACE.toFixed(1)};
-const float EARTH_RADIUS_KM = ${EARTH_RADIUS_KM.toFixed(1)};
-
 void main() {
-  float r   = length(vWorldPos);
-  float lat = asin(clamp(vWorldPos.y / r, -1.0, 1.0));
-  float lon = atan(-vWorldPos.z, vWorldPos.x);
+  vec2 ll = worldToGeographic(vWorldPos);
 
   if (uUseMask != 0.0) {
-    vec2 muv = vec2((lon + PI) / (2.0 * PI), (lat + PI * 0.5) / PI);
-    float m = texture(uMask, muv).r;
+    float m = texture(uMask, geographicToUV(ll)).r;
     // uUseMask > 0: this surface exists only inside the cut (floor).
     // uUseMask < 0: this surface exists only outside it (globe surface).
     if (uUseMask > 0.0 ? (m < 0.5) : (m > 0.5)) discard;
   }
 
-  float depth = (R_SURFACE - r) * EARTH_RADIUS_KM;
+  float depth = worldDepthKm(vWorldPos);
 
   // Outside the model's valid depth range: say so, don't fabricate. The half
   // kilometre of slack matters: the floor cap is placed exactly at the base of
@@ -81,22 +76,14 @@ void main() {
     return;
   }
 
-  float pLon = (lon + PI) / (2.0 * PI);
-  float pLat = (lat + PI * 0.5) / PI;
-  float pDep = clamp((depth - uDepthMin) / (uDepthMax - uDepthMin), 0.0, 1.0);
-
-  // Half-texel offsets. Longitude wraps and has no duplicate column, so it
-  // needs a +0.5/nlon shift; latitude and depth include both endpoints, so they
-  // map to (p*(N-1)+0.5)/N. Sampling at raw p puts every value half a cell off.
-  vec3 uvw = vec3(
-    pLon + 0.5 / uGrid.x,
-    (pLat * (uGrid.y - 1.0) + 0.5) / uGrid.y,
-    (pDep * (uGrid.z - 1.0) + 0.5) / uGrid.z
-  );
-
+  vec3 uvw = volumeUVW(ll, depth, uDepthMin, uDepthMax, uGrid);
   float v = texture(uVolume, uvw).r;
 
   if (uDebug > 0.5) {
+    // Display-only, so restating the normalisations here is harmless; the
+    // sampling that has to agree with the isosurface goes through volumeUVW.
+    float pLat = (ll.y + PI * 0.5) / PI;
+    float pDep = clamp((depth - uDepthMin) / (uDepthMax - uDepthMin), 0.0, 1.0);
     float d = uDebug < 1.5 ? pDep : (uDebug < 2.5 ? pLat : v);
     gl_FragColor = vec4(vec3(d), 1.0);
     return;

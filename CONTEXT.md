@@ -105,6 +105,33 @@ depth even though no source model on disk is.
 The region of mantle removed from view so the interior can be seen. Defined by
 a closed spherical polygon and a depth to which the removal extends.
 
+## Cut Depth
+
+How deep the Cutaway removes material. Distinct from the Isosurface Depth
+Range: this one takes material away, that one bounds a search. Both are depths
+in km and neither is a synonym for the other.
+
+## Isosurface
+
+The surface of constant Variable value within a Volume. Unlike the Wall and the
+floor, it is not a piece of geometry the Volume is painted onto — it is found
+by searching the Volume, and it exists wherever the Variable takes that value.
+Up to two are shown at once, one enclosing cold material and one hot. They can
+never intersect.
+
+## Isovalue
+
+The Variable value an Isosurface traces, in that Variable's own units. The two
+Isovalues are independent: a downwelling and an upwelling are unrelated objects
+at unrelated magnitudes, and one is not the other's mirror.
+
+## Isosurface Depth Range
+
+The radial shell within which Isosurfaces are searched for. Not the whole
+mantle by default: an Isovalue that resolves deep structure also encloses the
+whole lithosphere, which would wrap the globe in a solid shell and hide
+everything inside it. See Cut Depth for what this is not.
+
 ## Wall
 
 The surface exposed by a Cutaway: the vertical curtain hanging from the surface
