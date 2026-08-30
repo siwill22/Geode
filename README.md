@@ -200,6 +200,38 @@ horizons project **inside** the disc and paint the far side over the near one.
 the lines are culled explicitly, by looking up the same mask raster the surface
 shader discards on — not by a second point-in-polygon implementation.
 
+### The topography must be resampled, not truncated
+
+`prep_topography.py` decimates GEBCO by an integer stride, which does not land
+on the output size: 21601 columns strided by 5 gives 4321, not 4096. An earlier
+version **truncated** to the output size, keeping only lon −180…+161.3° and lat
+−90…+80.7° and letting the shader stretch that across the whole globe.
+
+That is a **1.0547× scale error anchored at lon −180 / lat −90**, not an offset,
+so it grows with distance from that corner — about 15° of longitude at Sumatra
+and 5° of latitude at the equator, in both axes at once, by different amounts in
+different places. Every other layer derives lon/lat from world position, so only
+the topography moved; it looked like a reconstruction problem and was not.
+
+It is now interpolated onto the exact texel centres the shader samples,
+`lon = −180 + (i+0.5)·360/W`, and checked on every build.
+
+The check correlates the written image's blue-minus-red against the same
+quantity predicted from the source grid through the same palette, and fits the
+best offset **separately in six longitude bands and six latitude bands**:
+
+```
+longitude -180..-120: +0.00  -120..-60: +0.00  -60..+0: +0.00  ...
+```
+
+Per band is the point. A constant shift reads as the same non-zero value in
+every band; a scale error reads as a *ramp* across them — the real bug gave
++4.75, +8.50, +10.75, +15.25, +19.75 — and a single global fit would have
+averaged that into something unremarkable. Correlation rather than a land/ocean
+classifier because any fixed RGB threshold misjudges `geo`'s pale shelf colours:
+the first version of this check missed a seventh of the ocean and was no better
+than chance *at the shoreline*, which is exactly where the positional signal is.
+
 ### One rotation model, everywhere
 
 OPT1 was run on the Müller 2022 plate model, so the surface layers must use it
