@@ -19,6 +19,7 @@ export interface ViewState {
   clipMin: number;
   clipMax: number;
   symmetricClip: boolean;
+  colorSteps: number;   // 0 = continuous ramp, else discrete bands
   reconstructionAge: number;
   cutDepthKm: number;
   inverted: boolean;
@@ -33,6 +34,7 @@ export interface UICallbacks {
   onModel(id: string): void;
   onVariable(id: string): void;
   onColormap(name: string): void;
+  onColorSteps(n: number): void;
   onClip(): void;
   onAge(age: number): void;
   onCutDepth(km: number): void;
@@ -99,6 +101,11 @@ export class UI {
     fc.add(this.state, 'symmetricClip')
       .name('symmetric')
       .onChange(() => this.handleClip('min'));
+    // 0 and 1 both mean "smooth" -- a single band would be one flat colour
+    // across the whole section, which nobody wants and which reads as a bug.
+    fc.add(this.state, 'colorSteps', 0, 20, 1)
+      .name('divisions (0 = smooth)')
+      .onChange((v: number) => cb.onColorSteps(v));
 
     const ft = this.gui.addFolder('Time');
     this.ageCtrl = ft

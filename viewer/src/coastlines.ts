@@ -6,6 +6,7 @@ import { passthroughColor } from './material';
 import { GEOGRAPHIC_GLSL } from './glsl/geographic';
 import { LIGHT_DIR } from './globe';
 import { R_SURFACE } from './constants';
+import { PALETTE } from './palette';
 import type { CoastlineLine, RotationTable } from './types';
 
 const LAND_R = R_SURFACE * 1.0006;      // just clear of the surface sphere
@@ -190,7 +191,7 @@ export class Coastlines {
       fragmentShader: LINE_FRAG,
       uniforms: {
         uMask: { value: maskTexture },
-        uColor: { value: passthroughColor(0x24303a) },
+        uColor: { value: passthroughColor(PALETTE.coastline) },
         uUseMask: { value: 1 },
         uOpacity: { value: 1 },
       },
@@ -204,7 +205,7 @@ export class Coastlines {
       side: DoubleSide,
       uniforms: {
         uMask: { value: maskTexture },
-        uColor: { value: passthroughColor(0x9c9268) },
+        uColor: { value: passthroughColor(PALETTE.land) },
         uUseMask: { value: 1 },
         uOpacity: { value: 1 },
         uLightDir: { value: LIGHT_DIR.clone() },

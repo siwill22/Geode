@@ -51,6 +51,7 @@ uniform float uClipHi;
 uniform vec3  uNoDataColor;
 uniform float uUseMask;      // 0 = ignore, 1 = keep inside cut, -1 = keep outside
 uniform float uOpacity;
+uniform float uSteps;   // 0 = continuous ramp, else this many discrete bands
 uniform float uDebug;   // 0 off, 1 pDep, 2 lat, 3 raw sample
 
 varying vec3 vWorldPos;
@@ -90,6 +91,20 @@ void main() {
   }
 
   float t = clamp((v - uClipLo) / (uClipHi - uClipLo), 0.0, 1.0);
+
+  // Discrete bands: quantise the ramp coordinate, not the colour, so the bands
+  // are cut in the same clipped space the smooth ramp uses and the boundaries
+  // land on round fractions of the clip range.
+  //
+  // Sample each band at its CENTRE. Sampling at the edge would read the colour
+  // of the boundary between two bands -- a value that belongs to neither and
+  // that shifts as the band count changes. min() rather than a clamp after the
+  // fact because t == 1.0 floors to n and would otherwise wrap past the last
+  // band into the ramp's final texel.
+  if (uSteps >= 2.0) {
+    t = (min(floor(t * uSteps), uSteps - 1.0) + 0.5) / uSteps;
+  }
+
   gl_FragColor = vec4(texture(uColormap, vec2(t, 0.5)).rgb, uOpacity);
 }
 `;
@@ -114,6 +129,7 @@ export function createVolumeSurfaceMaterial(): ShaderMaterial {
       uNoDataColor: { value: passthroughColor(0x555555) },
       uUseMask: { value: 0 },
       uOpacity: { value: 1 },
+      uSteps: { value: 0 },
       uDebug: { value: 0 },
     },
   });

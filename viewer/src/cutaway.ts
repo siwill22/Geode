@@ -1,11 +1,11 @@
 import {
   BufferGeometry, BufferAttribute, Mesh, SphereGeometry, ShaderMaterial,
-  LineLoop, LineBasicMaterial, Points, PointsMaterial, FrontSide, type Texture,
+  LineLoop, Points, FrontSide, type Texture,
 } from 'three';
 import {
   R_SURFACE, densifyPolygon, depthToRadius, lonLatToVec3, type LonLat,
 } from './constants';
-import { createVolumeSurfaceMaterial, setMaskMode } from './material';
+import { createVolumeSurfaceMaterial, passthroughColor, setMaskMode } from './material';
 import { rasteriseMask, MASK_W, MASK_H } from './mask';
 import type { CutawayState } from './types';
 
@@ -13,6 +13,63 @@ const WALL_ROWS = 128;
 /** Keeps the floor clear of the volume's last depth sample -- see update(). */
 const VALID_RANGE_MARGIN_KM = 8;
 const MAX_BOUNDARY = 4096;
+
+/**
+ * Hide the polygon overlay where the globe is in the way.
+ *
+ * The outline and handles sit just outside the sphere at R_SURFACE * 1.002 so
+ * they do not z-fight with the surface they trace. That lift is also why the
+ * depth buffer cannot be relied on to hide them: the globe surface is a
+ * transparent material, so it renders in three.js's transparent pass AFTER the
+ * opaque overlay, and the overlay's far-side pixels are already in the frame by
+ * then. The polygon stayed visible straight through the planet.
+ *
+ * So cull geometrically instead, by the same criterion the plate-boundary
+ * overlay uses. THE HORIZON IS NOT AT dot == 0. That would be the limit for an
+ * orthographic camera; under perspective at distance d the visible cap ends
+ * where dot(n, viewDir) == R/d -- at d = 2.6 R that is 67 degrees, not 90. Using
+ * zero leaves a ring of far-side polygon painted over the near limb, which is
+ * both wrong and looks like a rendering artefact rather than a maths error.
+ *
+ * R_SURFACE, not the 1.002 radius: what occludes the overlay is the globe.
+ */
+const HORIZON_GLSL = /* glsl */`
+bool beyondHorizon(vec3 p) {
+  float d = length(cameraPosition);
+  return dot(normalize(p), cameraPosition / d) < ${R_SURFACE.toFixed(6)} / d;
+}
+`;
+
+const OVERLAY_VERT = /* glsl */`
+uniform float uSize;
+varying vec3 vWorldPos;
+void main() {
+  vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  gl_PointSize = uSize;
+}
+`;
+
+const OVERLAY_FRAG = /* glsl */`
+${HORIZON_GLSL}
+uniform vec3 uColor;
+varying vec3 vWorldPos;
+void main() {
+  if (beyondHorizon(vWorldPos)) discard;
+  gl_FragColor = vec4(uColor, 1.0);
+}
+`;
+
+function createOverlayMaterial(color: number, size: number): ShaderMaterial {
+  return new ShaderMaterial({
+    vertexShader: OVERLAY_VERT,
+    fragmentShader: OVERLAY_FRAG,
+    uniforms: {
+      uColor: { value: passthroughColor(color) },
+      uSize: { value: size },
+    },
+  });
+}
 
 /**
  * Walls, floor and the in-progress polygon overlay.
@@ -76,18 +133,13 @@ export class Cutaway {
     this.outlinePos = new Float32Array(MAX_BOUNDARY * 3);
     const outlineGeom = new BufferGeometry();
     outlineGeom.setAttribute('position', new BufferAttribute(this.outlinePos, 3));
-    this.outline = new LineLoop(
-      outlineGeom, new LineBasicMaterial({ color: 0xffcc33 }),
-    );
+    this.outline = new LineLoop(outlineGeom, createOverlayMaterial(0xffcc33, 1));
     this.outline.frustumCulled = false;
 
     this.handlePos = new Float32Array(256 * 3);
     const handleGeom = new BufferGeometry();
     handleGeom.setAttribute('position', new BufferAttribute(this.handlePos, 3));
-    this.handles = new Points(
-      handleGeom,
-      new PointsMaterial({ color: 0xffffff, size: 8, sizeAttenuation: false }),
-    );
+    this.handles = new Points(handleGeom, createOverlayMaterial(0xffffff, 8));
     this.handles.frustumCulled = false;
 
     this.maskData = new Uint8Array(MASK_W * MASK_H);

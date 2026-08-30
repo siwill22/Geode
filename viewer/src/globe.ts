@@ -6,6 +6,7 @@ import {
 import { passthroughColor } from './material';
 import { GEOGRAPHIC_GLSL } from './glsl/geographic';
 import { R_CMB, R_SURFACE } from './constants';
+import { PALETTE } from './palette';
 
 /** Shared key-light direction, so surface and core agree on where the sun is. */
 export const LIGHT_DIR = new Vector3(0.6, 0.45, 0.65).normalize();
@@ -75,7 +76,7 @@ export function createSurfaceSphere(maskTexture: Texture): Surface {
     uniforms: {
       uMask: { value: maskTexture },
       uTopography: { value: null as Texture | null },
-      uColor: { value: passthroughColor(0x9fb8cc) },
+      uColor: { value: passthroughColor(PALETTE.ocean) },
       uOpacity: { value: 1.0 },
       uUseMask: { value: 1 },
       uUseTopography: { value: 0 },

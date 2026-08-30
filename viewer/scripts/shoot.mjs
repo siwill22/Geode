@@ -363,6 +363,56 @@ await apply('setAge', 120);
 await shot('19-opt1-isosurfaces-120Ma');
 await apply('setSurfaceOpacity', 1);
 
+// 22. The polygon overlay must be hidden by the globe.
+//
+// It sits at R_SURFACE * 1.002 to avoid z-fighting, and the globe surface is a
+// transparent material, so three.js draws the surface in a LATER pass than the
+// opaque overlay and the depth buffer never hides it -- the polygon showed
+// straight through the planet. It is culled against the perspective horizon
+// instead.
+//
+// Three orientations, because "far side draws nothing" alone is also satisfied
+// by culling everything, and by the wrong horizon. dot > 0 is the ORTHOGRAPHIC
+// limit; under perspective the visible cap ends at R/d, which at d = 3 is 70
+// degrees rather than 90. Only the graded near/limb/far result separates the
+// correct test from both failure modes.
+console.log('\npolygon overlay occlusion:');
+await call('setPolygon', {
+  verts: [[-25, 25], [25, 25], [25, -25], [-25, -25]], depthKm: 1500,
+});
+
+async function overlayPixels() {
+  return page.evaluate(() => {
+    const c = document.querySelector('canvas');
+    const g = document.createElement('canvas');
+    g.width = c.width; g.height = c.height;
+    const ctx = g.getContext('2d');
+    ctx.drawImage(c, 0, 0);
+    const d = ctx.getImageData(0, 0, c.width, c.height).data;
+    let outline = 0, handles = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      const r = d[i], gg = d[i + 1], bb = d[i + 2];
+      if (r > 200 && gg > 150 && gg < 225 && bb < 110) outline++;   // 0xffcc33
+      if (r > 245 && gg > 245 && bb > 245) handles++;               // 0xffffff
+    }
+    return { outline, handles };
+  });
+}
+
+const seen = {};
+for (const [where, lon] of [['near', 0], ['limb', 90], ['far', 180]]) {
+  await apply('setCamera', { lon, lat: 0, dist: 3.0 });
+  seen[where] = await overlayPixels();
+}
+check('polygon overlay is drawn when it faces the camera',
+  seen.near.outline > 200 && seen.near.handles > 200,
+  `near ${seen.near.outline} outline, ${seen.near.handles} handle px`);
+check('polygon overlay is hidden behind the globe',
+  seen.far.outline === 0 && seen.far.handles === 0,
+  `far ${seen.far.outline} outline, ${seen.far.handles} handle px`);
+check('polygon overlay is clipped at the perspective horizon, not at 90 deg',
+  seen.limb.outline > 0 && seen.limb.outline < seen.near.outline * 0.5,
+  `limb ${seen.limb.outline} vs near ${seen.near.outline} outline px`);
 const stats = await page.evaluate(() => window.__geode.stats());
 console.log('\nstats:', JSON.stringify(stats, null, 2));
 if (errors.length) {

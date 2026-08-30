@@ -8,6 +8,7 @@ import {
   R_CMB, R_SURFACE, densifyPolygon, lonLatToVec3, radiusToDepth, vec3ToLonLat,
   type LonLat,
 } from './constants';
+import { PALETTE } from './palette';
 import {
   createCoreSphere, createPickSphere, createSurfaceSphere, loadTopography,
 } from './globe';
@@ -34,7 +35,7 @@ const ARCHIVE = import.meta.env.VITE_ARCHIVE_BASE ?? `${import.meta.env.BASE_URL
 // --- scene ------------------------------------------------------------------
 
 const scene = new Scene();
-scene.background = new Color(0x0b0d10);
+scene.background = new Color(PALETTE.background);
 
 const camera = new PerspectiveCamera(45, innerWidth / innerHeight, 0.01, 50);
 camera.position.set(2.6, 1.4, 2.2);
@@ -88,7 +89,7 @@ const cut: CutawayState = {
 
 const view: ViewState = {
   modelId: '', variableId: '', colormap: 'RdBu',
-  clipMin: -2, clipMax: 2, symmetricClip: true,
+  clipMin: -2, clipMax: 2, symmetricClip: true, colorSteps: 0,
   reconstructionAge: 0, cutDepthKm: 2890, inverted: false,
   surfaceOpacity: 1, surfaceMode: 'topography', showBoundaries: true,
   tool: 'drag', iso: { ...DEFAULT_ISOSURFACE },
@@ -121,6 +122,10 @@ function applyColormap(name: string): void {
   if (!cm) return;
   const tex = makeColormapTexture(cm.colors);
   for (const m of volumeMaterials()) m.uniforms.uColormap.value = tex;
+}
+
+function applyColorSteps(): void {
+  for (const m of volumeMaterials()) m.uniforms.uSteps.value = view.colorSteps;
 }
 
 function applyClip(): void {
@@ -189,6 +194,7 @@ async function selectVariable(id: string): Promise<void> {
   ui.setVariable(variable);
   ui.setColormapOptions(colormapOptions(variable), view.colormap);
   applyColormap(view.colormap);
+  applyColorSteps();
   applyClip();
   applyIso();
   updateTimeInfo();
@@ -510,6 +516,7 @@ async function boot(): Promise<void> {
     onModel: (id) => void selectModel(id),
     onVariable: (id) => void selectVariable(id),
     onColormap: (n) => applyColormap(n),
+    onColorSteps: (n) => { view.colorSteps = n; applyColorSteps(); },
     onClip: () => applyClip(),
     onAge: (age) => applyAge(age),
     onCutDepth: () => rebuildCutaway(),
@@ -902,6 +909,11 @@ window.__geode = {
     wallVisible: cutaway.wall.visible,
     depthMax: manifest?.depth_max_km,
   }),
+  setColorSteps: (n: number) => {
+    view.colorSteps = n;
+    applyColorSteps();
+    return view.colorSteps;
+  },
   setPolygon: (o: { verts: [number, number][]; depthKm: number }) => {
     cut.vertices = o.verts.map(([lon, lat]) => ({ lon, lat }));
     view.cutDepthKm = o.depthKm;
