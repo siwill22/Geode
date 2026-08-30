@@ -327,10 +327,29 @@ whole deployable archive is **124 MB**. Pre-compressing is worth the trouble
 because a CDN will not compress `application/octet-stream` for you. The JSON is
 deliberately left alone, since `application/json` *is* compressed on the wire.
 
+Deployed at **<https://siwill22.github.io/Geode/>**. The repo is private; a
+Pages *site* is public regardless, since access-controlled Pages is Enterprise
+Cloud only.
+
 ### One-time setup
 
 1. Repo **Settings → Pages → Source: GitHub Actions**.
-2. Pack and upload the data:
+2. A **read-only deploy key** for the submodule. `deep-time-map` is a separate
+   private repo, and a workflow's `GITHUB_TOKEN` is scoped to this one, so
+   `checkout` cannot fetch it — the failure reads `Repository not found`, which
+   looks like a bad URL rather than a permissions problem. A deploy key grants
+   read on exactly that one repo, where a PAT would carry the whole account's
+   access into CI:
+
+```bash
+ssh-keygen -t ed25519 -N "" -C geode-ci-readonly -f /tmp/dtm_key
+gh api -X POST repos/siwill22/deep-time-map/keys \
+    -f title="Geode CI (read-only)" -f key="$(cat /tmp/dtm_key.pub)" -F read_only=true
+gh secret set DTM_DEPLOY_KEY --repo siwill22/Geode < /tmp/dtm_key
+rm /tmp/dtm_key /tmp/dtm_key.pub
+```
+
+3. Pack and upload the data:
 
 ```bash
 node prep/pack_deploy.mjs
