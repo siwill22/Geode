@@ -58,6 +58,34 @@ export function resolvePath(m: Manifest, variable: string, frame: string): strin
 }
 
 /**
+ * Fetch a volume's bytes, transparently un-gzipping a `.bin.gz` frame.
+ *
+ * The deployed archive stores volumes gzipped (prep/pack_deploy.mjs) because a
+ * CDN will not compress application/octet-stream for us, and these files halve.
+ * The manifest's path_template carries the `.gz`, so nothing else has to know.
+ *
+ * The extension alone is NOT enough to decide whether to decompress. A server
+ * may serve a .gz file with `Content-Encoding: gzip`, in which case the browser
+ * has already decoded it by the time we see the bytes -- and decompressing
+ * again fails. Browsers strip Content-Encoding from the readable headers, so we
+ * cannot ask; instead we look for the gzip magic number in the bytes we
+ * actually got. That is correct under either transport, which is what lets the
+ * dev server and GitHub Pages disagree about this without anyone noticing.
+ */
+async function fetchVolumeBytes(path: string): Promise<Uint8Array> {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error(`${path}: ${r.status}`);
+  const raw = new Uint8Array(await r.arrayBuffer());
+
+  const gzipped = raw.length > 2 && raw[0] === 0x1f && raw[1] === 0x8b;
+  if (!path.endsWith('.gz') || !gzipped) return raw;
+
+  const stream = new Blob([raw as BlobPart]).stream()
+    .pipeThrough(new DecompressionStream('gzip'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+/**
  * Load one volume as a Data3DTexture.
  *
  * Memory order is longitude fastest, then latitude, then depth -- which is what
@@ -74,9 +102,7 @@ export async function loadVolume(
 ): Promise<Data3DTexture> {
   const res = manifest.resolutions.find((r) => r.id === manifest.default_resolution)!;
   const path = `${base}/models/${modelId}/${resolvePath(manifest, variableId, frameId)}`;
-  const r = await fetch(path);
-  if (!r.ok) throw new Error(`${path}: ${r.status}`);
-  const buf = new Uint8Array(await r.arrayBuffer());
+  const buf = await fetchVolumeBytes(path);
 
   const expected = res.nlon * res.nlat * res.ndepth;
   if (buf.length !== expected) {

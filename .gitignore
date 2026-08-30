@@ -2,6 +2,12 @@
 # See the README for the regeneration commands.
 /archive/
 
+# The deployable subset, rebuilt by prep/pack_deploy.mjs and uploaded as a
+# release asset. Deriving it is cheap; committing it would defeat the point of
+# keeping the data out of git history entirely.
+/archive-deploy/
+/archive-deploy.tar.gz
+
 # viewer/public/archive is a relative symlink to /archive and IS tracked,
 # so a fresh clone wires up correctly once the prep scripts have been run.
 

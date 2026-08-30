@@ -303,15 +303,103 @@ render:
   band gets verified — at 48 km it is only ~1.7 % of the mantle and too thin to
   judge by eye.
 
+## Deploying
+
+The site is static, so GitHub Pages serves it whole — but the data must not go
+through git. `archive/` is 374 MB of derived binary, and binary does not delta
+compress, so committing it would add a fresh several-hundred-MB copy to history
+on every regeneration, permanently. Instead the data is a **release asset** and
+`.github/workflows/deploy.yml` pulls it in at build time. The Pages artifact
+carries the bytes to Pages storage without them entering the repo, which is what
+lets code deploy as often as it likes against data uploaded once.
+
+`prep/pack_deploy.mjs` turns the generated archive into the deployable one:
+
+```bash
+node prep/pack_deploy.mjs          # archive/ -> archive-deploy/
+```
+
+Two changes, both about the 1 GB Pages cap and the bandwidth budget. It **drops
+the fixture models** — they exist for `check:render` and are 157 of the 374 MB —
+and it **gzips the volumes**, rewriting each manifest's `path_template` to
+`.bin.gz` so nothing else needs a flag. 350 MB of volumes becomes 91 MB; the
+whole deployable archive is **124 MB**. Pre-compressing is worth the trouble
+because a CDN will not compress `application/octet-stream` for you. The JSON is
+deliberately left alone, since `application/json` *is* compressed on the wire.
+
+### One-time setup
+
+1. Repo **Settings → Pages → Source: GitHub Actions**.
+2. Pack and upload the data:
+
+```bash
+node prep/pack_deploy.mjs
+tar -czf archive-deploy.tar.gz -C archive-deploy .
+gh release create data-v1 archive-deploy.tar.gz \
+    --title "Archive v1" --notes "Packed archive for the deployed viewer."
+```
+
+The tarball holds the archive's *contents*, not the directory — the workflow
+extracts into `archive/`, which is what `viewer/public/archive` points at.
+
+After that, **deploying code is just `git push`**. Updating the data means a new
+tag and a matching bump of `DATA_RELEASE` in the workflow.
+
+### Verifying what will actually ship
+
+The packed archive is a different set of bytes reaching the shader through a
+different code path, so it gets held to the same screenshots. Point the existing
+symlink at it — which is exactly the arrangement CI builds — and re-run the
+render check:
+
+```bash
+node prep/pack_deploy.mjs --keep-fixtures      # check:render needs the fixtures
+ln -sfn ../../archive-deploy viewer/public/archive
+cd viewer && npm run dev &
+node scripts/shoot.mjs /tmp/shots-gz           # must match a raw-archive run
+ln -sfn ../../archive public/archive           # restore for dev
+```
+
+All 20 screenshots are byte-identical to a run against the raw archive, and each
+of the 28 volumes round-trips to an identical MD5. Do not simply keep a second
+symlink in `viewer/public/` — vite copies that directory wholesale, so a stray
+one ships both archives and doubles the site.
+
+### The limits, and when they bite
+
+| | |
+|---|---|
+| Published Pages site | **1 GB hard** — currently 124 MB |
+| Bandwidth | 100 GB/month soft |
+| Repo | unaffected; stays ~1 MB |
+
+Dataset *count* is cheap; what costs is **frames x variables x resolution**. A
+static tomography model is one frame-variable, ~6 MB packed. OPT1 is eleven, ~70
+MB. So the headroom is roughly a dozen more convection series, or a hundred more
+static models — but doubling the grid resolution is 8x the bytes and would spend
+it fast.
+
+Bandwidth is the softer constraint: first load is ~20 MB and scrubbing the whole
+OPT1 series pulls ~69 MB, so 100 GB/month is several hundred engaged visits.
+Exceeding it prompts an email, not a bill.
+
+When either becomes real, the seam is already there: `VITE_ARCHIVE_BASE` points
+the viewer at an absolute URL, so the archive can move to object storage with
+free egress (Cloudflare R2) while Pages keeps serving the 630 kB app. The only
+extra requirement is CORS headers on the data host.
+
 ## Layout
 
 ```
 prep/                    netCDF/GPML -> viewer binary format (Python, pygmt17)
+prep/pack_deploy.mjs     archive/ -> archive-deploy/, for the deployed site
 archive/                 generated data, served statically, not tracked
+archive-deploy/          packed subset that ships; not tracked
 viewer/                  TypeScript + Vite + three.js
 viewer/vendor/           deep-time-map submodule
 test-data/               synthetic fixtures and the pygplates cross-check
 docs/adr/                architecture decisions
+.github/workflows/       Pages deploy
 ```
 
 ## Attribution

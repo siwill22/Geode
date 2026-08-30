@@ -1,0 +1,85 @@
+# Build the viewer and publish it to GitHub Pages.
+#
+# The data is deliberately NOT in this repository. archive/ is ~374 MB of
+# derived binary that regenerates from prep/*.py, and committing it would turn a
+# 1 MB repo into a permanent multi-hundred-MB one -- binary does not delta
+# compress, so every regeneration would add a whole fresh copy to history with
+# no way back short of a rewrite.
+#
+# Instead the packed archive lives as a release asset (see README, "Deploying"),
+# and this workflow pulls it in at build time. The Pages artifact carries the
+# bytes to Pages storage without them ever entering git history, so code can
+# deploy as often as it likes while the data is uploaded once.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race; drop superseded ones rather than queueing them.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  # Bump when the data changes, and upload a new asset under the new tag.
+  DATA_RELEASE: data-v1
+  DATA_ASSET: archive-deploy.tar.gz
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # viewer/src/boundaries.ts imports the vendored deep-time-map
+          # library directly, so the build fails without this.
+          submodules: recursive
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: viewer/package-lock.json
+
+      - name: Fetch the packed archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p archive
+          gh release download "$DATA_RELEASE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$DATA_ASSET" --output - \
+            | tar -xz -C archive
+          # viewer/public/archive is a symlink to this directory; if the
+          # tarball's shape is wrong the build silently ships an empty site.
+          test -f archive/archive.json
+
+      - run: npm ci
+        working-directory: viewer
+
+      - run: npm run build
+        working-directory: viewer
+        env:
+          # A project site is served from /<repo>/, not the domain root.
+          VITE_BASE: /${{ github.event.repository.name }}/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: viewer/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -24,7 +24,12 @@ import { DEFAULT_ISOSURFACE, Isosurface, type IsosurfaceState } from './isosurfa
 import { UI, type SurfaceMode, type ToolMode, type ViewState } from './ui';
 import type { ArchiveIndex, ColormapData, CutawayState, Manifest, VariableInfo } from './types';
 
-const ARCHIVE = import.meta.env.VITE_ARCHIVE_BASE ?? '/archive';
+// Where the data lives. Defaults to the archive shipped beside the app, under
+// whatever base path the build was given ('/' in dev, '/Geode/' on Pages).
+// VITE_ARCHIVE_BASE overrides it with an absolute URL, which is the seam for
+// moving the volumes to object storage later without touching the app -- the
+// only extra requirement then is CORS headers on the data host.
+const ARCHIVE = import.meta.env.VITE_ARCHIVE_BASE ?? `${import.meta.env.BASE_URL}archive`;
 
 // --- scene ------------------------------------------------------------------
 
