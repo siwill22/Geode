@@ -206,6 +206,11 @@ document.getElementById('add-globe')?.addEventListener('click', () => {
   void addInstance();
 });
 
+document.getElementById('hint-toggle')?.addEventListener('click', () => {
+  const hint = document.getElementById('hint');
+  if (hint) hint.hidden = !hint.hidden;
+});
+
 // --- interaction -------------------------------------------------------
 //
 // The camera and canvas are shared, so pointer events are routed by which

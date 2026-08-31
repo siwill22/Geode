@@ -1,6 +1,6 @@
 import type { PerspectiveCamera } from 'three';
 import { Vector3 } from 'three';
-import { BoundarySeries } from '../vendor/deep-time-map/js/index.js';
+import { BoundarySeries, DEFAULT_STYLE } from '../vendor/deep-time-map/js/index.js';
 
 import { R_SURFACE } from './constants';
 import { maskAt } from './mask';
@@ -150,7 +150,16 @@ export class BoundaryOverlay {
   }
 
   async load(url: string): Promise<void> {
-    this.series = await BoundarySeries.load(url);
+    // The library's own default renders subduction zones (and their polarity
+    // triangles, which share this colour -- see boundaries.js) in a pale
+    // peach; Geode wants them black. Spreading DEFAULT_STYLE.subduction
+    // rather than passing just { stroke } because the library's merge is
+    // shallow (BoundaryLayer's constructor replaces the whole `subduction`
+    // entry, not just the field given), so width/label would otherwise be
+    // dropped.
+    this.series = await BoundarySeries.load(url, {
+      style: { subduction: { ...DEFAULT_STYLE.subduction, stroke: '#000000' } },
+    });
   }
 
   get timeRange(): [number, number] | null {

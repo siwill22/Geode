@@ -97,10 +97,30 @@ export class UI {
     document.body.appendChild(this.panelAnchor);
     this.gui = new GUI({ title, container: this.panelAnchor });
 
+    // Quick access: added directly to the panel root, above every folder and
+    // never collapsed with one -- these are the two controls scrubbed
+    // constantly while exploring a model, so they don't get a fold to open
+    // first. Everything else below is one-time setup or occasional tuning,
+    // grouped into folders by what question it answers.
+    this.ageCtrl = this.gui
+      .add(this.state, 'reconstructionAge', archive.coastlines.age_min,
+        archive.coastlines.age_max, 0.5)
+      .name('age (Ma)')
+      .onChange((v: number) => cb.onAge(v));
+    this.gui.add(this.state.depthSlice, 'enabled')
+      .name('depth slice')
+      .onChange(() => cb.onDepthSlice());
+    this.depthSliceDepthCtrl = this.gui
+      .add(this.state.depthSlice, 'depthKm', 0, 2890, 10)
+      .name('depth (km)')
+      .onChange(() => cb.onDepthSlice());
+
     const models: Record<string, string> = {};
     for (const m of archive.models) models[m.name] = m.id;
 
-    this.folderData = this.gui.addFolder('Model');
+    // "Data": what to look at and how to colour it -- model/variable choice
+    // and the colour ramp both answer that one question.
+    this.folderData = this.gui.addFolder('Data');
     this.folderData
       .add(this.state, 'modelId', models)
       .name('model')
@@ -109,35 +129,44 @@ export class UI {
       .add(this.state, 'variableId', { '-': '-' })
       .name('variable')
       .onChange((v: string) => cb.onVariable(v));
-
-    const fc = this.gui.addFolder('Colour');
-    this.colormapCtrl = fc
+    this.colormapCtrl = this.folderData
       .add(this.state, 'colormap', colormapNames)
       .name('colormap')
       .onChange((v: string) => cb.onColormap(v));
-    this.clipMinCtrl = fc
+    this.clipMinCtrl = this.folderData
       .add(this.state, 'clipMin', -10, 0, 0.01)
       .name('clip min')
       .onChange(() => this.handleClip('min'));
-    this.clipMaxCtrl = fc
+    this.clipMaxCtrl = this.folderData
       .add(this.state, 'clipMax', 0, 10, 0.01)
       .name('clip max')
       .onChange(() => this.handleClip('max'));
-    fc.add(this.state, 'symmetricClip')
+    this.folderData.add(this.state, 'symmetricClip')
       .name('symmetric')
       .onChange(() => this.handleClip('min'));
     // 0 and 1 both mean "smooth" -- a single band would be one flat colour
     // across the whole section, which nobody wants and which reads as a bug.
-    fc.add(this.state, 'colorSteps', 0, 20, 1)
+    this.folderData.add(this.state, 'colorSteps', 0, 20, 1)
       .name('divisions (0 = smooth)')
       .onChange((v: number) => cb.onColorSteps(v));
 
-    const ft = this.gui.addFolder('Time');
-    this.ageCtrl = ft
-      .add(this.state, 'reconstructionAge', archive.coastlines.age_min,
-        archive.coastlines.age_max, 0.5)
-      .name('age (Ma)')
-      .onChange((v: number) => cb.onAge(v));
+    const fs = this.gui.addFolder('Scene');
+    this.surfaceModeCtrl = fs
+      .add(this.state, 'surfaceMode',
+        {
+          Topography: 'topography',
+          'Filled continents': 'land',
+          'Transparent continents': 'flat',
+          None: 'none',
+        })
+      .name('surface')
+      .onChange((v: SurfaceMode) => cb.onSurfaceMode(v));
+    fs.add(this.state, 'surfaceOpacity', 0, 1, 0.01)
+      .name('surface opacity')
+      .onChange((v: number) => cb.onSurfaceOpacity(v));
+    fs.add(this.state, 'showBoundaries')
+      .name('plate boundaries')
+      .onChange((v: boolean) => cb.onBoundaries(v));
 
     const fx = this.gui.addFolder('Cutaway');
     fx.add(this.state, 'tool', { 'Drag Globe': 'drag', 'Draw Polygon': 'draw', 'Edit Vertices': 'edit' })
@@ -182,18 +211,11 @@ export class UI {
       .onChange(() => cb.onIsosurface());
     fi.close();
 
-    // A depth slice paints the WHOLE globe at one fixed depth, unlike the
-    // shells above. Slabs are assumed to sink vertically at a fixed rate --
-    // stated here rather than left implicit. See
-    // docs/plans/depth-slice-and-sinking-rate.md.
-    const fd = this.gui.addFolder('Depth slice');
-    fd.add(this.state.depthSlice, 'enabled')
-      .name('enabled')
-      .onChange(() => cb.onDepthSlice());
-    this.depthSliceDepthCtrl = fd
-      .add(this.state.depthSlice, 'depthKm', 0, 2890, 10)
-      .name('depth (km)')
-      .onChange(() => cb.onDepthSlice());
+    // Sinking-rate SETUP for the depth slice above (enabled/depth themselves
+    // are quick-access controls at the panel root). Slabs are assumed to
+    // sink vertically at a fixed rate -- stated here rather than left
+    // implicit. See docs/plans/depth-slice-and-sinking-rate.md.
+    const fd = this.gui.addFolder('Sinking rate');
     this.depthSinkingCtrl = fd
       .add(this.state.depthSlice, 'sinkingEnabled')
       .name('lock to age (sinking rate)')
@@ -228,19 +250,6 @@ export class UI {
       .name('sinking rate below 660 km (cm/yr)')
       .onChange(() => this.revertSinkingPresetToCustom());
     fd.close();
-
-    const fs = this.gui.addFolder('Scene');
-    this.surfaceModeCtrl = fs
-      .add(this.state, 'surfaceMode',
-        { Topography: 'topography', 'Land fill': 'land', Flat: 'flat', None: 'none' })
-      .name('surface')
-      .onChange((v: SurfaceMode) => cb.onSurfaceMode(v));
-    fs.add(this.state, 'surfaceOpacity', 0, 1, 0.01)
-      .name('surface opacity')
-      .onChange((v: number) => cb.onSurfaceOpacity(v));
-    fs.add(this.state, 'showBoundaries')
-      .name('plate boundaries')
-      .onChange((v: boolean) => cb.onBoundaries(v));
 
     const fe = this.gui.addFolder('Export');
     fe.add({ png: () => cb.onExportPNG() }, 'png').name('PNG screenshot');

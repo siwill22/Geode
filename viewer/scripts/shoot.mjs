@@ -642,6 +642,44 @@ await callArgs('setDepthSliceOn', [0, { enabled: false, sinkingEnabled: false }]
 await callArgs('setDepthSliceOn', [1, { enabled: false, sinkingEnabled: false }]);
 await apply('removeGlobe');
 
+// --- panel layout ------------------------------------------------------
+
+console.log('\npanel layout:');
+
+// 38. Age and depth slice are the controls scrubbed constantly while
+// exploring a model, so they live at the panel ROOT (see ui.ts), not inside
+// a folder that has to be opened first -- unlike every other control, which
+// starts inside a closed or open FOLDER but a folder nonetheless. Checked by
+// name text rather than a fixed DOM index, since that survives folder
+// reordering.
+const quickAccessVisible = await page.evaluate(() => {
+  const byName = (text) => [...document.querySelectorAll('.lil-gui .lil-controller')]
+    .find((c) => c.querySelector('.lil-name')?.textContent === text);
+  const visible = (el) => !!el && getComputedStyle(el).display !== 'none';
+  return {
+    age: visible(byName('age (Ma)')),
+    depthEnabled: visible(byName('depth slice')),
+    depthKm: visible(byName('depth (km)')),
+  };
+});
+check('age/depth-slice controls are visible with no folder opened',
+  quickAccessVisible.age && quickAccessVisible.depthEnabled && quickAccessVisible.depthKm,
+  JSON.stringify(quickAccessVisible));
+
+// 39. The hint text starts hidden behind the 'i' icon and toggles on click.
+const hintInitiallyHidden = await page.evaluate(
+  () => document.getElementById('hint')?.hidden === true);
+await page.click('#hint-toggle');
+const hintShown = await page.evaluate(
+  () => document.getElementById('hint')?.hidden === false);
+await page.click('#hint-toggle');
+const hintHiddenAgain = await page.evaluate(
+  () => document.getElementById('hint')?.hidden === true);
+check('hint text starts hidden and toggles with the i icon',
+  hintInitiallyHidden && hintShown && hintHiddenAgain,
+  `initially hidden=${hintInitiallyHidden}, shown after click=${hintShown}, `
+  + `hidden after second click=${hintHiddenAgain}`);
+
 const stats = await page.evaluate(() => window.__geode.stats());
 console.log('\nstats:', JSON.stringify(stats, null, 2));
 if (errors.length) {

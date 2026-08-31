@@ -24,12 +24,22 @@
         padding: 6px 10px; border-radius: 4px;
         background: rgba(0, 0, 0, 0.6); color: #cfd6dd;
       }
+      #hint-toggle {
+        position: fixed; left: 12px; top: 12px; z-index: 20;
+        width: 24px; height: 24px; padding: 0;
+        display: flex; align-items: center; justify-content: center;
+        font: inherit; font-style: italic; font-weight: 600;
+        color: #d8dee4; background: #1b1f24;
+        border: 1px solid #3a4048; border-radius: 50%; cursor: pointer;
+      }
+      #hint-toggle:hover { background: #262b32; }
       #hint {
-        position: fixed; left: 12px; top: 12px;
+        position: fixed; left: 12px; top: 44px;
         padding: 6px 10px; border-radius: 4px;
         background: rgba(0, 0, 0, 0.45); color: #97a3ad;
         max-width: 30ch;
       }
+      #hint[hidden] { display: none; }
       .timeinfo {
         position: fixed;
         padding: 6px 10px; border-radius: 4px;
@@ -69,13 +79,15 @@
     </style>
   </head>
   <body>
-    <div id="hint">
-      Pick a tool in the panel. In Draw, click to add vertices and
-      double-click or Enter to close. Hold <b id="modkey">&#8984;</b> to rotate
-      the globe without leaving the tool. Rotate/zoom is shared across every
-      globe; the tool and Enter/Escape act on whichever globe you last clicked.
-      "sync time"/"sync depth slice" in the toolbar link those sliders across
-      globes too, once turned on.
+    <button id="hint-toggle" aria-label="Help" title="Help">i</button>
+    <div id="hint" hidden>
+      Age and depth slice are pinned at the top of each globe's panel; the
+      rest is grouped into folders below. Pick a tool in the panel. In Draw,
+      click to add vertices and double-click or Enter to close. Hold
+      <b id="modkey">&#8984;</b> to rotate the globe without leaving the tool.
+      Rotate/zoom is shared across every globe; the tool and Enter/Escape act
+      on whichever globe you last clicked. "sync time"/"sync depth slice" in
+      the toolbar link those sliders across globes too, once turned on.
     </div>
     <div id="toolbar">
       <button id="add-globe">+ Add globe</button>
