@@ -39,6 +39,11 @@
       #toolbar {
         position: fixed; left: 50%; top: 8px; transform: translateX(-50%);
         display: flex; gap: 8px;
+        /* Above each instance's own panel (z-index 10, see UI.panelAnchor in
+           ui.ts) -- a globe's panel is anchored top-right of its own tile,
+           which sits near screen centre for a globe adjacent to the middle
+           of a multi-globe layout, the same place this toolbar lives. */
+        z-index: 20;
       }
       #toolbar button {
         font: inherit; color: #d8dee4; background: #1b1f24;
@@ -46,6 +51,12 @@
         padding: 6px 12px; cursor: pointer;
       }
       #toolbar button:hover { background: #262b32; }
+      .sync-toggle {
+        display: flex; align-items: center; gap: 5px;
+        font: inherit; color: #d8dee4; background: #1b1f24;
+        border: 1px solid #3a4048; border-radius: 4px;
+        padding: 6px 12px; cursor: pointer;
+      }
       #credit {
         position: fixed; right: 12px; bottom: 8px;
         color: #5d6873; font-size: 11px;
@@ -63,9 +74,13 @@
       double-click or Enter to close. Hold <b id="modkey">&#8984;</b> to rotate
       the globe without leaving the tool. Rotate/zoom is shared across every
       globe; the tool and Enter/Escape act on whichever globe you last clicked.
+      "sync time"/"sync depth slice" in the toolbar link those sliders across
+      globes too, once turned on.
     </div>
     <div id="toolbar">
       <button id="add-globe">+ Add globe</button>
+      <label class="sync-toggle"><input type="checkbox" id="sync-age" /> sync time</label>
+      <label class="sync-toggle"><input type="checkbox" id="sync-depth" /> sync depth slice</label>
     </div>
     <div id="credit">
       Topography GEBCO &middot; coastlines M&uuml;ller et al. 2019 v2 &middot;

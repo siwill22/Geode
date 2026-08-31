@@ -69,6 +69,68 @@ let defaultModelId = '';
  *  on: whichever globe was last clicked, or whose panel last changed tool. */
 let focusedInstance: GlobeInstance;
 
+// --- cross-globe sync ---------------------------------------------------
+//
+// Rotation/zoom are locked across every globe for free (one shared camera).
+// Age and depth-slice are not -- each instance owns its own ViewState -- so
+// linking them is an explicit broadcast: a user edit on one instance pushes
+// the new value into every OTHER instance's own state and re-runs that
+// instance's own applyAge()/applyDepthSlice(), reusing its existing
+// per-model guards (nearestFrame clamping, the tomography-only sinking-mode
+// check, the shader's own out-of-range no-data colour) unchanged. Kept as
+// two independent flags, matching the existing precedent that cutaway,
+// isosurface and depth-slice are manually independent rather than
+// auto-coupled -- comparing two different ages on purpose still has to work.
+
+let syncAge = false;
+let syncDepthSlice = false;
+
+/**
+ * Whichever instance most recently had its age / depth-slice edited --
+ * separate from focusedInstance on purpose. focusedInstance is set by
+ * clicking a globe's canvas tile or switching its cutaway tool; a user
+ * configuring a globe's age or depth slice typically does that entirely
+ * through that globe's OWN panel, without ever clicking its canvas tile, so
+ * focusedInstance can easily still be some OTHER globe. Snapping from the
+ * wrong one when a sync toggle switches on would silently clobber whatever
+ * was just configured -- which is exactly the bug this was chasing. Falls
+ * back to focusedInstance until an edit has actually happened.
+ */
+let lastAgeEdit: GlobeInstance | null = null;
+let lastDepthSliceEdit: GlobeInstance | null = null;
+
+/**
+ * Push `source`'s current age into every OTHER instance's own state. This is
+ * the one place that logic lives -- called from the UI callback (a real
+ * slider drag), from the test hook that edits one instance directly, from
+ * turning a sync flag on, and from a globe being added while a sync is
+ * active. All of those are "this instance's age changed," which is exactly
+ * what this function is for -- it also records `source` as the sync
+ * reference regardless of whether syncAge happens to be on at the moment.
+ */
+function broadcastAge(source: GlobeInstance): void {
+  lastAgeEdit = source;
+  if (!syncAge) return;
+  const age = source.view.reconstructionAge;
+  for (const inst of instances) {
+    if (inst === source) continue;
+    inst.applyAge(age);
+    refreshGUI(inst);
+  }
+}
+
+function broadcastDepthSlice(source: GlobeInstance): void {
+  lastDepthSliceEdit = source;
+  if (!syncDepthSlice) return;
+  const state = { ...source.view.depthSlice };
+  for (const inst of instances) {
+    if (inst === source) continue;
+    Object.assign(inst.view.depthSlice, state);
+    inst.applyDepthSlice();
+    refreshGUI(inst);
+  }
+}
+
 function relayout(): void {
   layoutRects = tileGrid(instances.length, innerWidth, innerHeight);
   instances.forEach((inst, i) => inst.applyLayout(layoutRects[i]));
@@ -82,15 +144,45 @@ function createInstance(label: string): GlobeInstance {
       controls.enabled = !self.toolActive(modifierHeld);
     },
     onRemove: (self) => removeInstance(self),
+    onAgeChange: (self) => broadcastAge(self),
+    onDepthSliceChange: (self) => broadcastDepthSlice(self),
   }, label);
   return inst;
 }
+
+/** Used by both the toolbar checkbox and the test hook, so "snap every other
+ *  globe to the focused one's value" lives in exactly one place. */
+function setSyncAge(on: boolean): void {
+  syncAge = on;
+  const cb = document.getElementById('sync-age') as HTMLInputElement | null;
+  if (cb) cb.checked = on;
+  broadcastAge(lastAgeEdit ?? focusedInstance);
+}
+
+function setSyncDepthSlice(on: boolean): void {
+  syncDepthSlice = on;
+  const cb = document.getElementById('sync-depth') as HTMLInputElement | null;
+  if (cb) cb.checked = on;
+  broadcastDepthSlice(lastDepthSliceEdit ?? focusedInstance);
+}
+
+document.getElementById('sync-age')?.addEventListener('change', (e) => {
+  setSyncAge((e.target as HTMLInputElement).checked);
+});
+document.getElementById('sync-depth')?.addEventListener('change', (e) => {
+  setSyncDepthSlice((e.target as HTMLInputElement).checked);
+});
 
 async function addInstance(): Promise<void> {
   const inst = createInstance(`Globe ${instances.length + 1}`);
   instances.push(inst);
   relayout();
   await inst.boot(defaultModelId);
+  // A globe added while a sync is active joins the synced group immediately,
+  // rather than booting at age 0 / the default depth-slice and waiting for
+  // the next drag elsewhere to catch it up.
+  broadcastAge(lastAgeEdit ?? focusedInstance);
+  broadcastDepthSlice(lastDepthSliceEdit ?? focusedInstance);
 }
 
 function removeInstance(inst: GlobeInstance): void {
@@ -100,6 +192,8 @@ function removeInstance(inst: GlobeInstance): void {
   instances.splice(idx, 1);
   inst.dispose();
   if (focusedInstance === inst) focusedInstance = instances[0];
+  if (lastAgeEdit === inst) lastAgeEdit = null;
+  if (lastDepthSliceEdit === inst) lastDepthSliceEdit = null;
   relayout();
 }
 
@@ -310,6 +404,7 @@ window.__geode = {
     await inst.boundaries.setAge(a);
     inst.updateTimeInfo();
     refreshGUI(inst);
+    broadcastAge(inst);
   },
   setBoundaries: (on: boolean) => {
     const inst = primary();
@@ -400,6 +495,14 @@ window.__geode = {
     await inst.selectModel(id);
     refreshGUI(inst);
   },
+  /** Model on a SPECIFIC instance -- needed to give globe 2 a different
+   *  (e.g. convection) model when testing that the sync broadcast doesn't
+   *  override a follower's own tomography/convection guard. */
+  setModelOn: async (index: number, id: string) => {
+    const inst = instances[index];
+    await inst.selectModel(id);
+    refreshGUI(inst);
+  },
   setVariable: async (id: string) => {
     const inst = primary();
     await inst.selectVariable(id);
@@ -449,6 +552,7 @@ window.__geode = {
     Object.assign(inst.view.depthSlice, o);
     inst.applyDepthSlice();
     refreshGUI(inst);
+    broadcastDepthSlice(inst);
     // Returned so shoot.mjs can see what the tomography/convection guard
     // actually did, rather than trusting the request was honoured verbatim.
     return { ...inst.view.depthSlice };
@@ -633,6 +737,34 @@ window.__geode = {
     if (inst) removeInstance(inst);
   },
   globeCount: () => instances.length,
+  setSyncAge,
+  setSyncDepthSlice,
+  getSyncState: () => ({ syncAge, syncDepthSlice }),
+  /** Apply age to a SPECIFIC instance, not just primary() -- needed to test
+   *  whether an edit on globe 2 does/doesn't propagate to globe 1. Broadcasts
+   *  exactly like a real slider drag would, via the same broadcastAge() the
+   *  UI callback uses. */
+  setAgeOn: async (index: number, a: number) => {
+    const inst = instances[index];
+    inst.applyAge(a);
+    await inst.settleAge(a);
+    await inst.boundaries.setAge(a);
+    inst.updateTimeInfo();
+    refreshGUI(inst);
+    broadcastAge(inst);
+  },
+  setDepthSliceOn: (index: number, o: Partial<DepthSliceState>) => {
+    const inst = instances[index];
+    Object.assign(inst.view.depthSlice, o);
+    inst.applyDepthSlice();
+    refreshGUI(inst);
+    broadcastDepthSlice(inst);
+    return { ...inst.view.depthSlice };
+  },
+  instanceState: (index: number) => {
+    const inst = instances[index];
+    return { age: inst.view.reconstructionAge, depthSlice: { ...inst.view.depthSlice } };
+  },
   stats: () => {
     const inst = primary();
     return {

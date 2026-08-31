@@ -551,6 +551,97 @@ await callArgs('setDepthSlice', [{ enabled: false, sinkingEnabled: false }]);
 await apply('setSurfaceMode', 'topography');
 await apply('setAge', 0);
 
+// --- multi-globe sync --------------------------------------------------
+//
+// Age and depth-slice are broadcast, not shared state: a real edit on one
+// instance pushes the new value into every OTHER instance's own state. This
+// needs a genuine second globe, unlike every check above (which deliberately
+// only ever targets primary() -- see the comment on window.__geode in
+// main.ts), so it gets its own generalized *On(index, ...) hooks.
+
+console.log('\nmulti-globe sync:');
+
+await apply('addGlobe');
+
+// 29. Off by default: an edit on globe 1 must not reach globe 2.
+await callArgs('setAgeOn', [0, 40]);
+let g2 = await call('instanceState', 1);
+check('age sync off: globe 2 unaffected by a globe 1 edit',
+  g2.age === 0,
+  `globe 1 -> 40 Ma, globe 2 age = ${g2.age} Ma`);
+
+// 30. Turning sync on snaps every OTHER globe to the focused one immediately
+// -- no additional edit should be needed to bring them into agreement.
+await call('setSyncAge', true);
+g2 = await call('instanceState', 1);
+check('age sync on: globe 2 snaps to globe 1 immediately',
+  g2.age === 40,
+  `globe 1 = 40 Ma, globe 2 snapped to ${g2.age} Ma`);
+
+// 31. Live propagation while sync stays on.
+await callArgs('setAgeOn', [0, 90]);
+g2 = await call('instanceState', 1);
+check('age sync on: a live edit propagates',
+  g2.age === 90,
+  `globe 1 -> 90 Ma, globe 2 = ${g2.age} Ma`);
+
+// 32. Turning sync off must stop propagation again, not leave it latched on.
+await call('setSyncAge', false);
+await callArgs('setAgeOn', [0, 10]);
+g2 = await call('instanceState', 1);
+check('age sync off: stops propagating',
+  g2.age === 90,
+  `globe 1 -> 10 Ma, globe 2 stayed at ${g2.age} Ma`);
+await callArgs('setAgeOn', [0, 0]);
+await callArgs('setAgeOn', [1, 0]);
+
+// 33-36. Same four-step pattern for the depth slice, against a manual depth
+// (sinking mode is covered separately by check 37 below).
+await callArgs('setDepthSliceOn', [0, { enabled: true, depthKm: 500 }]);
+let d2 = await call('instanceState', 1);
+check('depth-slice sync off: globe 2 unaffected by a globe 1 edit',
+  d2.depthSlice.enabled === false,
+  `globe 1 -> enabled @500 km, globe 2 depth slice = ${JSON.stringify(d2.depthSlice)}`);
+
+await call('setSyncDepthSlice', true);
+d2 = await call('instanceState', 1);
+check('depth-slice sync on: globe 2 snaps to globe 1 immediately',
+  d2.depthSlice.enabled === true && d2.depthSlice.depthKm === 500,
+  `globe 2 depth slice = ${JSON.stringify(d2.depthSlice)}`);
+
+await callArgs('setDepthSliceOn', [0, { depthKm: 800 }]);
+d2 = await call('instanceState', 1);
+check('depth-slice sync on: a live edit propagates',
+  d2.depthSlice.depthKm === 800,
+  `globe 1 -> 800 km, globe 2 = ${d2.depthSlice.depthKm} km`);
+
+await call('setSyncDepthSlice', false);
+await callArgs('setDepthSliceOn', [0, { depthKm: 300 }]);
+d2 = await call('instanceState', 1);
+check('depth-slice sync off: stops propagating',
+  d2.depthSlice.depthKm === 800,
+  `globe 1 -> 300 km, globe 2 stayed at ${d2.depthSlice.depthKm} km`);
+
+// 37. A follower on a different model keeps its OWN tomography/convection
+// guard even while sync is on: the broadcast writes sinkingEnabled=true into
+// the follower's state, but that follower's own applyDepthSlice() must still
+// reject it for a convection model, same as it would for a manual edit.
+await call('setSyncDepthSlice', true);
+await callArgs('setModelOn', [1, 'opt1']); // globe 2: convection
+await callArgs('setDepthSliceOn', [0, { enabled: true, sinkingEnabled: true, depthKm: 660 }]);
+d2 = await call('instanceState', 1);
+check("depth-slice sync respects a follower's own tomography/convection guard",
+  d2.depthSlice.sinkingEnabled === false,
+  `globe 1 (tomography) broadcasts sinkingEnabled=true, `
+  + `globe 2 (opt1/convection) sinkingEnabled = ${d2.depthSlice.sinkingEnabled}`);
+
+// Leave the scene clean for anything appended after this.
+await call('setSyncAge', false);
+await call('setSyncDepthSlice', false);
+await callArgs('setDepthSliceOn', [0, { enabled: false, sinkingEnabled: false }]);
+await callArgs('setDepthSliceOn', [1, { enabled: false, sinkingEnabled: false }]);
+await apply('removeGlobe');
+
 const stats = await page.evaluate(() => window.__geode.stats());
 console.log('\nstats:', JSON.stringify(stats, null, 2));
 if (errors.length) {

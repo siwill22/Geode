@@ -13,6 +13,7 @@ import { Coastlines, type CoastlineData } from './coastlines';
 import { setMaskMode } from './material';
 import {
   DepthSlice, DEFAULT_DEPTH_SLICE, sinkingDepthKm, canUseSinkingMode,
+  type DepthSliceState,
 } from './depthSlice';
 import {
   FrameCache, loadManifest, makeColormapTexture, nearestFrame, physicalToEncoded,
@@ -42,6 +43,12 @@ export interface GlobeInstanceHooks {
   onFocus(self: GlobeInstance): void;
   /** The instance's own "remove this globe" button was pressed. */
   onRemove(self: GlobeInstance): void;
+  /** A user dragged THIS instance's own age slider. Only fired from the UI
+   *  callback (a real user edit) -- never from inside applyAge() itself, so
+   *  a broadcast-driven follower update can't re-trigger this and echo. */
+  onAgeChange?(self: GlobeInstance, age: number): void;
+  /** Same idea for the depth-slice panel (enabled/depthKm/sinking fields). */
+  onDepthSliceChange?(self: GlobeInstance, state: DepthSliceState): void;
 }
 
 /**
@@ -114,14 +121,17 @@ export class GlobeInstance {
       onColormap: (n) => this.applyColormap(n),
       onColorSteps: (n) => { this.view.colorSteps = n; this.applyColorSteps(); },
       onClip: () => this.applyClip(),
-      onAge: (age) => this.applyAge(age),
+      onAge: (age) => { this.applyAge(age); this.hooks.onAgeChange?.(this, age); },
       onCutDepth: () => this.rebuildCutaway(),
       onInvert: () => this.rebuildCutaway(),
       onSurfaceOpacity: (v) => this.setSurfaceOpacity(v),
       onSurfaceMode: (m) => { this.applySurfaceMode(m); this.ui.setStatus(''); },
       onBoundaries: (on) => { this.boundaries.visible = on; },
       onIsosurface: () => this.applyIso(),
-      onDepthSlice: () => this.applyDepthSlice(),
+      onDepthSlice: () => {
+        this.applyDepthSlice();
+        this.hooks.onDepthSliceChange?.(this, this.view.depthSlice);
+      },
       onTool: () => { this.hooks.onFocus(this); },
       onClear: () => { this.cut.vertices = []; this.cut.closed = false; this.rebuildCutaway(); },
       onExportPNG: () => this.exportPNG(),
