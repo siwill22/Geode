@@ -46,6 +46,8 @@ uniform sampler2D uMask;
 uniform vec3  uGrid;         // nlon, nlat, ndepth
 uniform float uDepthMin;     // km -- the MODEL's valid range, not the mantle's
 uniform float uDepthMax;
+uniform float uSliceDepthKm;  // km -- used only when uUseSliceDepth > 0.5
+uniform float uUseSliceDepth; // 0 = derive depth from world position (wall/floor), 1 = fixed slice depth
 uniform float uClipLo;       // encoded 0..1 space
 uniform float uClipHi;
 uniform vec3  uNoDataColor;
@@ -66,7 +68,11 @@ void main() {
     if (uUseMask > 0.0 ? (m < 0.5) : (m > 0.5)) discard;
   }
 
-  float depth = worldDepthKm(vWorldPos);
+  // A depth slice supplies its depth directly instead of deriving it from
+  // where the fragment sits in space -- see depthSlice.ts. Every other
+  // volume surface (wall, floor) leaves uUseSliceDepth at 0 and this reduces
+  // to the original line.
+  float depth = uUseSliceDepth > 0.5 ? uSliceDepthKm : worldDepthKm(vWorldPos);
 
   // Outside the model's valid depth range: say so, don't fabricate. The half
   // kilometre of slack matters: the floor cap is placed exactly at the base of
@@ -124,6 +130,8 @@ export function createVolumeSurfaceMaterial(): ShaderMaterial {
       uGrid: { value: new Vector3(360, 181, 192) },
       uDepthMin: { value: 0 },
       uDepthMax: { value: 2840 },
+      uSliceDepthKm: { value: 0 },
+      uUseSliceDepth: { value: 0 },
       uClipLo: { value: 0 },
       uClipHi: { value: 1 },
       uNoDataColor: { value: passthroughColor(0x555555) },

@@ -1,9 +1,13 @@
-# TODO: global depth slice, with depth as time via a sinking rate
+# Global depth slice, with depth as time via a sinking rate
 
-**Status: not scheduled.** Bundled with the 3-D plate carrée box view costed in
-spec §11, because a depth slice is that view's horizontal plane and the two
-share a display mode rather than a data model. Recorded here so the design
-does not have to be re-derived when the plate carrée work is picked up.
+**Status: implemented**, on the `multi-globe` branch, ahead of the plate
+carrée box view this was originally bundled with -- the `None` surface mode
+needed for the multi-globe work turned out to be the missing piece that made
+building the slice on its own straightforward. See `viewer/src/depthSlice.ts`
+for the sinking-rate arithmetic and the tomography/convection guard, and
+`viewer/scripts/shoot.mjs`'s "depth slice:" section for the verification this
+doc originally specified. Left here as the design record; the plate carrée
+view can still reuse the same material path described below.
 
 ## What it is
 

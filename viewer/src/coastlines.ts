@@ -297,6 +297,13 @@ export class Coastlines {
     this.landMat.uniforms.uUseMask.value = on ? 1 : 0;
   }
 
+  dispose(): void {
+    this.lineGeom.dispose();
+    this.landGeom.dispose();
+    this.lineMat.dispose();
+    this.landMat.dispose();
+  }
+
   /**
    * Fade with the globe surface.
    *
@@ -322,12 +329,24 @@ export class Coastlines {
   }
 }
 
-export async function loadCoastlines(
+export interface CoastlineData {
+  lines: CoastlineLine[];
+  table: RotationTable;
+}
+
+/**
+ * Fetch and parse the coastline geometry and rotation table, without building
+ * any GPU-side `Coastlines` instance.
+ *
+ * Split out so multiple globes can share one fetch: the parsed data is
+ * immutable and present-day, so every instance's `Coastlines` object can be
+ * built from the same `CoastlineData` without re-downloading or re-parsing it.
+ */
+export async function fetchCoastlineData(
   base: string,
   geometryPath: string,
   rotationsPath: string,
-  maskTexture: Texture,
-): Promise<Coastlines> {
+): Promise<CoastlineData> {
   const [gRes, rRes] = await Promise.all([
     fetch(`${base}/${geometryPath}`),
     fetch(`${base}/${rotationsPath}`),
@@ -336,5 +355,15 @@ export async function loadCoastlines(
   if (!rRes.ok) throw new Error(`${rotationsPath}: ${rRes.status}`);
   const lines = parseGeometry(await gRes.arrayBuffer());
   const table: RotationTable = await rRes.json();
+  return { lines, table };
+}
+
+export async function loadCoastlines(
+  base: string,
+  geometryPath: string,
+  rotationsPath: string,
+  maskTexture: Texture,
+): Promise<Coastlines> {
+  const { lines, table } = await fetchCoastlineData(base, geometryPath, rotationsPath);
   return new Coastlines(lines, table, maskTexture);
 }

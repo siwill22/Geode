@@ -4,6 +4,7 @@ import { BoundarySeries } from '../vendor/deep-time-map/js/index.js';
 
 import { R_SURFACE } from './constants';
 import { maskAt } from './mask';
+import type { Rect } from './layout';
 
 /**
  * Plate boundaries, drawn by the vendored deep-time-map library onto a 2D canvas
@@ -106,15 +107,15 @@ export class BoundaryOverlay {
   /** Time of the frame actually on screen, which need not be the slider's age. */
   frameTime: number | null = null;
   visible = true;
+  /** CSS-pixel tile this overlay covers. Defaults to the full window. */
+  private rect: Rect = { x: 0, y: 0, width: innerWidth, height: innerHeight };
 
   constructor(camera: PerspectiveCamera) {
     this.projector = new ThreeProjector(camera);
 
     const c = document.createElement('canvas');
-    c.id = 'boundaries';
     Object.assign(c.style, {
-      position: 'fixed', left: '0', top: '0',
-      width: '100%', height: '100%',
+      position: 'fixed',
       // The overlay must never eat clicks: polygon drawing and OrbitControls
       // both live on the WebGL canvas underneath it.
       pointerEvents: 'none',
@@ -122,7 +123,30 @@ export class BoundaryOverlay {
     document.body.appendChild(c);
     this.canvas = c;
     this.ctx = c.getContext('2d')!;
-    this.resize();
+    this.applyRect();
+  }
+
+  /**
+   * Move/resize this overlay to a new tile, in CSS pixels. Called once at
+   * boot with the full window and again whenever the globe grid is
+   * relaid out -- adding, removing, or resizing changes every tile's rect.
+   */
+  setRect(rect: Rect): void {
+    this.rect = rect;
+    this.applyRect();
+  }
+
+  private applyRect(): void {
+    const { x, y, width, height } = this.rect;
+    Object.assign(this.canvas.style, {
+      left: `${x}px`, top: `${y}px`, width: `${width}px`, height: `${height}px`,
+    });
+    const dpr = Math.min(devicePixelRatio, 2);
+    this.canvas.width = Math.round(width * dpr);
+    this.canvas.height = Math.round(height * dpr);
+    // Draw in CSS pixels so the library's pixel-spaced decorations keep the
+    // size they were tuned at, whatever the display density.
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
   async load(url: string): Promise<void> {
@@ -149,13 +173,9 @@ export class BoundaryOverlay {
     this.projector.mask = mask;
   }
 
-  resize(): void {
-    const dpr = Math.min(devicePixelRatio, 2);
-    this.canvas.width = Math.round(innerWidth * dpr);
-    this.canvas.height = Math.round(innerHeight * dpr);
-    // Draw in CSS pixels so the library's pixel-spaced decorations keep the
-    // size they were tuned at, whatever the display density.
-    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  /** Detach the overlay canvas. Called when a globe instance is removed. */
+  dispose(): void {
+    this.canvas.remove();
   }
 
   draw(): void {
@@ -164,7 +184,7 @@ export class BoundaryOverlay {
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     this.ctx.restore();
     if (!this.visible || !this.series) return;
-    this.projector.update(innerWidth, innerHeight);
+    this.projector.update(this.rect.width, this.rect.height);
     this.series.draw(this.ctx, this.projector);
   }
 }

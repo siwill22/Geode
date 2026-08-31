@@ -234,6 +234,11 @@ async function call(fn, arg) {
   return page.evaluate(([f, a]) => window.__geode[f](a), [fn, arg]);
 }
 
+/** Same as call(), for hooks that take more than one positional argument. */
+async function callArgs(fn, args) {
+  return page.evaluate(([f, a]) => window.__geode[f](...a), [fn, args]);
+}
+
 // 17. Where is the isosurface, really?
 //
 // fixture-ramp is linear in depth from -1 at 0 km to +1 at 2840 km, so an
@@ -413,6 +418,139 @@ check('polygon overlay is hidden behind the globe',
 check('polygon overlay is clipped at the perspective horizon, not at 90 deg',
   seen.limb.outline > 0 && seen.limb.outline < seen.near.outline * 0.5,
   `limb ${seen.limb.outline} vs near ${seen.near.outline} outline px`);
+
+// --- depth slice --------------------------------------------------------
+
+console.log('\ndepth slice:');
+
+function colourClose(a, b, tol = 3) {
+  return Math.abs(a[0] - b[0]) <= tol && Math.abs(a[1] - b[1]) <= tol && Math.abs(a[2] - b[2]) <= tol;
+}
+
+// Clear whatever the isosurface/polygon-overlay sections above left active,
+// so the depth slice is being read against a known-quiet scene.
+await call('setIsosurface', { coldEnabled: false, hotEnabled: false });
+await call('clearPolygon');
+await apply('setSurfaceMode', 'none');
+
+// 23. fixture-ramp is a pure function of depth, so a slice must render as
+// ONE uniform colour across the whole globe -- and a different colour at a
+// different depth, so the check cannot pass by rendering nothing at all.
+await apply('setModel', 'fixture-ramp');
+await apply('setCamera', { lon: 0, lat: 0, dist: 2.6 });
+async function sliceColourAt(depthKm) {
+  await callArgs('setDepthSlice', [{ enabled: true, sinkingEnabled: false, depthKm }]);
+  const pts = [[0, 0], [0.4, 0.2], [-0.4, 0.2], [0.2, -0.4], [-0.2, -0.4]];
+  const rgbs = [];
+  for (const [nx, ny] of pts) rgbs.push((await call('probeScreen', { nx, ny })).rgb);
+  return rgbs;
+}
+const shallow = await sliceColourAt(100);
+const deep = await sliceColourAt(2700);
+const uniform = (rgbs) => rgbs.every((c) => colourClose(c, rgbs[0]));
+check('depth slice is one uniform colour across the whole globe',
+  uniform(shallow) && uniform(deep),
+  `100 km: ${JSON.stringify(shallow)}; 2700 km: ${JSON.stringify(deep)}`);
+check('depth slice colour actually depends on depth',
+  !colourClose(shallow[0], deep[0], 10),
+  `100 km ${shallow[0]} vs 2700 km ${deep[0]}`);
+await shot('20-depth-slice-fixture-ramp');
+
+// 24. fixture-check's 30 deg cells catch a lon/lat axis swap that a real
+// dataset would hide. Ground truth is probeVolume, which decodes the raw
+// texture directly; the render is read back through the shader's own debug
+// mode 3 (raw encoded sample, greyscale) rather than through a guessed
+// colormap-to-RGB heuristic, so the comparison is exact rather than by eye.
+// Probe points sit at the MIDPOINT of each 30 deg cell (offset 15 deg),
+// never on a cell boundary, where the checkerboard's sign is genuinely zero
+// and the render's bilinear filtering makes the sign ambiguous by design.
+await apply('setModel', 'fixture-check');
+await callArgs('setDepthSlice', [{ enabled: true, sinkingEnabled: false, depthKm: 300 }]);
+await call('setDebug', 3);
+let mismatches = 0;
+let checked = 0;
+for (const lon of [-165, -105, -45, 15, 75, 135]) {
+  for (const lat of [-75, -45, -15, 15, 45, 75]) {
+    await apply('setCamera', { lon, lat, dist: 2.6 });
+    const truth = await callArgs('probeVolume', [lon, lat, 300]);
+    const rendered = await call('probeScreen', { nx: 0, ny: 0 });
+    // uDebug=3 outputs the raw encoded sample (code/255) as vec3(d); decode
+    // it the same way probeVolume decodes the texture byte it read.
+    const renderedValue = rendered.rgb[0] / 255;
+    const truthEncoded = truth.code / 255;
+    checked++;
+    if (Math.abs(renderedValue - truthEncoded) > 2 / 255) mismatches++;
+  }
+}
+await call('setDebug', 0);
+check('depth slice has no lon/lat axis swap (30 deg cells)', mismatches === 0,
+  `${mismatches} of ${checked} cell centres disagreed with the raw texture`);
+
+// 25. Agreement with the cutaway wall/floor at the same depth: both derive
+// depth from the SAME shader formula (the floor from world position, the
+// slice from uSliceDepthKm), so probing them separately at the same depth
+// must give the same colour -- direct proof the shared material path
+// actually took effect, not a copy that happens to look right.
+await apply('setModel', 'fixture-ramp');
+await callArgs('setDepthSlice', [{ enabled: false }]);
+await apply('setPolygon', {
+  verts: [[-40, 40], [40, 40], [40, -40], [-40, -40]], depthKm: 1400,
+});
+await apply('setCamera', { lon: 0, lat: 0, dist: 2.6 });
+const floorRGB = (await call('probeScreen', { nx: 0, ny: 0 })).rgb;
+await callArgs('setDepthSlice', [{ enabled: true, sinkingEnabled: false, depthKm: 1400 }]);
+const sliceRGB = (await call('probeScreen', { nx: 0, ny: 0 })).rgb;
+check('depth slice agrees with the cutaway floor at the same depth',
+  colourClose(floorRGB, sliceRGB),
+  `floor ${floorRGB} vs slice ${sliceRGB} at 1400 km`);
+await callArgs('setDepthSlice', [{ enabled: false }]);
+await call('clearPolygon');
+
+// 26. Sinking-rate arithmetic is pure, so it gets plain assertions rather
+// than a screenshot: single-rate reduces to rate x age x 10, and the
+// two-segment model breaks cleanly at 660 km.
+const singleRate = await callArgs('sinkingDepthKm', [50, 1.2, 1.2]);
+check('sinking depth: single rate reduces to rate x age x 10',
+  Math.abs(singleRate - 600) < 1e-6,
+  `50 Ma at 1.2 cm/yr -> ${singleRate} km, expected 600 km`);
+
+const ageAtBreak = 660 / (1.2 * 10); // 55 Ma
+const expectedTwoSeg = 660 + 2.0 * 10 * (100 - ageAtBreak);
+const twoSeg = await callArgs('sinkingDepthKm', [100, 1.2, 2.0]);
+check('sinking depth: two-segment model breaks at 660 km',
+  Math.abs(twoSeg - expectedTwoSeg) < 1e-6,
+  `100 Ma, upper 1.2 / lower 2.0 cm/yr -> ${twoSeg.toFixed(1)} km, `
+  + `expected ${expectedTwoSeg.toFixed(1)} km`);
+
+// 27. The tomography/convection guard must be rejected, not silently
+// ignored -- checked through the real state-mutation path, not a UI-only
+// disabled control that the underlying state could still be poked around.
+await apply('setModel', 'opt1'); // type: convection
+const rejected = await callArgs('setDepthSlice', [{ enabled: true, sinkingEnabled: true }]);
+check('sinking mode is rejected on a convection model',
+  rejected.sinkingEnabled === false,
+  `opt1 (convection): sinkingEnabled after request = ${rejected.sinkingEnabled}`);
+
+await apply('setModel', 'fixture-ramp'); // type: tomography
+const accepted = await callArgs('setDepthSlice', [{ enabled: true, sinkingEnabled: true, depthKm: 660 }]);
+check('sinking mode is accepted on a tomography model',
+  accepted.sinkingEnabled === true,
+  `fixture-ramp (tomography): sinkingEnabled after request = ${accepted.sinkingEnabled}`);
+
+// 28. The readout line states the mantle is present-day under sinking mode,
+// so a locked slice can never be misread as a real snapshot at that age.
+await apply('setAge', 120);
+const info = await page.evaluate(() => document.querySelector('.timeinfo')?.textContent ?? '');
+check('readout states the mantle is present-day under sinking mode',
+  info.includes('slice') && info.includes('cm/yr') && info.includes('mantle present-day'),
+  info);
+await shot('21-depth-slice-sinking-readout');
+
+// Leave the scene clean for anything appended after this.
+await callArgs('setDepthSlice', [{ enabled: false, sinkingEnabled: false }]);
+await apply('setSurfaceMode', 'topography');
+await apply('setAge', 0);
+
 const stats = await page.evaluate(() => window.__geode.stats());
 console.log('\nstats:', JSON.stringify(stats, null, 2));
 if (errors.length) {

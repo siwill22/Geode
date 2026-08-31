@@ -1,5 +1,7 @@
 import GUI from 'lil-gui';
 import { MAX_STEPS, type IsosurfaceState } from './isosurface';
+import { SINKING_RATE_PRESETS, CUSTOM_PRESET_ID, type DepthSliceState } from './depthSlice';
+import type { Rect } from './layout';
 import type { ArchiveIndex, Manifest, VariableInfo } from './types';
 
 export type ToolMode = 'drag' | 'draw' | 'edit';
@@ -9,8 +11,10 @@ export type ToolMode = 'drag' | 'draw' | 'edit';
  *   topography - GEBCO relief. Present-day only; meaningless at age > 0.
  *   land       - reconstructed land polygons filled, correct at any age.
  *   flat       - plain ocean colour.
+ *   none       - hide the outer sphere entirely, to see a depth slice or
+ *                isosurface without needing to open a cutaway.
  */
-export type SurfaceMode = 'topography' | 'land' | 'flat';
+export type SurfaceMode = 'topography' | 'land' | 'flat' | 'none';
 
 export interface ViewState {
   modelId: string;
@@ -28,6 +32,7 @@ export interface ViewState {
   showBoundaries: boolean;
   tool: ToolMode;
   iso: IsosurfaceState;
+  depthSlice: DepthSliceState;
 }
 
 export interface UICallbacks {
@@ -43,6 +48,7 @@ export interface UICallbacks {
   onSurfaceMode(m: SurfaceMode): void;
   onBoundaries(on: boolean): void;
   onIsosurface(): void;
+  onDepthSlice(): void;
   onTool(t: ToolMode): void;
   onClear(): void;
   onExportPNG(): void;
@@ -59,18 +65,37 @@ export class UI {
   private ageCtrl!: any;
   private isoColdCtrl!: any;
   private isoHotCtrl!: any;
+  private depthSliceDepthCtrl!: any;
+  private depthSinkingCtrl!: any;
+  private sinkingPresetCtrl!: any;
+  private depthRateUpperCtrl!: any;
+  private depthRateLowerCtrl!: any;
   private folderData: GUI;
   private surfaceModeCtrl: any;
   private status: HTMLDivElement;
   private timeInfo: HTMLDivElement;
+  /** Positioned per-instance by setRect(); anchors the panel's top-right corner. */
+  private panelAnchor: HTMLDivElement;
+  private rect: Rect = { x: 0, y: 0, width: innerWidth, height: innerHeight };
 
   constructor(
     private state: ViewState,
     archive: ArchiveIndex,
     colormapNames: string[],
     private cb: UICallbacks,
+    title = 'Geode',
+    onRemove?: () => void,
   ) {
-    this.gui = new GUI({ title: 'Geode' });
+    // lil-gui's own auto-placement is a single fixed panel pinned to the
+    // window's top-right corner, which is right for one globe but would stack
+    // every instance's panel on top of the others once there is more than one.
+    // Anchoring a per-instance container instead lets setRect() move each
+    // panel to its own tile, and reduces to exactly the original placement
+    // when the tile is the whole window.
+    this.panelAnchor = document.createElement('div');
+    Object.assign(this.panelAnchor.style, { position: 'fixed', zIndex: '10' });
+    document.body.appendChild(this.panelAnchor);
+    this.gui = new GUI({ title, container: this.panelAnchor });
 
     const models: Record<string, string> = {};
     for (const m of archive.models) models[m.name] = m.id;
@@ -157,10 +182,57 @@ export class UI {
       .onChange(() => cb.onIsosurface());
     fi.close();
 
+    // A depth slice paints the WHOLE globe at one fixed depth, unlike the
+    // shells above. Slabs are assumed to sink vertically at a fixed rate --
+    // stated here rather than left implicit. See
+    // docs/plans/depth-slice-and-sinking-rate.md.
+    const fd = this.gui.addFolder('Depth slice');
+    fd.add(this.state.depthSlice, 'enabled')
+      .name('enabled')
+      .onChange(() => cb.onDepthSlice());
+    this.depthSliceDepthCtrl = fd
+      .add(this.state.depthSlice, 'depthKm', 0, 2890, 10)
+      .name('depth (km)')
+      .onChange(() => cb.onDepthSlice());
+    this.depthSinkingCtrl = fd
+      .add(this.state.depthSlice, 'sinkingEnabled')
+      .name('lock to age (sinking rate)')
+      .onChange(() => cb.onDepthSlice());
+    // Presets seed the two rate sliders below rather than replacing them --
+    // picking one is a starting point, not a lock. Editing either slider by
+    // hand reverts this to "Custom" so the dropdown never claims a paper's
+    // rate when the numbers no longer match it.
+    const presetOptions: Record<string, string> = { Custom: CUSTOM_PRESET_ID };
+    for (const p of SINKING_RATE_PRESETS) presetOptions[p.label] = p.id;
+    this.sinkingPresetCtrl = fd
+      .add(this.state.depthSlice, 'sinkingPreset', presetOptions)
+      .name('sinking rate model')
+      .onChange((id: string) => {
+        const preset = SINKING_RATE_PRESETS.find((p) => p.id === id);
+        if (preset) {
+          this.state.depthSlice.rateUpperCmPerYr = preset.upperCmPerYr;
+          this.state.depthSlice.rateLowerCmPerYr = preset.lowerCmPerYr;
+          this.depthRateUpperCtrl.updateDisplay();
+          this.depthRateLowerCtrl.updateDisplay();
+        }
+        cb.onDepthSlice();
+      });
+    // Range covers Shephard et al. 2017's fast-upper-mantle preset (5 cm/yr)
+    // with a little headroom, not just the lower-mantle-only presets.
+    this.depthRateUpperCtrl = fd
+      .add(this.state.depthSlice, 'rateUpperCmPerYr', 0.5, 6.0, 0.1)
+      .name('sinking rate above 660 km (cm/yr)')
+      .onChange(() => this.revertSinkingPresetToCustom());
+    this.depthRateLowerCtrl = fd
+      .add(this.state.depthSlice, 'rateLowerCmPerYr', 0.5, 6.0, 0.1)
+      .name('sinking rate below 660 km (cm/yr)')
+      .onChange(() => this.revertSinkingPresetToCustom());
+    fd.close();
+
     const fs = this.gui.addFolder('Scene');
     this.surfaceModeCtrl = fs
       .add(this.state, 'surfaceMode',
-        { Topography: 'topography', 'Land fill': 'land', Flat: 'flat' })
+        { Topography: 'topography', 'Land fill': 'land', Flat: 'flat', None: 'none' })
       .name('surface')
       .onChange((v: SurfaceMode) => cb.onSurfaceMode(v));
     fs.add(this.state, 'surfaceOpacity', 0, 1, 0.01)
@@ -176,15 +248,21 @@ export class UI {
     fe.add({ i: () => cb.onImportPolygon() }, 'i').name('load polygon');
     fe.close();
 
+    if (onRemove) {
+      this.gui.add({ remove: onRemove }, 'remove').name('remove this globe');
+    }
+
     this.status = document.createElement('div');
-    this.status.id = 'status';
+    this.status.className = 'status';
     document.body.appendChild(this.status);
     this.setStatus('');
 
     this.timeInfo = document.createElement('div');
-    this.timeInfo.id = 'timeinfo';
+    this.timeInfo.className = 'timeinfo';
     document.body.appendChild(this.timeInfo);
     this.setTimeInfo('');
+
+    this.applyRect();
   }
 
   private handleClip(driver: 'min' | 'max'): void {
@@ -241,6 +319,42 @@ export class UI {
     this.surfaceModeCtrl.updateDisplay();
   }
 
+  /** Depth is state-computed while sinking mode drives it -- dragging the
+   *  slider then would just get overwritten on the next age change. */
+  setDepthEditable(editable: boolean): void {
+    this.depthSliceDepthCtrl.disable(!editable);
+  }
+
+  /** A hand-edited rate no longer necessarily matches the preset it was
+   *  seeded from, so the dropdown must stop claiming it does. */
+  private revertSinkingPresetToCustom(): void {
+    if (this.state.depthSlice.sinkingPreset !== CUSTOM_PRESET_ID) {
+      this.state.depthSlice.sinkingPreset = CUSTOM_PRESET_ID;
+      this.sinkingPresetCtrl.updateDisplay();
+    }
+    this.cb.onDepthSlice();
+  }
+
+  /** Repaint just the depth number -- called every time sinking mode
+   *  recomputes it from age, which can happen many times a second while
+   *  scrubbing, so this deliberately doesn't sweep every controller. */
+  refreshDepthSliceDisplay(): void {
+    this.depthSliceDepthCtrl.updateDisplay();
+  }
+
+  /** Grey out sinking mode for models with their own time axis (convection):
+   *  letting one slider drive both the loaded frame and the sinking depth
+   *  would double-count time. */
+  setSinkingAllowed(allowed: boolean): void {
+    this.depthSinkingCtrl.disable(!allowed);
+    this.sinkingPresetCtrl.disable(!allowed);
+    this.depthRateUpperCtrl.disable(!allowed);
+    this.depthRateLowerCtrl.disable(!allowed);
+    this.depthSinkingCtrl.name(allowed
+      ? 'lock to age (sinking rate)'
+      : 'lock to age (disabled: model has its own time axis)');
+  }
+
   /**
    * Restrict the age slider to what the loaded model can actually show.
    * A single-frame tomography model still reconstructs its coastlines, so the
@@ -285,5 +399,35 @@ export class UI {
   setTimeInfo(msg: string): void {
     this.timeInfo.textContent = msg;
     this.timeInfo.style.display = msg ? 'block' : 'none';
+  }
+
+  /**
+   * Move this instance's panel, status and time-info onto a new tile, in CSS
+   * pixels. Called once at boot with the full window and again whenever the
+   * globe grid is relaid out.
+   */
+  setRect(rect: Rect): void {
+    this.rect = rect;
+    this.applyRect();
+  }
+
+  private applyRect(): void {
+    const { x, y, width, height } = this.rect;
+    // Anchored to the tile's top-right / bottom-left corners, matching where
+    // lil-gui's own auto-placement and the original #status/#timeinfo CSS put
+    // them when the tile was the whole window.
+    this.panelAnchor.style.top = `${y + 8}px`;
+    this.panelAnchor.style.right = `${innerWidth - (x + width) + 8}px`;
+    this.status.style.left = `${x + 12}px`;
+    this.status.style.bottom = `${innerHeight - (y + height) + 12}px`;
+    this.timeInfo.style.left = `${x + 12}px`;
+    this.timeInfo.style.bottom = `${innerHeight - (y + height) + 44}px`;
+  }
+
+  dispose(): void {
+    this.gui.destroy();
+    this.panelAnchor.remove();
+    this.status.remove();
+    this.timeInfo.remove();
   }
 }

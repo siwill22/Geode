@@ -13,8 +13,14 @@
         color: #d8dee4;
       }
       canvas { display: block; }
-      #status {
-        position: fixed; left: 12px; bottom: 12px;
+      /*
+       * Positioned per-instance in JS (GlobeInstance/UI.setRect), since each
+       * globe tile gets its own status/timeinfo element -- these rules only
+       * carry the look, never left/top/bottom, which would collide as soon as
+       * there is more than one globe on screen.
+       */
+      .status {
+        position: fixed;
         padding: 6px 10px; border-radius: 4px;
         background: rgba(0, 0, 0, 0.6); color: #cfd6dd;
       }
@@ -24,12 +30,22 @@
         background: rgba(0, 0, 0, 0.45); color: #97a3ad;
         max-width: 30ch;
       }
-      #timeinfo {
-        position: fixed; left: 12px; bottom: 44px;
+      .timeinfo {
+        position: fixed;
         padding: 6px 10px; border-radius: 4px;
         background: rgba(0, 0, 0, 0.6); color: #9fb4c8;
         font-variant-numeric: tabular-nums;
       }
+      #toolbar {
+        position: fixed; left: 50%; top: 8px; transform: translateX(-50%);
+        display: flex; gap: 8px;
+      }
+      #toolbar button {
+        font: inherit; color: #d8dee4; background: #1b1f24;
+        border: 1px solid #3a4048; border-radius: 4px;
+        padding: 6px 12px; cursor: pointer;
+      }
+      #toolbar button:hover { background: #262b32; }
       #credit {
         position: fixed; right: 12px; bottom: 8px;
         color: #5d6873; font-size: 11px;
@@ -45,7 +61,11 @@
     <div id="hint">
       Pick a tool in the panel. In Draw, click to add vertices and
       double-click or Enter to close. Hold <b id="modkey">&#8984;</b> to rotate
-      the globe without leaving the tool.
+      the globe without leaving the tool. Rotate/zoom is shared across every
+      globe; the tool and Enter/Escape act on whichever globe you last clicked.
+    </div>
+    <div id="toolbar">
+      <button id="add-globe">+ Add globe</button>
     </div>
     <div id="credit">
       Topography GEBCO &middot; coastlines M&uuml;ller et al. 2019 v2 &middot;
