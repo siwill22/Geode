@@ -13,7 +13,7 @@
  *   - Volumes are gzipped to .bin.gz and path_template is rewritten to match.
  *     A CDN will not compress application/octet-stream, so doing it ahead of
  *     time is the difference between 12.5 MB and 6.2 MB per frame. The viewer
- *     decompresses in the browser; see fetchVolumeBytes in viewer/src/volume.ts.
+ *     decompresses in the browser; see fetchVolumeBytes in viewer/src/core/volume.ts.
  *
  * Everything else is copied verbatim. The JSON (rotations, velocities,
  * boundary frames) is left alone deliberately -- a CDN does compress
