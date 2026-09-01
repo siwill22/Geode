@@ -93,7 +93,7 @@ async function boot(): Promise<void> {
       ui.setVariable(instance.variable, colormaps[instance.variable.default_colormap]);
     },
     onAge: (age) => instance.applyAge(age),
-    onMonth: (month) => instance.applyMonth(month),
+    onMonth: (month) => { instance.applyMonth(month); ui.setMonth(month); },
     onClip: (lo, hi) => instance.applyClip(lo, hi),
     onOverlayOpacity: (v) => instance.setOverlayOpacity(v),
     onShowWind: (v) => instance.setWindVisible(v),
@@ -114,6 +114,7 @@ async function boot(): Promise<void> {
   ui.setLayerVariables(instance.manifest.variables);
   ui.setVariable(instance.variable, colormaps[instance.variable.default_colormap]);
   instance.applyMonth(state.month);
+  ui.setMonth(state.month);
   ui.setTimeInfo(`age ${state.age.toFixed(0)} Ma`);
   ui.setStatus('');
 
@@ -152,6 +153,7 @@ window.__climate = {
   setMonth: (month: number) => {
     state.month = month;
     instance.applyMonth(month);
+    ui.setMonth(month);
     ui.refreshDisplay();
   },
   setOverlayOpacity: (v: number) => {

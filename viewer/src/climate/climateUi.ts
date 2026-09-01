@@ -29,6 +29,14 @@ export interface ClimateUICallbacks {
 
 const N_MONTHS = 12; // must match prep_climate.py's month axis
 const PLAY_INTERVAL_MS = 350;
+// Month 0 = January per the source's own coordinate metadata (checked
+// directly against the .nc file's 'month' comment, 'From January to
+// December' -- this axis has already had one inversion bug this session,
+// on age, so this one got verified rather than assumed).
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
 
 /**
  * A deliberately small panel: layer choice, variable choice, age, month
@@ -54,6 +62,13 @@ export class ClimateUI {
   private legend: HTMLDivElement;
   private legendLabel: HTMLDivElement;
   private legendCanvas: HTMLCanvasElement;
+  /** The variable-name/units portion of the legend text, set by
+   *  setVariable(); combined with monthName (below) by updateLegendLabel()
+   *  since the two change independently. */
+  private variableLabel = '';
+  /** Null when the month axis isn't showing (paleogeography has none) --
+   *  see setLayerVariables(). */
+  private monthName: string | null = null;
 
   constructor(
     private state: ClimateViewState,
@@ -79,7 +94,7 @@ export class ClimateUI {
       .name('age (Ma)')
       .onChange((v: number) => cb.onAge(v));
     this.monthCtrl = this.gui.add(this.state, 'month', 0, N_MONTHS - 1, 1)
-      .name('month (0-11)')
+      .name('month')
       .onChange((v: number) => cb.onMonth(v));
     this.playCtrl = this.gui
       .add({ fn: () => this.togglePlay() }, 'fn')
@@ -158,6 +173,8 @@ export class ClimateUI {
       this.monthCtrl.hide();
       this.playCtrl.hide();
       if (this.playTimer) this.stopPlay();
+      this.monthName = null;
+      this.updateLegendLabel();
       return;
     }
     const choices: Record<string, string> = {};
@@ -166,6 +183,7 @@ export class ClimateUI {
     this.variableCtrl.show();
     this.monthCtrl.show();
     this.playCtrl.show();
+    this.setMonth(this.state.month);
   }
 
   private togglePlay(): void {
@@ -194,8 +212,26 @@ export class ClimateUI {
     this.clipMaxCtrl.min(v.encode_min).max(v.encode_max).setValue(v.default_clip_max);
     this.clipMinCtrl.name(`clip min (${v.units})`);
     this.clipMaxCtrl.name(`clip max (${v.units})`);
-    this.legendLabel.textContent = `${v.name} (${v.units})`;
+    this.variableLabel = `${v.name} (${v.units})`;
+    this.updateLegendLabel();
     this.paintLegend(colormap);
+  }
+
+  /** Show the active month's name on both the slider itself and next to the
+   *  legend -- "month 7" means nothing to a reader, and the colour bar is
+   *  exactly where a season needs to be legible alongside the variable it
+   *  qualifies. Cleared (not called) when the month axis is hidden -- see
+   *  setLayerVariables(). */
+  setMonth(monthIndex: number): void {
+    this.monthName = MONTH_NAMES[monthIndex];
+    this.monthCtrl.name(`month: ${this.monthName}`);
+    this.updateLegendLabel();
+  }
+
+  private updateLegendLabel(): void {
+    this.legendLabel.textContent = this.monthName
+      ? `${this.variableLabel} — ${this.monthName}`
+      : this.variableLabel;
   }
 
   private paintLegend(cm: ColormapData[string]): void {
