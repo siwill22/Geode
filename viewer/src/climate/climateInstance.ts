@@ -8,6 +8,7 @@ import { setMaskMode } from '../core/material';
 import { createMaskTexture } from '../core/mask';
 import { Coastlines, type CoastlineData } from '../core/coastlines';
 import { R_SURFACE } from '../core/constants';
+import { WindGlyphs } from '../core/windGlyphs';
 import {
   FrameCache, loadManifest, makeColormapTexture, nearestFrame, physicalToEncoded,
 } from '../core/volume';
@@ -27,6 +28,7 @@ export interface ClimateInstanceDeps {
 const OVERLAY_R = R_SURFACE * 1.0006;
 export const DEFAULT_OVERLAY_OPACITY = 0.4;
 const HILLSHADE_VARIABLE_ID = 'hillshade';
+export const DEFAULT_WIND_VISIBLE = true;
 
 /**
  * The two things this globe can show, plus a shared continent-outline
@@ -72,6 +74,11 @@ export class ClimateInstance {
    *  'hillshade' variable, independent of whichever layer/variable is
    *  primary -- see prep_paleogeography.py and setOverlayOpacity(). */
   readonly overlay = new DepthSlice(OVERLAY_R);
+  /** Wind arrow field: always sourced from the climate model's own U/V,
+   *  independent of whichever layer/variable is primary -- same reasoning
+   *  as `overlay` always sourcing from paleogeography. Tracks BOTH age and
+   *  month (unlike the overlay, which has no month axis). */
+  readonly wind = new WindGlyphs();
   coastlines: Coastlines | null = null;
 
   private sources!: Record<ClimateLayer, LayerSource>;
@@ -83,6 +90,12 @@ export class ClimateInstance {
   private ageToken = 0;
   private overlayToken = 0;
   private hasOverlay = false;
+  private windToken = 0;
+  private hasWind = false;
+  private windUVar!: VariableInfo;
+  private windVVar!: VariableInfo;
+  private windUTex: Data3DTexture | null = null;
+  private windVTex: Data3DTexture | null = null;
 
   constructor(
     private readonly camera: PerspectiveCamera,
@@ -104,6 +117,13 @@ export class ClimateInstance {
     this.overlay.material.uniforms.uClipLo.value = 0;
     this.overlay.material.uniforms.uClipHi.value = 1;
     this.scene.add(this.overlay.mesh);
+
+    // After the field (1) and the overlay (2), same as the coastline
+    // outlines -- opaque 3D glyphs depth-test correctly regardless of
+    // render order, this only matters for blending against the overlay's
+    // transparency.
+    this.wind.mesh.renderOrder = 4;
+    this.scene.add(this.wind.mesh);
   }
 
   get manifest(): Manifest { return this.sources[this.activeLayer].manifest; }
@@ -149,8 +169,19 @@ export class ClimateInstance {
       this.overlay.material.uniforms.uColormap.value = makeColormapTexture(cm.colors);
     }
 
+    const windField = this.sources.climate.manifest.vector_fields?.[0] ?? null;
+    this.hasWind = !!windField;
+    if (windField) {
+      this.windUVar = this.sources.climate.variables.find((v) => v.id === windField.u_variable)!;
+      this.windVVar = this.sources.climate.variables.find((v) => v.id === windField.v_variable)!;
+    }
+
     await this.switchLayer('climate', 0);
     if (this.hasOverlay) await this.loadOverlayFrame(0);
+    if (this.hasWind) {
+      await this.loadWindFrame(0);
+      this.wind.setVisible(DEFAULT_WIND_VISIBLE);
+    }
   }
 
   private async loadSource(modelId: string): Promise<LayerSource> {
@@ -182,8 +213,25 @@ export class ClimateInstance {
     this.activeLayer = layer;
     const src = this.sources[layer];
     this.field.material.uniforms.uColormap.value = src.colormapTexture;
+    // A month picked on the OTHER layer can sit outside this one's own
+    // depth_min_km/depth_max_km (e.g. month 6 is valid for climate's 0-11
+    // range but not paleogeography's 0-1) -- see clampToActiveDepthRange().
+    this.field.setDepthKm(this.clampToActiveDepthRange(this.currentMonth));
     this.applyClip(this.variable.default_clip_min, this.variable.default_clip_max);
     await this.loadFrame(layer, age);
+  }
+
+  /** Keep the depth-slice selector inside the ACTIVE layer's own valid
+   *  depth_min_km/depth_max_km range. material.ts's shader treats a slice
+   *  depth outside the CURRENT manifest's range as missing data and paints
+   *  the whole globe its flat "no data" grey -- it does not clamp on its
+   *  own, despite depth_max_km=1 for paleogeography making every value in
+   *  range sample the exact same (only) layer regardless. Without this, a
+   *  month picked while on the climate layer (0-11) survives a switch to
+   *  paleogeography and silently blanks it. */
+  private clampToActiveDepthRange(km: number): number {
+    const m = this.manifest;
+    return Math.min(Math.max(km, m.depth_min_km), m.depth_max_km);
   }
 
   /** Switch which variable of the ACTIVE layer's model is on screen -- no
@@ -211,19 +259,29 @@ export class ClimateInstance {
     this.coastlines?.setAge(age);
     void this.loadFrame(this.activeLayer, age);
     if (this.hasOverlay) void this.loadOverlayFrame(age);
+    if (this.hasWind) void this.loadWindFrame(age);
   }
 
   setOverlayOpacity(v: number): void {
     this.overlay.material.uniforms.uOpacity.value = v;
   }
 
+  setWindVisible(v: boolean): void {
+    this.wind.setVisible(v);
+  }
+
   /** Select a month (0-11) on the shared "layer axis" -- see prep_climate.py.
-   *  Deliberately layer-agnostic: paleogeography's manifest is still
-   *  ndepth=1, so any month value clamps harmlessly onto its one layer via
-   *  the shader's existing depth clamp. No branching needed here. */
+   *  Layer-agnostic in effect (paleogeography's manifest is still ndepth=1,
+   *  so any in-range value lands on its one layer) but NOT in the raw value:
+   *  see clampToActiveDepthRange() for why it has to go through that rather
+   *  than being handed to the shader as-is. */
   applyMonth(month: number): void {
     this.currentMonth = month;
-    this.field.setDepthKm(month);
+    this.field.setDepthKm(this.clampToActiveDepthRange(month));
+    // No fetch needed: the wind textures for the current age already carry
+    // all 12 months, so a month change is just a different plane of data
+    // already in hand -- see refreshWindGlyphs().
+    if (this.hasWind) this.refreshWindGlyphs();
   }
 
   private async loadFrame(layer: ClimateLayer, age: number): Promise<void> {
@@ -262,6 +320,43 @@ export class ClimateInstance {
     const tex = await src.frames.get(src.manifest, HILLSHADE_VARIABLE_ID, frame.id);
     if (token !== this.overlayToken) return;
     this.applyVolume(src.manifest, tex, this.overlay.material);
+  }
+
+  /** Fetch the U/V frames nearest `age` (always from the climate source,
+   *  independent of `activeLayer`) and hand their raw bytes to WindGlyphs.
+   *  Mirrors loadFrame()/loadOverlayFrame()'s stale-fetch guard. */
+  private async loadWindFrame(age: number): Promise<void> {
+    const src = this.sources.climate;
+    const field = src.manifest.vector_fields![0];
+    const token = ++this.windToken;
+
+    const frame = nearestFrame(src.manifest, age);
+    const [uTex, vTex] = await Promise.all([
+      src.frames.get(src.manifest, field.u_variable, frame.id),
+      src.frames.get(src.manifest, field.v_variable, frame.id),
+    ]);
+    if (token !== this.windToken) return;
+    this.windUTex = uTex;
+    this.windVTex = vTex;
+    this.refreshWindGlyphs();
+  }
+
+  /** Re-pose every wind glyph from whichever U/V textures are currently
+   *  held, sliced to the current month's plane -- see loadVolume()'s doc
+   *  comment for why a plane is a contiguous (nlat*nlon) slice at
+   *  `month * nlat * nlon` (longitude fastest, then latitude, then depth). */
+  private refreshWindGlyphs(): void {
+    if (!this.windUTex || !this.windVTex) return;
+    const manifest = this.sources.climate.manifest;
+    const res = manifest.resolutions.find((r) => r.id === manifest.default_resolution)!;
+    const plane = res.nlon * res.nlat;
+    const offset = this.currentMonth * plane;
+    const uData = this.windUTex.image.data as Uint8Array;
+    const vData = this.windVTex.image.data as Uint8Array;
+    this.wind.update(
+      uData.subarray(offset, offset + plane), vData.subarray(offset, offset + plane),
+      res.nlon, res.nlat, this.windUVar, this.windVVar,
+    );
   }
 
   render(renderer: WebGLRenderer): void {

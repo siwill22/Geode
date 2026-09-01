@@ -8,13 +8,20 @@ always supported, just finally carrying real data. DepthSlice.setDepthKm(0..11)
 now selects a calendar month instead of landing on the single Phase 1 layer.
 
 Source: 55 CESM1.2.2 snapshot simulations, one every 10 Myr from 0-540 Ma.
-T, P, SALB carry real (month, lat, lon) resolution; LANDFRAC is (lat, lon)
-only -- CESM does not simulate a seasonal land/ocean mask -- and is broadcast
-to 12 identical month layers so every variable in this manifest shares one
-grid shape (see the Phase 2 plan for why: a per-variable ndepth would need
-core/volume.ts to stop reading grid shape from manifest.default_resolution,
-a real change to shared engine code, to save ~40 MB raw against a site
-nowhere near its 1 GB Pages cap).
+T, P, SALB, U, V carry real (month, lat, lon) resolution; LANDFRAC is
+(lat, lon) only -- CESM does not simulate a seasonal land/ocean mask -- and
+is broadcast to 12 identical month layers so every variable in this manifest
+shares one grid shape (see the Phase 2 plan for why: a per-variable ndepth
+would need core/volume.ts to stop reading grid shape from
+manifest.default_resolution, a real change to shared engine code, to save
+~40 MB raw against a site nowhere near its 1 GB Pages cap).
+
+Phase 3 adds U/V (1000 hPa zonal/meridional wind): they ride the same
+percentile-clip / uint8-encode pipeline as every other variable here, marked
+`vector_only` so the viewer's variable picker skips them -- they back
+core/windGlyphs.ts's arrow field, not a colour-mapped display of their own.
+See `vector_fields` in the manifest below for how the U/V pairing is
+declared as data.
 
 Longitude arrives as 0..358.75 (0-360 convention) and must be normalised to
 the -180..180 grid the viewer's shaders assume -- get this wrong and every
@@ -75,6 +82,13 @@ class VarSpec:
     high_means: str | None = None
     fixed_range: tuple[float, float] | None = None  # None => percentile clip
     colormap: str = "viridis"
+    # True for a variable that only backs a render layer (here: the wind
+    # glyph field) rather than being offered as a primary display choice --
+    # same idea as prep_paleogeography.py's overlay_only, see VariableInfo
+    # in core/types.ts. colormap is irrelevant for these (never colour-mapped)
+    # so it's left at an arbitrary valid value rather than adding a branch
+    # that skips choose_colormap for them.
+    vector_only: bool = False
 
 
 VARIABLES = [
@@ -86,6 +100,10 @@ VARIABLES = [
             diverging=False, fixed_range=(0.0, 1.0), colormap="magma"),
     VarSpec("LANDFRAC", "LANDFRAC", "Land fraction", False, "fraction",
             diverging=False, fixed_range=(0.0, 1.0), colormap="cividis"),
+    VarSpec("U", "U", "Zonal wind (1000 hPa)", True, "m/s",
+            diverging=False, fixed_range=None, colormap="gray", vector_only=True),
+    VarSpec("V", "V", "Meridional wind (1000 hPa)", True, "m/s",
+            diverging=False, fixed_range=None, colormap="gray", vector_only=True),
 ]
 
 
@@ -214,6 +232,7 @@ def main():
             "units": spec.units,
             "diverging": spec.diverging,
             **({"high_means": spec.high_means} if spec.diverging else {}),
+            **({"vector_only": True} if spec.vector_only else {}),
             "encode_min": round(clip_lo, 4),
             "encode_max": round(clip_hi, 4),
             "value_min": round(raw_min, 4),
@@ -261,6 +280,13 @@ def main():
         "path_template": "frames/{variable}/{resolution}/{frame}.bin",
         "default_variable": "T",
         "variables": variables_meta,
+        # Declares the U/V pairing as data rather than a viewer-side
+        # assumption -- see core/types.ts's Manifest.vector_fields and
+        # windGlyphs.ts, which read this generically.
+        "vector_fields": [
+            {"id": "wind", "name": "Wind (1000 hPa)",
+             "u_variable": "U", "v_variable": "V", "units": "m/s"},
+        ],
     }
     (model_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
     print(f"\nwrote {model_dir / 'manifest.json'}")

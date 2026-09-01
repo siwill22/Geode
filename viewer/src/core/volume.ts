@@ -211,3 +211,10 @@ export class FrameCache {
 export function physicalToEncoded(v: VariableInfo, x: number): number {
   return (x - v.encode_min) / (v.encode_max - v.encode_min);
 }
+
+/** A raw uint8 texel (0..255) -> the physical value it encodes. Inverse of
+ *  physicalToEncoded's mapping, for CPU-side reads of a Data3DTexture's own
+ *  backing buffer (see core/windGlyphs.ts) rather than the GPU shader path. */
+export function texelToPhysical(v: VariableInfo, byte: number): number {
+  return v.encode_min + (byte / 255) * (v.encode_max - v.encode_min);
+}

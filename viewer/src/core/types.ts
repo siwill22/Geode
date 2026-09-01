@@ -29,6 +29,24 @@ export interface VariableInfo {
    *  shaded-relief overlay) rather than be picked as the primary display
    *  variable -- absent/false for every normal variable. */
   overlay_only?: boolean;
+  /** True for a variable that only backs a vector-field render layer (e.g.
+   *  a wind glyph field's U or V component) rather than being picked as
+   *  the primary display variable -- see Manifest.vector_fields for how
+   *  such a pair is declared. Absent/false for every normal variable. */
+  vector_only?: boolean;
+}
+
+/** Declares that two scalar variables in this manifest are the components
+ *  of one vector field (e.g. wind), for consumers like core/windGlyphs.ts.
+ *  Kept as data rather than a viewer-side assumption about variable ids, so
+ *  a different model -- or a different viewer entirely -- can declare its
+ *  own pairing without a code change. */
+export interface VectorFieldInfo {
+  id: string;
+  name: string;
+  u_variable: string;
+  v_variable: string;
+  units: string;
 }
 
 export interface ResolutionInfo {
@@ -62,6 +80,7 @@ export interface Manifest {
   path_template: string;
   default_variable: string;
   variables: VariableInfo[];
+  vector_fields?: VectorFieldInfo[];
 }
 
 export interface ArchiveIndex {

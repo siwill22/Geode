@@ -86,10 +86,11 @@ neighbours of the current age are prefetched.
 ## The paleoclimate viewer
 
 `climate.html` reuses the same volume-texture / archive machinery as the
-mantle viewer, aimed at four variables from the Li, Hu et al. 2022 CESM
+mantle viewer, aimed at variables from the Li, Hu et al. 2022 CESM
 simulation (0-540 Ma, 10 Myr steps) via `prep/prep_climate.py`: surface
-temperature, precipitation, albedo, and land fraction, switchable from a
-dropdown. Temperature/precipitation/albedo carry real monthly resolution in
+temperature, precipitation, albedo, and land fraction are switchable from a
+dropdown; zonal/meridional wind (see *Wind glyphs*, below) drive a separate
+glyph layer instead. Temperature/precipitation/albedo carry real monthly resolution in
 the source, so the volume's third axis -- the same generic "layer" axis the
 mantle viewer uses for depth, `depth_min_km`/`depth_max_km` in the manifest --
 carries a calendar month (0-11) here instead, with a slider and a play button
@@ -116,6 +117,59 @@ a degree of latitude. It ships as a second variable, `hillshade`, in the
 same manifest as `elevation`; marked `overlay_only` so the variable picker
 never offers it as a primary display choice, since it exists to drive the
 overlay mesh, not to be looked at on its own.
+
+Two more fixes were needed before the relief read consistently across all
+109 ages. First, even with `gtype = 1` set, the pole rows (lat = ±90°) are
+still degenerate — every longitude is the same physical point there, so the
+longitude-direction derivative `grdgradient` computes at that row is
+meaningless, and comes out as a spurious outlier orders of magnitude past
+any real terrain slope; those rows are overwritten with their neighbour
+before differencing, and zeroed again in the output. Second, PyGMT's
+`normalize` option contrast-stretches each grid to its own min/max, so one
+age's pole-row outlier (before the first fix) — or just ordinary variation
+in terrain roughness between ages — silently changed the relief's contrast
+age to age, "visible" for some and washed-out for others. The fix computes
+the raw (unnormalized) gradient per age but encodes every age against one
+shared clip range, the 99.5th percentile of `|gradient|` pooled across the
+whole series, so intensity is comparable across time rather than
+independently rescaled per frame.
+
+### Wind glyphs
+
+A fourth, always-available toggle draws 1000 hPa wind as arrow glyphs
+directly on the sphere, sourced from the climate simulation's own `U`/`V`
+fields regardless of which layer or variable is primary on screen — the same
+"independent of the active layer" pattern as the shaded-relief overlay
+above. `U`/`V` ride the same monthly pipeline as every other climate
+variable in `prep/prep_climate.py` (global percentile clip, not a per-frame
+one — see the hillshade fix above for why that matters) but are marked
+`vector_only` so the variable picker skips them; they back
+`core/windGlyphs.ts`'s arrow field, not a colour-mapped display of their
+own. The pairing itself is declared in the manifest (`vector_fields`), not
+hardcoded in the viewer, so a different model or a different viewer entirely
+could declare its own vector field without a code change.
+
+Turning a per-point `(u, v)` pair into a 3D arrow needs the sphere's actual
+3D east/north tangent directions *at that point* — those rotate with
+position on a globe, so a flat `(u, v) -> (x, y)` mapping would only be
+correct at one longitude. `core/constants.ts`'s `eastNorthAt()` supplies
+them, derived directly from `lonLatToVec3`'s own parameterisation so the two
+stay consistent by construction. The glyph sample lattice also excludes the
+pole rows outright (a longitude-direction quantity, like a "east" tangent,
+is undefined exactly at lat=±90°, the same class of degeneracy the
+hillshade fix above worked around) and widens its longitude spacing toward
+the poles so arrow density stays roughly even in physical area rather than
+clustering where meridians converge.
+
+Verifying this feature surfaced an unrelated, pre-existing bug: switching
+layers after changing the month left the globe rendering a flat "no data"
+grey. The shader's out-of-range check compares the depth-slice's raw
+selector value against the *newly active* layer's own valid range — a month
+picked on the climate layer (0-11) falls outside paleogeography's (0-1), and
+the check does not clamp, it discards. Fixed in `climateInstance.ts` by
+clamping the selector into the active layer's own range on every layer
+switch and month change (`clampToActiveDepthRange`), rather than handing the
+shader a value that could be stale from the other layer.
 
 Both layers are reconstructed against the **Scotese** plate model, not
 Müller — that is the model the climate simulation itself was run on, and

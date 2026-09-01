@@ -10,6 +10,7 @@ export interface ClimateViewState {
   clipMin: number;
   clipMax: number;
   overlayOpacity: number;
+  showWind: boolean;
 }
 
 export interface ClimateUICallbacks {
@@ -19,6 +20,7 @@ export interface ClimateUICallbacks {
   onMonth(month: number): void;
   onClip(lo: number, hi: number): void;
   onOverlayOpacity(v: number): void;
+  onShowWind(v: boolean): void;
 }
 
 const N_MONTHS = 12; // must match prep_climate.py's month axis
@@ -84,6 +86,12 @@ export class ClimateUI {
     this.gui.add(this.state, 'overlayOpacity', 0, 0.8, 0.01)
       .name('relief overlay')
       .onChange((v: number) => cb.onOverlayOpacity(v));
+    // Always visible, same reasoning as the overlay slider above -- wind is
+    // always sourced from the climate model regardless of active layer, so
+    // there's no layer where it has nothing to show.
+    this.gui.add(this.state, 'showWind')
+      .name('wind')
+      .onChange((v: boolean) => cb.onShowWind(v));
     this.clipMinCtrl = this.gui.add(this.state, 'clipMin', -60, 50, 0.1)
       .name('clip min')
       .onChange(() => cb.onClip(this.state.clipMin, this.state.clipMax));
@@ -125,10 +133,12 @@ export class ClimateUI {
    *  PICKABLE variable to show (paleogeography's 'elevation' -- its
    *  'hillshade' is overlay_only, filtered out here rather than offered as a
    *  second primary choice: it exists to drive the overlay mesh, not to be
-   *  selected on its own). A dropdown of one and a season slider with
-   *  nothing to season are dead controls, not useful disabled ones. */
+   *  selected on its own; similarly climate's 'U'/'V' are vector_only --
+   *  they back the wind glyph field, not a colour-mapped display of their
+   *  own). A dropdown of one and a season slider with nothing to season are
+   *  dead controls, not useful disabled ones. */
   setLayerVariables(variables: VariableInfo[]): void {
-    const pickable = variables.filter((v) => !v.overlay_only);
+    const pickable = variables.filter((v) => !v.overlay_only && !v.vector_only);
     if (pickable.length <= 1) {
       this.variableCtrl.hide();
       this.monthCtrl.hide();

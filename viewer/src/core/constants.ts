@@ -69,6 +69,31 @@ export function lonLatToVec3(
   ];
 }
 
+/**
+ * The unit east and north tangent vectors of the globe at (lon, lat), in the
+ * same 3D frame as lonLatToVec3 -- derived directly from its own
+ * parameterisation (d/dlon and d/dlat, each normalised) so the two stay
+ * consistent by construction. Needed to turn a meteorological (u, v) pair
+ * (already expressed in a local east/north frame) into a 3D direction: which
+ * 3D direction is "east" rotates with position on a sphere, so a flat
+ * (u, v) -> (x, y) mapping would be wrong everywhere except lon=0.
+ *
+ * Degenerate at lat = +-90 (every longitude is the same point there, so
+ * "east" is meaningless) -- callers must not evaluate this at the poles.
+ */
+export function eastNorthAt(lon: number, lat: number): {
+  east: [number, number, number]; north: [number, number, number];
+} {
+  const sLon = Math.sin(lon * DEG);
+  const cLon = Math.cos(lon * DEG);
+  const sLat = Math.sin(lat * DEG);
+  const cLat = Math.cos(lat * DEG);
+  return {
+    east: [-sLon, 0, -cLon],
+    north: [-sLat * cLon, cLat, sLat * sLon],
+  };
+}
+
 export function vec3ToLonLat(x: number, y: number, z: number): LonLat {
   const r = Math.hypot(x, y, z);
   return {
