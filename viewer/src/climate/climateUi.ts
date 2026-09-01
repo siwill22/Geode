@@ -12,6 +12,7 @@ export interface ClimateViewState {
   overlayOpacity: number;
   showWind: boolean;
   windScale: number;
+  windDensity: number;
 }
 
 export interface ClimateUICallbacks {
@@ -23,6 +24,7 @@ export interface ClimateUICallbacks {
   onOverlayOpacity(v: number): void;
   onShowWind(v: boolean): void;
   onWindScale(v: number): void;
+  onWindDensity(v: number): void;
 }
 
 const N_MONTHS = 12; // must match prep_climate.py's month axis
@@ -99,6 +101,11 @@ export class ClimateUI {
     this.gui.add(this.state, 'windScale', 0.5, 3, 0.1)
       .name('wind size')
       .onChange((v: number) => cb.onWindScale(v));
+    // Same 0.5-3 range as size, same "1 = today's default" convention --
+    // see windGlyphs.ts's setDensity() for how this maps to a lattice step.
+    this.gui.add(this.state, 'windDensity', 0.5, 3, 0.1)
+      .name('wind density')
+      .onChange((v: number) => cb.onWindDensity(v));
     this.clipMinCtrl = this.gui.add(this.state, 'clipMin', -60, 50, 0.1)
       .name('clip min')
       .onChange(() => cb.onClip(this.state.clipMin, this.state.clipMax));

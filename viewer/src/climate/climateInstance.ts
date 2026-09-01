@@ -30,6 +30,7 @@ export const DEFAULT_OVERLAY_OPACITY = 0.4;
 const HILLSHADE_VARIABLE_ID = 'hillshade';
 export const DEFAULT_WIND_VISIBLE = true;
 export const DEFAULT_WIND_SCALE = 1;
+export const DEFAULT_WIND_DENSITY = 1;
 
 /**
  * The two things this globe can show, plus a shared continent-outline
@@ -275,6 +276,13 @@ export class ClimateInstance {
    *  scale itself carries no data, so there's nothing to fetch. */
   setWindScale(v: number): void {
     this.wind.setSize(v);
+    this.refreshWindGlyphs();
+  }
+
+  /** Same immediacy as setWindScale() -- a new lattice, but still reposed
+   *  from data already in hand. */
+  setWindDensity(v: number): void {
+    this.wind.setDensity(v);
     this.refreshWindGlyphs();
   }
 

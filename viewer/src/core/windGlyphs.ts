@@ -13,9 +13,18 @@ import type { VariableInfo } from './types';
 // this only needs to clear the surface visually.
 const GLYPH_R = R_SURFACE * 1.001;
 
-// Half the previous step in BOTH directions (rings and per-ring count each
-// double, see buildLattice) -- 4x the arrow count for 2x the linear density.
-const LAT_STEP_DEG = 7.5;
+// The lattice step at density=1 (WindGlyphs.setDensity's default) -- halving
+// the previous step in BOTH directions (rings and per-ring count each
+// double, see buildLattice) made this 4x the arrow count of the original for
+// 2x the linear density.
+const BASE_LAT_STEP_DEG = 7.5;
+// setDensity()'s allowed range: density = BASE_LAT_STEP_DEG / step, so
+// smaller step = denser. MIN_LAT_STEP_DEG (density=3) sets the InstancedMesh
+// capacity allocated up front -- see WindGlyphs's constructor -- since an
+// InstancedMesh's instance count is fixed at creation; MAX_LAT_STEP_DEG
+// (density=0.5) is the sparsest the slider goes.
+const MIN_LAT_STEP_DEG = 2.5;
+const MAX_LAT_STEP_DEG = 15;
 const HEAD_RADIUS = 0.005;
 const SHAFT_RADIUS = 0.0018;
 // Fraction of an arrow's total length given to the head -- the rest is shaft.
@@ -45,7 +54,7 @@ interface Sample { lon: number; lat: number; }
  * would put far more arrows per unit ground area near +-75 deg than at the
  * equator.
  */
-function buildLattice(latStep = LAT_STEP_DEG): Sample[] {
+function buildLattice(latStep = BASE_LAT_STEP_DEG): Sample[] {
   const samples: Sample[] = [];
   for (let lat = -90 + latStep; lat <= 90 - latStep + 1e-6; lat += latStep) {
     const nLon = Math.max(4, Math.round(360 / Math.min(180, latStep / Math.cos(lat * DEG))));
@@ -100,7 +109,7 @@ const UP = new Vector3(0, 1, 0);
  */
 export class WindGlyphs {
   readonly mesh: InstancedMesh;
-  private readonly lattice = buildLattice();
+  private lattice = buildLattice();
   private readonly tmp = new Object3D();
   private readonly dir = new Vector3();
   /** Uniform multiplier on top of the speed-driven length (and, unlike
@@ -111,7 +120,14 @@ export class WindGlyphs {
   constructor() {
     const geo = makeArrowGeometry();
     const mat = new MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 });
-    this.mesh = new InstancedMesh(geo, mat, this.lattice.length);
+    // Allocated for the DENSEST setDensity() can go (an InstancedMesh's
+    // instance count is fixed at construction, unlike a plain BufferGeometry
+    // array) -- setDensity() then narrows what's actually drawn via
+    // mesh.count, which three.js supports rendering fewer than the
+    // allocated maximum without touching the buffer's capacity.
+    const maxCount = buildLattice(MIN_LAT_STEP_DEG).length;
+    this.mesh = new InstancedMesh(geo, mat, maxCount);
+    this.mesh.count = this.lattice.length;
     this.mesh.visible = false;
   }
 
@@ -125,6 +141,16 @@ export class WindGlyphs {
    *  refreshWindGlyphs() using whatever U/V frame is already held). */
   setSize(scale: number): void {
     this.sizeScale = scale;
+  }
+
+  /** Rebuild the sample lattice at a new density (1 = BASE_LAT_STEP_DEG,
+   *  higher = a finer step = more arrows -- see the constants above for the
+   *  allowed range) and resize mesh.count to match. Like setSize(), this
+   *  doesn't repose anything itself; see ClimateInstance.setWindDensity. */
+  setDensity(density: number): void {
+    const step = Math.min(MAX_LAT_STEP_DEG, Math.max(MIN_LAT_STEP_DEG, BASE_LAT_STEP_DEG / density));
+    this.lattice = buildLattice(step);
+    this.mesh.count = this.lattice.length;
   }
 
   /** uData/vData: ONE month's plane, nlon*nlat bytes each, lon-fastest --
