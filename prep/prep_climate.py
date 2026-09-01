@@ -154,9 +154,17 @@ def main():
         raise SystemExit(f"variables {missing} not in {args.input.name}: {list(ds.data_vars)}")
 
     sim = np.asarray(ds["simulation"].values, dtype=np.int64)
-    age_ma = (sim * 10).astype(np.float64)
+    # simulation's own coordinate metadata: 'From 540 Ma to the
+    # pre-industrial with a 10-million-year interval' -- index 0 is the
+    # OLDEST simulation, not the present, the reverse of the obvious
+    # reading. age_ma = sim*10 (Phase 1 and Phase 2's original assumption)
+    # silently swapped every age around the midpoint of the series -- caught
+    # visually via land fraction, which has an unmistakable shape signature
+    # present-day continents have that no other variable does.
+    age_ma = (float(sim.max()) - sim.astype(np.float64)) * 10.0
     source = args.source or ds.attrs.get("reference", "")
-    print(f"ages        {len(sim)}  {age_ma.min():.0f}-{age_ma.max():.0f} Ma")
+    print(f"ages        {len(sim)}  {age_ma.min():.0f}-{age_ma.max():.0f} Ma "
+          f"(sim {sim.min()}={age_ma.max():.0f} Ma .. sim {sim.max()}={age_ma.min():.0f} Ma)")
 
     model_dir = args.out / "models" / args.id
     frame_meta = [{"id": f"{int(round(a)):03d}", "age_ma": float(a)} for a in age_ma]

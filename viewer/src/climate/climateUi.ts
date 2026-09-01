@@ -53,8 +53,14 @@ export class ClimateUI {
     title = 'Geode Paleoclimate',
   ) {
     this.gui = new GUI({ title });
+    // 'layer' picks which MODEL is active (the CESM climate simulation vs.
+    // the Scotese paleogeography raster) -- labelled "Climate" rather than
+    // any one variable's name, since 'variable' below is what actually
+    // picks temperature/precipitation/albedo/land fraction within it. The
+    // two dropdowns used to both say "Temperature" at once, which read as
+    // if they controlled the same thing.
     this.layerCtrl = this.gui
-      .add(this.state, 'layer', { Temperature: 'climate', Paleogeography: 'paleogeography' })
+      .add(this.state, 'layer', { Climate: 'climate', Paleogeography: 'paleogeography' })
       .name('layer')
       .onChange((v: ClimateLayer) => cb.onLayer(v));
     this.variableCtrl = this.gui
