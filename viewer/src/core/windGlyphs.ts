@@ -1,6 +1,8 @@
 import {
-  ConeGeometry, InstancedMesh, MeshBasicMaterial, Object3D, Vector3,
+  BufferGeometry, ConeGeometry, CylinderGeometry, InstancedMesh, MeshBasicMaterial,
+  Object3D, Vector3,
 } from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { DEG, R_SURFACE, eastNorthAt, lonLatToVec3 } from './constants';
 import { texelToPhysical } from './volume';
 import type { VariableInfo } from './types';
@@ -11,8 +13,13 @@ import type { VariableInfo } from './types';
 // this only needs to clear the surface visually.
 const GLYPH_R = R_SURFACE * 1.001;
 
-const LAT_STEP_DEG = 15;
-const ARROW_RADIUS = 0.006;
+// Half the previous step in BOTH directions (rings and per-ring count each
+// double, see buildLattice) -- 4x the arrow count for 2x the linear density.
+const LAT_STEP_DEG = 7.5;
+const HEAD_RADIUS = 0.005;
+const SHAFT_RADIUS = 0.0018;
+// Fraction of an arrow's total length given to the head -- the rest is shaft.
+const HEAD_FRACTION = 0.35;
 const MIN_ARROW_LEN = 0.012;
 const MAX_ARROW_LEN = 0.045;
 // m/s beyond which an arrow's length stops growing. 1000 hPa wind at this
@@ -49,13 +56,24 @@ function buildLattice(latStep = LAT_STEP_DEG): Sample[] {
   return samples;
 }
 
-/** Cone tip at local +Y=1, base at local +Y=0 -- oriented per-instance by
- *  rotating +Y onto the wind direction, so the base sits at the sample
- *  point and the tip points downwind. */
-function makeArrowGeometry(): ConeGeometry {
-  const geo = new ConeGeometry(1, 1, 6);
-  geo.translate(0, 0.5, 0);
-  return geo;
+/** A thin shaft (cylinder) with a cone head on top, merged into one
+ *  geometry so a single InstancedMesh instance -- and a single per-instance
+ *  matrix -- draws both: root at local +Y=0, tip at local +Y=1, oriented
+ *  per-instance by rotating +Y onto the wind direction (see update()).
+ *  Radii are baked in absolute (not unit) so only the Y axis needs scaling
+ *  per instance for length -- the line stays a constant thickness regardless
+ *  of wind speed, only its length changes. */
+function makeArrowGeometry(): BufferGeometry {
+  const shaftHeight = 1 - HEAD_FRACTION;
+  const shaft = new CylinderGeometry(SHAFT_RADIUS, SHAFT_RADIUS, shaftHeight, 6);
+  shaft.translate(0, shaftHeight / 2, 0);
+  const head = new ConeGeometry(HEAD_RADIUS, HEAD_FRACTION, 6);
+  head.translate(0, shaftHeight + HEAD_FRACTION / 2, 0);
+  const merged = mergeGeometries([shaft, head]);
+  shaft.dispose();
+  head.dispose();
+  if (!merged) throw new Error('windGlyphs: failed to merge shaft+head arrow geometry');
+  return merged;
 }
 
 /** (lon, lat) -> the flat index into one month's (nlat, nlon) plane. Mirrors
@@ -131,7 +149,7 @@ export class WindGlyphs {
       this.tmp.quaternion.setFromUnitVectors(UP, this.dir);
       const len = MIN_ARROW_LEN
         + (Math.min(speed, SPEED_CLIP_MS) / SPEED_CLIP_MS) * (MAX_ARROW_LEN - MIN_ARROW_LEN);
-      this.tmp.scale.set(ARROW_RADIUS, len, ARROW_RADIUS);
+      this.tmp.scale.set(1, len, 1);
       this.tmp.updateMatrix();
       this.mesh.setMatrixAt(i, this.tmp.matrix);
     }
