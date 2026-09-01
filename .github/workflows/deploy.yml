@@ -29,7 +29,7 @@ concurrency:
 
 env:
   # Bump when the data changes, and upload a new asset under the new tag.
-  DATA_RELEASE: data-v3
+  DATA_RELEASE: data-v4
   DATA_ASSET: archive-deploy.tar.gz
 
 jobs:
