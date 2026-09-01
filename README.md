@@ -10,10 +10,11 @@ reconstructed spherical globe, with two viewers built on it so far:
   coastlines and plate boundaries on the surface, and a user-drawn polygonal
   cutaway whose walls and floor are textured with the model interpolated onto
   the cut surface.
-- **[the paleoclimate viewer](viewer/climate.html)** — annual-mean surface
-  temperature from a 540 Myr climate simulation, with a paleogeography layer
-  and reconstructed continent outlines consistent with the same underlying
-  plate model the climate run used.
+- **[the paleoclimate viewer](viewer/climate.html)** — monthly-resolved
+  surface temperature, precipitation, albedo and land fraction from a 540 Myr
+  climate simulation, with a paleogeography layer and reconstructed continent
+  outlines consistent with the same underlying plate model the climate run
+  used.
 
 Both are thin wrappers (`viewer/src/tomography/`, `viewer/src/climate/`) over
 one generic engine (`viewer/src/core/`) — the archive/manifest data format,
@@ -85,12 +86,24 @@ neighbours of the current age are prefetched.
 ## The paleoclimate viewer
 
 `climate.html` reuses the same volume-texture / archive machinery as the
-mantle viewer, aimed at annual-mean surface temperature from the Li, Hu et al.
-2022 CESM simulation (0-540 Ma, 10 Myr steps): `prep/prep_climate.py`. A
-second layer, paleogeography, comes from Scotese & Wright (2018) PaleoDEM
+mantle viewer, aimed at four variables from the Li, Hu et al. 2022 CESM
+simulation (0-540 Ma, 10 Myr steps) via `prep/prep_climate.py`: surface
+temperature, precipitation, albedo, and land fraction, switchable from a
+dropdown. Temperature/precipitation/albedo carry real monthly resolution in
+the source, so the volume's third axis -- the same generic "layer" axis the
+mantle viewer uses for depth, `depth_min_km`/`depth_max_km` in the manifest --
+carries a calendar month (0-11) here instead, with a slider and a play button
+to animate the seasonal cycle. Land fraction has no month axis in the source
+(CESM does not simulate a seasonal land/ocean mask) and is broadcast to all
+12 month layers so every variable in the manifest shares one grid shape,
+rather than teaching the shared engine about a per-variable grid shape for
+one static field.
+
+A second layer, paleogeography, comes from Scotese & Wright (2018) PaleoDEM
 elevation rasters via `prep/prep_paleogeography.py`, coloured with GMT's
 hypsometric `geo` colormap hinged at true sea level rather than a binary
-land/ocean fill.
+land/ocean fill. It has no month axis (elevation doesn't have a season), so
+the variable dropdown and month slider hide on this layer.
 
 Both layers are reconstructed against the **Scotese** plate model, not
 Müller — that is the model the climate simulation itself was run on, and
@@ -160,7 +173,7 @@ and SEMUCB-WM1 `(depth, lat, lon)` with only `--var` changing.
 | `semucb` | 360x181x192 | 48-2735 km | Top 12 levels dropped as >1% NaN |
 | `uup07` | 360x181x192 | 5-2816 km | Vp; basal trim correctly does nothing here |
 | `opt1` | 360x181x192 | 16-2840 km | **11 frames, 0-200 Ma.** Temperature anomaly, K |
-| `climate-540myr` | 360x181x1 | n/a | **55 frames, 0-540 Ma.** Annual-mean surface T, degC. Paleoclimate viewer. |
+| `climate-540myr` | 360x181x12 | month 0-11 | **55 frames, 0-540 Ma, 4 variables** (T, P, SALB, LANDFRAC). Paleoclimate viewer. |
 | `paleogeography-scotese` | 360x181x1 | n/a | **109 frames, 0-540 Ma.** Elevation, `geo` colormap. Paleoclimate viewer. |
 | `fixture-check` | 360x181x192 | 0-2840 km | Checkerboard, sign flips at 660 and 1800 km |
 | `fixture-ramp` | 360x181x192 | 0-2840 km | Pure function of depth |
@@ -171,9 +184,10 @@ non-uniform source levels are oversampled to 192 uniform ones, which adds no
 information but keeps one grid shape across the archive. 12 MB per frame,
 131 MB for the series.
 
-`climate-540myr` and `paleogeography-scotese` are single-layer fields
-(`ndepth: 1`) for the paleoclimate viewer, built by `prep/prep_climate.py` and
-`prep/prep_paleogeography.py` respectively:
+`climate-540myr` (`ndepth: 12`, the volume's layer axis carrying month) and
+`paleogeography-scotese` (`ndepth: 1`, no month axis) are built for the
+paleoclimate viewer by `prep/prep_climate.py` and `prep/prep_paleogeography.py`
+respectively:
 
 ```bash
 conda run -n pygmt17 python prep/prep_climate.py \
@@ -196,7 +210,8 @@ Both fetch their source data through `gprm` — but only the parts that need
 since the package `__init__` unconditionally pulls in `ptt`
 (PlateTectonicTools), which is not part of the `pygmt17` environment.
 
-A single-layer field needs `depth_min_km`/`depth_max_km` set to a
+A single-layer field (`paleogeography-scotese`; `climate-540myr` before Phase 2
+added the month axis) needs `depth_min_km`/`depth_max_km` set to a
 **non-degenerate placeholder** (`0.0`/`1.0`, not `0.0`/`0.0`) — the shader's
 `volumeUVW()` divides by `depth_max_km - depth_min_km`, and an equal min/max
 divides by zero, rendering solid grey regardless of age.
@@ -396,7 +411,7 @@ Two changes, both about the 1 GB Pages cap and the bandwidth budget. It **drops
 the fixture models** — they exist for `check:render` and are ~160 MB of that —
 and it **gzips the volumes**, rewriting each manifest's `path_template` to
 `.bin.gz` so nothing else needs a flag. ~200 MB of volumes becomes ~92 MB; the
-whole deployable archive is **~130 MB**. Pre-compressing is worth the trouble
+whole deployable archive is **~170 MB**. Pre-compressing is worth the trouble
 because a CDN will not compress `application/octet-stream` for you. The JSON is
 deliberately left alone, since `application/json` *is* compressed on the wire.
 
@@ -461,7 +476,7 @@ site.
 
 | | |
 |---|---|
-| Published Pages site | **1 GB hard** — currently ~130 MB |
+| Published Pages site | **1 GB hard** — currently ~170 MB |
 | Bandwidth | 100 GB/month soft |
 | Repo | unaffected; stays ~1 MB |
 

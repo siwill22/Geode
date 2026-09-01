@@ -72,13 +72,21 @@ async function boot(): Promise<void> {
 
   instance = new ClimateInstance(camera, deps);
 
-  state = { layer: 'climate', age: 0, clipMin: 0, clipMax: 1 };
+  state = { layer: 'climate', variable: 'T', age: 0, month: 0, clipMin: 0, clipMax: 1 };
   ui = new ClimateUI(state, {
     onLayer: async (layer) => {
       await instance.setLayer(layer);
+      state.variable = instance.variable.id;
+      ui.setLayerVariables(instance.manifest.variables);
+      ui.setVariable(instance.variable, colormaps[instance.variable.default_colormap]);
+      ui.refreshDisplay();
+    },
+    onVariable: async (id) => {
+      await instance.setVariable(id);
       ui.setVariable(instance.variable, colormaps[instance.variable.default_colormap]);
     },
     onAge: (age) => instance.applyAge(age),
+    onMonth: (month) => instance.applyMonth(month),
     onClip: (lo, hi) => instance.applyClip(lo, hi),
   });
 
@@ -91,7 +99,10 @@ async function boot(): Promise<void> {
   // spans the same range.
   const ages = instance.manifest.frames.map((f) => f.age_ma);
   ui.setAgeRange(Math.min(...ages), Math.max(...ages));
+  state.variable = instance.variable.id;
+  ui.setLayerVariables(instance.manifest.variables);
   ui.setVariable(instance.variable, colormaps[instance.variable.default_colormap]);
+  instance.applyMonth(state.month);
   ui.setTimeInfo(`age ${state.age.toFixed(0)} Ma`);
   ui.setStatus('');
 
@@ -116,7 +127,20 @@ window.__climate = {
   setLayer: async (layer: ClimateLayer) => {
     state.layer = layer;
     await instance.setLayer(layer);
+    state.variable = instance.variable.id;
+    ui.setLayerVariables(instance.manifest.variables);
     ui.setVariable(instance.variable, colormaps[instance.variable.default_colormap]);
+    ui.refreshDisplay();
+  },
+  setVariable: async (id: string) => {
+    state.variable = id;
+    await instance.setVariable(id);
+    ui.setVariable(instance.variable, colormaps[instance.variable.default_colormap]);
+    ui.refreshDisplay();
+  },
+  setMonth: (month: number) => {
+    state.month = month;
+    instance.applyMonth(month);
     ui.refreshDisplay();
   },
   setCamera: (o: { lon: number; lat: number; dist: number }) => {
@@ -141,6 +165,7 @@ window.__climate = {
     layer: instance.layer,
     variable: instance.variable?.id,
     age: state.age,
+    month: state.month,
     clip: [state.clipMin, state.clipMax],
   }),
 };

@@ -4,27 +4,41 @@ import type { ColormapData, VariableInfo } from '../core/types';
 
 export interface ClimateViewState {
   layer: ClimateLayer;
+  variable: string;
   age: number;
+  month: number;
   clipMin: number;
   clipMax: number;
 }
 
 export interface ClimateUICallbacks {
   onLayer(layer: ClimateLayer): void;
+  onVariable(id: string): void;
   onAge(age: number): void;
+  onMonth(month: number): void;
   onClip(lo: number, hi: number): void;
 }
 
+const N_MONTHS = 12; // must match prep_climate.py's month axis
+const PLAY_INTERVAL_MS = 350;
+
 /**
- * A deliberately small panel: layer choice, age, colour clip range, a
- * legend, and status text. No model/variable dropdown beyond the layer
- * toggle, no cutaway/isosurface/sinking-rate folders -- those are tomography
- * concepts with no climate equivalent, kept out rather than disabled.
+ * A deliberately small panel: layer choice, variable choice, age, month
+ * (seasonality), colour clip range, a legend, and status text. No
+ * cutaway/isosurface/sinking-rate folders -- those are tomography concepts
+ * with no climate equivalent, kept out rather than disabled. The variable
+ * dropdown and month slider/play button are climate-only: paleogeography is
+ * a single static field, so setLayerVariables() hides all three on that layer
+ * rather than showing them disabled with nothing to do.
  */
 export class ClimateUI {
   readonly gui: GUI;
   private layerCtrl: Controller;
+  private variableCtrl: Controller;
   private ageCtrl: Controller;
+  private monthCtrl: Controller;
+  private playCtrl: Controller;
+  private playTimer: ReturnType<typeof setInterval> | null = null;
   private clipMinCtrl: Controller;
   private clipMaxCtrl: Controller;
   private status: HTMLDivElement;
@@ -43,9 +57,19 @@ export class ClimateUI {
       .add(this.state, 'layer', { Temperature: 'climate', Paleogeography: 'paleogeography' })
       .name('layer')
       .onChange((v: ClimateLayer) => cb.onLayer(v));
+    this.variableCtrl = this.gui
+      .add(this.state, 'variable', {})
+      .name('variable')
+      .onChange((v: string) => cb.onVariable(v));
     this.ageCtrl = this.gui.add(this.state, 'age', 0, 540, 1)
       .name('age (Ma)')
       .onChange((v: number) => cb.onAge(v));
+    this.monthCtrl = this.gui.add(this.state, 'month', 0, N_MONTHS - 1, 1)
+      .name('month (0-11)')
+      .onChange((v: number) => cb.onMonth(v));
+    this.playCtrl = this.gui
+      .add({ fn: () => this.togglePlay() }, 'fn')
+      .name('▶ play seasons');
     this.clipMinCtrl = this.gui.add(this.state, 'clipMin', -60, 50, 0.1)
       .name('clip min')
       .onChange(() => cb.onClip(this.state.clipMin, this.state.clipMax));
@@ -80,6 +104,43 @@ export class ClimateUI {
    *  overlay, a narrower thing. See ClimateInstance's class doc. */
   setAgeRange(min: number, max: number, step = 1): void {
     this.ageCtrl.min(min).max(max).step(step);
+  }
+
+  /** Rebuild the variable dropdown for whichever layer just became active,
+   *  and hide the whole variable/month/play group when there's only one
+   *  variable to show (paleogeography) -- a dropdown of one and a season
+   *  slider with nothing to season are dead controls, not useful disabled
+   *  ones. */
+  setLayerVariables(variables: VariableInfo[]): void {
+    if (variables.length <= 1) {
+      this.variableCtrl.hide();
+      this.monthCtrl.hide();
+      this.playCtrl.hide();
+      if (this.playTimer) this.stopPlay();
+      return;
+    }
+    const choices: Record<string, string> = {};
+    for (const v of variables) choices[v.name] = v.id;
+    this.variableCtrl.options(choices);
+    this.variableCtrl.show();
+    this.monthCtrl.show();
+    this.playCtrl.show();
+  }
+
+  private togglePlay(): void {
+    if (this.playTimer) { this.stopPlay(); return; }
+    this.playCtrl.name('⏸ pause');
+    this.playTimer = setInterval(() => {
+      this.state.month = (this.state.month + 1) % N_MONTHS;
+      this.monthCtrl.updateDisplay();
+      this.cb.onMonth(this.state.month);
+    }, PLAY_INTERVAL_MS);
+  }
+
+  private stopPlay(): void {
+    if (this.playTimer) clearInterval(this.playTimer);
+    this.playTimer = null;
+    this.playCtrl.name('▶ play seasons');
   }
 
   setVariable(v: VariableInfo, colormap: ColormapData[string]): void {
@@ -131,6 +192,7 @@ export class ClimateUI {
   }
 
   dispose(): void {
+    this.stopPlay();
     this.gui.destroy();
     this.status.remove();
     this.timeInfo.remove();

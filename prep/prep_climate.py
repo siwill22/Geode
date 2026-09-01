@@ -1,22 +1,30 @@
 #!/usr/bin/env python3
 """Convert the Li et al. 2022 paleoclimate simulation set into the viewer format.
 
-Phase 1: annual-mean surface temperature only, one uint8 layer per age (no
-depth axis -- the volume's third dimension is left at ndepth=1 rather than
-hardcoded away, so a future climate model with real ocean-depth layers can
-reuse this same manifest shape).
+Phase 2: real monthly resolution, four variables. The volume's third axis is
+month (ndepth=12, depth_min_km=0, depth_max_km=11) rather than the Phase 1
+placeholder (ndepth=1) -- the same generic "layer axis" the manifest format
+always supported, just finally carrying real data. DepthSlice.setDepthKm(0..11)
+now selects a calendar month instead of landing on the single Phase 1 layer.
 
-Source: 55 CESM1.2.2 snapshot simulations, one every 10 Myr from 0-540 Ma,
-each with 12 monthly fields on a 192x288 lat/lon grid. Longitude arrives as
-0..358.75 (0-360 convention) and must be normalised to the -180..180 grid the
-viewer's shaders assume -- get this wrong and every field is offset from the
-coastline overlay by a fixed longitude shift that looks entirely plausible
-until you check a landmark.
+Source: 55 CESM1.2.2 snapshot simulations, one every 10 Myr from 0-540 Ma.
+T, P, SALB carry real (month, lat, lon) resolution; LANDFRAC is (lat, lon)
+only -- CESM does not simulate a seasonal land/ocean mask -- and is broadcast
+to 12 identical month layers so every variable in this manifest shares one
+grid shape (see the Phase 2 plan for why: a per-variable ndepth would need
+core/volume.ts to stop reading grid shape from manifest.default_resolution,
+a real change to shared engine code, to save ~40 MB raw against a site
+nowhere near its 1 GB Pages cap).
+
+Longitude arrives as 0..358.75 (0-360 convention) and must be normalised to
+the -180..180 grid the viewer's shaders assume -- get this wrong and every
+field is offset from the coastline overlay by a fixed longitude shift that
+looks entirely plausible until you check a landmark.
 
 Output:
 
     archive/models/<id>/manifest.json
-    archive/models/<id>/frames/T/<resolution>/<age_ma:03d>.bin
+    archive/models/<id>/frames/<variable>/<resolution>/<age_ma:03d>.bin
 
 Example
 -------
@@ -27,6 +35,7 @@ Example
 
 import argparse
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -35,6 +44,7 @@ import xarray as xr
 from prep_model import (
     DEFAULT_NLAT,
     DEFAULT_NLON,
+    choose_clip,
     choose_colormap,
     drop_duplicate_seam,
     encode_uint8,
@@ -43,14 +53,82 @@ from prep_model import (
     resample_horizontal,
 )
 
-DEFAULT_ENCODE_MIN = -60.0
-DEFAULT_ENCODE_MAX = 50.0
-# Placeholder range for the (currently unused) depth/layer axis. Must NOT be
-# 0.0-0.0: the shader's volumeUVW() divides by (depthMax - depthMin), and a
-# degenerate range divides by zero -- see viewer/src/glsl/geographic.ts. The
-# single layer always samples at depthKm=0, which clamps into [0, 1] fine.
+N_MONTHS = 12
+# The month axis spans the WHOLE grid.z range 0..N_MONTHS-1: see volumeUVW()
+# in viewer/src/core/glsl/geographic.ts, which maps depth_min_km/depth_max_km
+# onto texel centres via (p*(grid.z-1)+0.5)/grid.z. depth_min=0, depth_max=11
+# with ndepth=12 lands month index m exactly on its own texel, for any m.
 LAYER_MIN_KM = 0.0
-LAYER_MAX_KM = 1.0
+LAYER_MAX_KM = float(N_MONTHS - 1)
+
+DEFAULT_CLIP_PERCENTILE = 99.5
+
+
+@dataclass
+class VarSpec:
+    source_var: str
+    var_id: str
+    display_name: str
+    monthly: bool
+    units: str
+    diverging: bool
+    high_means: str | None = None
+    fixed_range: tuple[float, float] | None = None  # None => percentile clip
+    colormap: str = "viridis"
+
+
+VARIABLES = [
+    VarSpec("T", "T", "Surface temperature", True, "°C",
+            diverging=True, high_means="hot", fixed_range=(-70.0, 65.0), colormap="RdBu"),
+    VarSpec("P", "P", "Precipitation", True, "mm/month",
+            diverging=False, fixed_range=None, colormap="viridis"),
+    VarSpec("SALB", "SALB", "Surface albedo", True, "fraction",
+            diverging=False, fixed_range=(0.0, 1.0), colormap="magma"),
+    VarSpec("LANDFRAC", "LANDFRAC", "Land fraction", False, "fraction",
+            diverging=False, fixed_range=(0.0, 1.0), colormap="cividis"),
+]
+
+
+def load_and_condition(ds, spec: VarSpec, nlon: int, nlat: int):
+    """Return (vol[age, month, nlat, nlon] float32, lon2, lat2, raw_min, raw_max).
+
+    normalise_longitude/drop_duplicate_seam/resample_horizontal only touch the
+    trailing (lat, lon) axes, so a monthly variable's (age, month) leading axes
+    are flattened into one axis before calling them and restored after -- this
+    runs all 55*12 = 660 slices through the identical resampling path in one
+    call, guaranteeing every age and month lands on the same target grid.
+    """
+    da = ds[spec.source_var]
+    lat = np.asarray(ds["lat"].values, dtype=np.float64)
+    lon = np.asarray(ds["lon"].values, dtype=np.float64)
+    if lat[0] > lat[-1]:
+        raise SystemExit("expected ascending latitude -- source grid changed")
+
+    n_age = da.sizes["simulation"]
+    if spec.monthly:
+        flat = da.values.astype(np.float32).reshape(n_age * N_MONTHS, *da.shape[-2:])
+    else:
+        flat = da.values.astype(np.float32)  # (age, lat, lon)
+
+    raw_min = float(np.nanmin(flat))
+    raw_max = float(np.nanmax(flat))
+
+    flat, lon2 = normalise_longitude(flat, lon)
+    flat, lon2 = drop_duplicate_seam(flat, lon2)
+    # len(lon2) == nlon would false-positive on resample_horizontal's count-only
+    # fast path if the native grid happened to match -- it doesn't here (288x192
+    # native vs 360x181 target), so the real interpolation branch always runs.
+    flat, lon2, lat2 = resample_horizontal(flat, lon2, lat, nlon, nlat)
+
+    if spec.monthly:
+        vol = flat.reshape(n_age, N_MONTHS, nlat, nlon)
+    else:
+        # No month axis in the source -- broadcast each age's single field to
+        # all 12 month layers so this variable shares the manifest's one grid
+        # shape with the monthly variables (see module docstring).
+        vol = np.repeat(flat[:, np.newaxis, :, :], N_MONTHS, axis=1)
+
+    return vol, lon2, lat2, raw_min, raw_max
 
 
 def main():
@@ -62,93 +140,99 @@ def main():
     ap.add_argument("--name", default="Li et al. 2022 Paleoclimate")
     ap.add_argument("--source", default=None,
                      help="citation; defaults to the file's own 'reference' attribute")
-    ap.add_argument("--var-id", default="T")
-    ap.add_argument("--var-name", default="Surface temperature (annual mean)")
-    ap.add_argument("--units", default="°C")
-    ap.add_argument("--colormap", default="RdBu")
     ap.add_argument("--nlon", type=int, default=DEFAULT_NLON)
     ap.add_argument("--nlat", type=int, default=DEFAULT_NLAT)
     ap.add_argument("--resolution-id", default="std")
-    ap.add_argument("--encode-range", nargs=2, type=float,
-                     default=[DEFAULT_ENCODE_MIN, DEFAULT_ENCODE_MAX],
-                     help="fixed uint8 encoding range -- T is an absolute "
-                          "physical field, not an anomaly, so this is a "
-                          "round-number bound rather than a percentile clip")
-    ap.add_argument("--default-clip", nargs=2, type=float, default=None)
+    ap.add_argument("--clip-percentile", type=float, default=DEFAULT_CLIP_PERCENTILE)
     ap.add_argument("--out", type=Path, default=Path("archive"))
     ap.add_argument("--validate", action="store_true")
     args = ap.parse_args()
 
-    colormap = choose_colormap(args.colormap, "hot", args.out, True)
-    print(f"colormap    {colormap}  (high = hot)")
-
     ds = xr.open_dataset(args.input)
-    if "T" not in ds:
-        raise SystemExit(f"variable 'T' not in {args.input.name}: {list(ds.data_vars)}")
+    missing = [v.source_var for v in VARIABLES if v.source_var not in ds]
+    if missing:
+        raise SystemExit(f"variables {missing} not in {args.input.name}: {list(ds.data_vars)}")
 
-    lat = np.asarray(ds["lat"].values, dtype=np.float64)
-    lon = np.asarray(ds["lon"].values, dtype=np.float64)
     sim = np.asarray(ds["simulation"].values, dtype=np.int64)
-    source = args.source or ds.attrs.get("reference", "")
-    if lat[0] > lat[-1]:
-        raise SystemExit("expected ascending latitude -- source grid changed")
-
-    # Annual mean over the 12 synthetic months, equal-weighted (no month-length
-    # weighting field exists in this source). One "level" per simulation here
-    # stands in for the volume's depth/layer axis -- normalise_longitude(),
-    # drop_duplicate_seam() and resample_horizontal() only touch the lat/lon
-    # axes, so running all 55 ages through them at once is both correct and
-    # guarantees they land on an identical target grid.
-    annual = ds["T"].mean(dim="month").values.astype(np.float32)
-    ds.close()
     age_ma = (sim * 10).astype(np.float64)
-    print(f"loaded      T  {annual.shape}  {len(sim)} ages "
-          f"{age_ma.min():.0f}-{age_ma.max():.0f} Ma")
-
-    data, lon2 = normalise_longitude(annual, lon)
-    data, lon2 = drop_duplicate_seam(data, lon2)
-
-    raw_min = float(np.nanmin(data))
-    raw_max = float(np.nanmax(data))
-    print(f"range       {raw_min:+.2f} to {raw_max:+.2f} {args.units}")
-
-    # len(lon2) == args.nlon would false-positive on resample_horizontal's
-    # count-only fast path if the native grid happened to match nlon/nlat --
-    # it doesn't here (288x192 native vs 360x181 target), so the real
-    # interpolation branch always runs and lands on the canonical
-    # -180..178.75 grid the shader expects. Left unguarded deliberately: if a
-    # future source ever DID arrive at 360x181 natively, it would only be
-    # correct to skip resampling if it were already registered on that exact
-    # grid, which is not something to assume silently.
-    data, lon2, lat2 = resample_horizontal(data, lon2, lat, args.nlon, args.nlat)
-    print(f"resampled   {data.shape}")
-
-    clip_lo, clip_hi = float(args.encode_range[0]), float(args.encode_range[1])
-    if raw_min < clip_lo or raw_max > clip_hi:
-        print(f"  ** warning: data range [{raw_min:+.2f}, {raw_max:+.2f}] exceeds "
-              f"encode range [{clip_lo:+.2f}, {clip_hi:+.2f}] -- will clip")
-    vol = encode_uint8(data, clip_lo, clip_hi)
+    source = args.source or ds.attrs.get("reference", "")
+    print(f"ages        {len(sim)}  {age_ma.min():.0f}-{age_ma.max():.0f} Ma")
 
     model_dir = args.out / "models" / args.id
-    frame_dir = model_dir / "frames" / args.var_id / args.resolution_id
-    frame_dir.mkdir(parents=True, exist_ok=True)
+    frame_meta = [{"id": f"{int(round(a)):03d}", "age_ma": float(a)} for a in age_ma]
+    variables_meta = []
 
-    frame_meta = []
-    total_mb = 0.0
-    for i, age in enumerate(age_ma):
-        layer = vol[i][np.newaxis, :, :]  # (1, nlat, nlon): ndepth=1
-        fid = f"{int(round(age)):03d}"
-        out_path = frame_dir / f"{fid}.bin"
-        layer.tofile(out_path)
-        mb = out_path.stat().st_size / 1024 / 1024
-        total_mb += mb
-        frame_meta.append({"id": fid, "age_ma": float(age)})
-    print(f"wrote       {len(frame_meta)} frames, {total_mb:.1f} MB total")
+    for spec in VARIABLES:
+        print(f"\n=== {spec.var_id}  ({spec.source_var}, "
+              f"{'monthly' if spec.monthly else 'static -> broadcast to 12 layers'})")
+        vol, lon2, lat2, raw_min, raw_max = load_and_condition(
+            ds, spec, args.nlon, args.nlat
+        )
+        print(f"    range       {raw_min:+.4g} to {raw_max:+.4g} {spec.units}")
 
-    if args.default_clip:
-        dclip = [float(args.default_clip[0]), float(args.default_clip[1])]
-    else:
-        dclip = [clip_lo, clip_hi]
+        if spec.fixed_range is not None:
+            clip_lo, clip_hi = spec.fixed_range
+            if raw_min < clip_lo or raw_max > clip_hi:
+                print(f"    ** warning: data range exceeds encode range "
+                      f"[{clip_lo:+.4g}, {clip_hi:+.4g}] -- will clip")
+        else:
+            clip_lo, clip_hi = choose_clip(
+                vol, spec.diverging, args.clip_percentile, None
+            )
+            print(f"    clip        [{clip_lo:+.4g}, {clip_hi:+.4g}] "
+                  f"({args.clip_percentile} percentile)")
+
+        colormap = choose_colormap(spec.colormap, spec.high_means, args.out, spec.diverging)
+        if spec.diverging:
+            print(f"    colormap    {colormap}  (high = {spec.high_means})")
+        else:
+            print(f"    colormap    {colormap}")
+
+        encoded = encode_uint8(vol, clip_lo, clip_hi)  # (age, month, nlat, nlon)
+
+        frame_dir = model_dir / "frames" / spec.var_id / args.resolution_id
+        frame_dir.mkdir(parents=True, exist_ok=True)
+        total_mb = 0.0
+        for i, fm in enumerate(frame_meta):
+            out_path = frame_dir / f"{fm['id']}.bin"
+            encoded[i].tofile(out_path)  # (month, nlat, nlon): depth-major, matches Data3DTexture
+            total_mb += out_path.stat().st_size / 1024 / 1024
+        print(f"    wrote       {len(frame_meta)} frames, {total_mb:.1f} MB total")
+
+        variables_meta.append({
+            "id": spec.var_id,
+            "name": spec.display_name,
+            "source_var": spec.source_var,
+            "units": spec.units,
+            "diverging": spec.diverging,
+            **({"high_means": spec.high_means} if spec.diverging else {}),
+            "encode_min": round(clip_lo, 4),
+            "encode_max": round(clip_hi, 4),
+            "value_min": round(raw_min, 4),
+            "value_max": round(raw_max, 4),
+            "default_clip_min": round(clip_lo, 4),
+            "default_clip_max": round(clip_hi, 4),
+            "default_colormap": colormap,
+        })
+
+        if args.validate:
+            expect = args.nlon * args.nlat * N_MONTHS
+            first = np.fromfile(frame_dir / f"{frame_meta[0]['id']}.bin", dtype=np.uint8)
+            last = np.fromfile(frame_dir / f"{frame_meta[-1]['id']}.bin", dtype=np.uint8)
+            assert first.size == expect, f"{frame_meta[0]['id']}.bin is {first.size}, want {expect}"
+            assert last.size == expect, f"{frame_meta[-1]['id']}.bin is {last.size}, want {expect}"
+            assert not np.array_equal(first, last), \
+                "first and last age frames are byte-identical -- age grouping failed"
+            first3 = first.reshape(N_MONTHS, args.nlat, args.nlon)
+            if spec.monthly:
+                assert not np.array_equal(first3[0], first3[6]), \
+                    "month 0 and month 6 are byte-identical -- month axis collapsed to one layer"
+            phys = first3[0].astype(np.float32) / 255.0 * (clip_hi - clip_lo) + clip_lo
+            r0 = lateral_roughness(first3[0].astype(np.float32))
+            print(f"    validate    {expect} bytes/frame, decoded month-0 range "
+                  f"[{phys.min():+.4g}, {phys.max():+.4g}] {spec.units}  roughness {r0:.3f}")
+
+    ds.close()
 
     manifest = {
         "id": args.id,
@@ -163,51 +247,15 @@ def main():
         "default_resolution": args.resolution_id,
         "resolutions": [{
             "id": args.resolution_id,
-            "nlon": args.nlon, "nlat": args.nlat, "ndepth": 1,
+            "nlon": args.nlon, "nlat": args.nlat, "ndepth": N_MONTHS,
         }],
         "frames": frame_meta,
         "path_template": "frames/{variable}/{resolution}/{frame}.bin",
-        "default_variable": args.var_id,
-        "variables": [{
-            "id": args.var_id,
-            "name": args.var_name,
-            "source_var": "T",
-            "units": args.units,
-            "diverging": True,
-            "high_means": "hot",
-            "encode_min": round(clip_lo, 4),
-            "encode_max": round(clip_hi, 4),
-            "value_min": round(raw_min, 4),
-            "value_max": round(raw_max, 4),
-            "default_clip_min": round(dclip[0], 4),
-            "default_clip_max": round(dclip[1], 4),
-            "default_colormap": colormap,
-        }],
+        "default_variable": "T",
+        "variables": variables_meta,
     }
     (model_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
     print(f"\nwrote {model_dir / 'manifest.json'}")
-
-    if args.validate:
-        expect = args.nlon * args.nlat * 1
-        sizes = set()
-        for fm in frame_meta:
-            back = np.fromfile(frame_dir / f"{fm['id']}.bin", dtype=np.uint8)
-            sizes.add(back.size)
-            assert back.size == expect, f"{fm['id']}.bin is {back.size}, want {expect}"
-        assert len(sizes) == 1, "frames differ in size"
-        first = np.fromfile(frame_dir / f"{frame_meta[0]['id']}.bin",
-                             dtype=np.uint8).reshape(args.nlat, args.nlon)
-        last = np.fromfile(frame_dir / f"{frame_meta[-1]['id']}.bin",
-                            dtype=np.uint8).reshape(args.nlat, args.nlon)
-        assert not np.array_equal(first, last), \
-            "first and last frames are byte-identical -- age grouping failed"
-        diff = float(np.mean(np.abs(first.astype(np.int16) - last.astype(np.int16))))
-        r0 = lateral_roughness(first.astype(np.float32))
-        print(f"  validate    {len(frame_meta)} frames all {expect} bytes")
-        print(f"  frames      differ by {diff:.1f} codes mean |first - last|"
-              f"   roughness(frame0) {r0:.2f}")
-        phys = first.astype(np.float32) / 255.0 * (clip_hi - clip_lo) + clip_lo
-        print(f"  decoded     frame 0 range [{phys.min():+.2f}, {phys.max():+.2f}] {args.units}")
 
 
 if __name__ == "__main__":

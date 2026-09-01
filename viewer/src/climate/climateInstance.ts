@@ -34,7 +34,8 @@ export type ClimateLayer = 'climate' | 'paleogeography';
 
 interface LayerSource {
   manifest: Manifest;
-  variable: VariableInfo;
+  variables: VariableInfo[];
+  variableId: string;
   frames: FrameCache;
   colormapTexture: Texture;
 }
@@ -46,7 +47,8 @@ interface LayerSource {
  * carries cutaway/isosurface/sinking-rate machinery with no climate
  * equivalent. What IS reused (verbatim): the DepthSlice "paint the whole
  * sphere from one layer of a Data3DTexture" mechanism and FrameCache. A
- * climate or paleogeography frame IS a depth slice with ndepth=1 -- see
+ * paleogeography frame is a depth slice with ndepth=1; a climate frame's
+ * "depth" is a calendar month (ndepth=12, see applyMonth()) -- see
  * prep/prep_climate.py and prep/prep_paleogeography.py.
  */
 export class ClimateInstance {
@@ -57,6 +59,7 @@ export class ClimateInstance {
   private sources!: Record<ClimateLayer, LayerSource>;
   private activeLayer: ClimateLayer = 'climate';
   private currentAge = 0;
+  private currentMonth = 0;
   /** Guards a slow fetch for a stale age/layer landing after a newer one
    *  already applied -- same pattern as GlobeInstance.ageToken. */
   private ageToken = 0;
@@ -66,13 +69,16 @@ export class ClimateInstance {
     private readonly deps: ClimateInstanceDeps,
   ) {
     this.field.mesh.visible = true;
-    this.field.setDepthKm(0); // the manifest's one layer, always
+    this.field.setDepthKm(0); // month 0, until applyMonth() picks a real one
     this.scene.add(this.field.mesh);
   }
 
   get manifest(): Manifest { return this.sources[this.activeLayer].manifest; }
 
-  get variable(): VariableInfo { return this.sources[this.activeLayer].variable; }
+  get variable(): VariableInfo {
+    const src = this.sources[this.activeLayer];
+    return src.variables.find((v) => v.id === src.variableId) ?? src.variables[0];
+  }
 
   get layer(): ClimateLayer { return this.activeLayer; }
 
@@ -108,12 +114,14 @@ export class ClimateInstance {
     const entry = this.deps.archive.models.find((m) => m.id === modelId);
     if (!entry) throw new Error(`no model in archive with id ${modelId}`);
     const manifest = await loadManifest(this.deps.archiveBase, entry.path);
-    const variable = manifest.variables.find((v) => v.id === manifest.default_variable)
+    const variableId = manifest.default_variable;
+    const variable = manifest.variables.find((v) => v.id === variableId)
       ?? manifest.variables[0];
     const cm = this.deps.colormaps[variable.default_colormap];
     return {
       manifest,
-      variable,
+      variables: manifest.variables,
+      variableId: variable.id,
       frames: new FrameCache(this.deps.archiveBase),
       colormapTexture: makeColormapTexture(cm.colors),
     };
@@ -131,14 +139,28 @@ export class ClimateInstance {
     this.activeLayer = layer;
     const src = this.sources[layer];
     this.field.material.uniforms.uColormap.value = src.colormapTexture;
-    this.applyClip(src.variable.default_clip_min, src.variable.default_clip_max);
+    this.applyClip(this.variable.default_clip_min, this.variable.default_clip_max);
     await this.loadFrame(layer, age);
   }
 
-  applyClip(lo: number, hi: number): void {
+  /** Switch which variable of the ACTIVE layer's model is on screen -- no
+   *  manifest reload, just a different variable id fetched from the same
+   *  FrameCache (which already keys frames by variable, see volume.ts). */
+  async setVariable(variableId: string): Promise<void> {
     const src = this.sources[this.activeLayer];
-    this.field.material.uniforms.uClipLo.value = physicalToEncoded(src.variable, lo);
-    this.field.material.uniforms.uClipHi.value = physicalToEncoded(src.variable, hi);
+    if (variableId === src.variableId) return;
+    src.variableId = variableId;
+    const cm = this.deps.colormaps[this.variable.default_colormap];
+    src.colormapTexture = makeColormapTexture(cm.colors);
+    this.field.material.uniforms.uColormap.value = src.colormapTexture;
+    this.applyClip(this.variable.default_clip_min, this.variable.default_clip_max);
+    await this.loadFrame(this.activeLayer, this.currentAge);
+  }
+
+  applyClip(lo: number, hi: number): void {
+    const v = this.variable;
+    this.field.material.uniforms.uClipLo.value = physicalToEncoded(v, lo);
+    this.field.material.uniforms.uClipHi.value = physicalToEncoded(v, hi);
   }
 
   applyAge(age: number): void {
@@ -147,17 +169,27 @@ export class ClimateInstance {
     void this.loadFrame(this.activeLayer, age);
   }
 
+  /** Select a month (0-11) on the shared "layer axis" -- see prep_climate.py.
+   *  Deliberately layer-agnostic: paleogeography's manifest is still
+   *  ndepth=1, so any month value clamps harmlessly onto its one layer via
+   *  the shader's existing depth clamp. No branching needed here. */
+  applyMonth(month: number): void {
+    this.currentMonth = month;
+    this.field.setDepthKm(month);
+  }
+
   private async loadFrame(layer: ClimateLayer, age: number): Promise<void> {
     const src = this.sources[layer];
+    const variableId = src.variableId; // captured now -- src.variableId may change under us
     const token = ++this.ageToken;
 
     const frame = nearestFrame(src.manifest, age);
-    src.frames.pin(src.manifest, src.variable.id, frame.id);
-    const tex = await src.frames.get(src.manifest, src.variable.id, frame.id);
-    // A layer switch or a newer age can both land after this fetch started.
-    if (token !== this.ageToken || layer !== this.activeLayer) return;
+    src.frames.pin(src.manifest, variableId, frame.id);
+    const tex = await src.frames.get(src.manifest, variableId, frame.id);
+    // A layer/variable switch or a newer age can all land after this fetch started.
+    if (token !== this.ageToken || layer !== this.activeLayer || variableId !== src.variableId) return;
     this.applyVolume(src.manifest, tex);
-    src.frames.prefetchNeighbours(src.manifest, src.variable.id, frame.id);
+    src.frames.prefetchNeighbours(src.manifest, variableId, frame.id);
   }
 
   private applyVolume(manifest: Manifest, tex: Data3DTexture): void {
