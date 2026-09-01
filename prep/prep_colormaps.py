@@ -34,7 +34,7 @@ import numpy as np
 from matplotlib import colormaps
 
 DIVERGING = ["RdBu", "Spectral", "coolwarm", "seismic", "bwr"]
-SEQUENTIAL = ["viridis", "magma", "cividis"]
+SEQUENTIAL = ["viridis", "magma", "cividis", "gray"]
 
 # Suffix for the warm-at-high variant. The unsuffixed name keeps its original
 # meaning (cool at high) so manifests written before this change still resolve.

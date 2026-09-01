@@ -105,6 +105,18 @@ hypsometric `geo` colormap hinged at true sea level rather than a binary
 land/ocean fill. It has no month axis (elevation doesn't have a season), so
 the variable dropdown and month slider hide on this layer.
 
+A third, always-available slider layers the same paleogeography raster's
+**shaded relief** translucently over whichever primary field is on screen —
+terrain context for the climate data, not another colour-coded map competing
+with it. `prep_paleogeography.py` computes it with `pygmt.grdgradient`, the
+grid explicitly marked geographic (`da.gmt.gtype = 1`) rather than left at
+PyGMT's Cartesian default — a plain Cartesian gradient gets the derivative
+wrong toward the poles, where a degree of longitude covers less ground than
+a degree of latitude. It ships as a second variable, `hillshade`, in the
+same manifest as `elevation`; marked `overlay_only` so the variable picker
+never offers it as a primary display choice, since it exists to drive the
+overlay mesh, not to be looked at on its own.
+
 Both layers are reconstructed against the **Scotese** plate model, not
 Müller — that is the model the climate simulation itself was run on, and
 mixing reconstruction frames the way the mantle viewer's Müller 2019/2022 pair

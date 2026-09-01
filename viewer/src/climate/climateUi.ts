@@ -9,6 +9,7 @@ export interface ClimateViewState {
   month: number;
   clipMin: number;
   clipMax: number;
+  overlayOpacity: number;
 }
 
 export interface ClimateUICallbacks {
@@ -17,6 +18,7 @@ export interface ClimateUICallbacks {
   onAge(age: number): void;
   onMonth(month: number): void;
   onClip(lo: number, hi: number): void;
+  onOverlayOpacity(v: number): void;
 }
 
 const N_MONTHS = 12; // must match prep_climate.py's month axis
@@ -76,6 +78,12 @@ export class ClimateUI {
     this.playCtrl = this.gui
       .add({ fn: () => this.togglePlay() }, 'fn')
       .name('▶ play seasons');
+    // Always visible, unlike variable/month -- the overlay is independent of
+    // which layer/variable is primary, so there's no layer where it has
+    // nothing to show (see ClimateInstance's 'overlay' DepthSlice).
+    this.gui.add(this.state, 'overlayOpacity', 0, 0.8, 0.01)
+      .name('relief overlay')
+      .onChange((v: number) => cb.onOverlayOpacity(v));
     this.clipMinCtrl = this.gui.add(this.state, 'clipMin', -60, 50, 0.1)
       .name('clip min')
       .onChange(() => cb.onClip(this.state.clipMin, this.state.clipMax));
@@ -114,11 +122,14 @@ export class ClimateUI {
 
   /** Rebuild the variable dropdown for whichever layer just became active,
    *  and hide the whole variable/month/play group when there's only one
-   *  variable to show (paleogeography) -- a dropdown of one and a season
-   *  slider with nothing to season are dead controls, not useful disabled
-   *  ones. */
+   *  PICKABLE variable to show (paleogeography's 'elevation' -- its
+   *  'hillshade' is overlay_only, filtered out here rather than offered as a
+   *  second primary choice: it exists to drive the overlay mesh, not to be
+   *  selected on its own). A dropdown of one and a season slider with
+   *  nothing to season are dead controls, not useful disabled ones. */
   setLayerVariables(variables: VariableInfo[]): void {
-    if (variables.length <= 1) {
+    const pickable = variables.filter((v) => !v.overlay_only);
+    if (pickable.length <= 1) {
       this.variableCtrl.hide();
       this.monthCtrl.hide();
       this.playCtrl.hide();
@@ -126,7 +137,7 @@ export class ClimateUI {
       return;
     }
     const choices: Record<string, string> = {};
-    for (const v of variables) choices[v.name] = v.id;
+    for (const v of pickable) choices[v.name] = v.id;
     this.variableCtrl.options(choices);
     this.variableCtrl.show();
     this.monthCtrl.show();

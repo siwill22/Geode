@@ -25,6 +25,10 @@ export interface VariableInfo {
   default_clip_min: number;
   default_clip_max: number;
   default_colormap: string;
+  /** True for a variable that exists to drive a render layer (e.g. a
+   *  shaded-relief overlay) rather than be picked as the primary display
+   *  variable -- absent/false for every normal variable. */
+  overlay_only?: boolean;
 }
 
 export interface ResolutionInfo {

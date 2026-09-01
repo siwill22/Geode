@@ -45,6 +45,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pygmt
 import xarray as xr
 
 from prep_model import (
@@ -55,6 +56,8 @@ from prep_model import (
     normalise_longitude,
     resample_horizontal,
 )
+
+HILLSHADE_MIN, HILLSHADE_MAX = -1.0, 1.0
 
 GPRM_REPO = Path.home() / 'GIT' / 'GPlatesReconstructionModel'
 
@@ -140,6 +143,34 @@ def make_geo_colormap(encode_min, encode_max, master_half_range_m=8000.0):
     return {'diverging': False, 'high_end': None, 'colors': colors}
 
 
+def compute_hillshade(data, lon, lat, azimuth=315.0):
+    """Shaded-relief intensity from a resampled elevation grid, for the
+    overlay's greyscale render (see ClimateInstance's overlay mesh).
+
+    `data` is on the -180..180/gridline-registered grid resample_horizontal()
+    already produces. grdgradient's derivative is a SLOPE, and on a lon/lat
+    grid a degree of longitude covers less ground toward the poles than a
+    degree of latitude does -- a plain Cartesian gradient (numpy's, or GMT
+    with the grid left untagged) would get that scaling wrong and shade high
+    latitudes incorrectly. Marking the grid geographic (gtype=1) makes
+    grdgradient account for it. Checked concretely against a synthetic grid:
+    leaving gtype at its Cartesian default vs. setting it to 1 changes the
+    computed intensity by ~45% at the same point -- not a rounding
+    difference.
+
+    normalize='t1' is PyGMT's bounded (arctangent-based) normalization, which
+    is why the encode range below is a fixed [-1, 1] rather than a per-age
+    percentile the way prep_model.py's REVEAL ingest needs.
+    """
+    da = xr.DataArray(
+        data[0], coords={'lat': lat, 'lon': lon}, dims=('lat', 'lon'),
+    )
+    da.gmt.registration = 0  # gridline-registered, matching resample_horizontal's grid
+    da.gmt.gtype = 1         # geographic, NOT Cartesian -- see docstring
+    shaded = pygmt.grdgradient(grid=da, azimuth=azimuth, normalize='t1')
+    return np.asarray(shaded.values, dtype=np.float32)[np.newaxis, :, :]
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -153,6 +184,8 @@ def main():
     ap.add_argument('--var-id', default='elevation')
     ap.add_argument('--var-name', default='Paleogeography (elevation)')
     ap.add_argument('--units', default='m')
+    ap.add_argument('--hillshade-id', default='hillshade')
+    ap.add_argument('--hillshade-azimuth', type=float, default=315.0)
     ap.add_argument('--nlon', type=int, default=DEFAULT_NLON)
     ap.add_argument('--nlat', type=int, default=DEFAULT_NLAT)
     ap.add_argument('--resolution-id', default='std')
@@ -168,13 +201,17 @@ def main():
     model_dir = args.out / 'models' / args.id
     frame_dir = model_dir / 'frames' / args.var_id / args.resolution_id
     frame_dir.mkdir(parents=True, exist_ok=True)
+    shade_dir = model_dir / 'frames' / args.hillshade_id / args.resolution_id
+    shade_dir.mkdir(parents=True, exist_ok=True)
 
     raw_min, raw_max = np.inf, -np.inf
+    shade_min, shade_max = np.inf, -np.inf
     frame_meta = []
     # Resampled arrays kept in memory between the two passes (109 x 181 x 360
-    # float32 =~ 28 MB) -- cheap enough not to need a third disk read once the
-    # series-wide encode range is known below.
+    # float32 =~ 28 MB per variable) -- cheap enough not to need a third disk
+    # read once the series-wide encode range is known below.
     resampled = {}
+    shaded = {}
 
     for age in ages:
         ds = xr.open_dataset(raster_dict[age])
@@ -192,14 +229,23 @@ def main():
         raw_min = min(raw_min, float(np.nanmin(data)))
         raw_max = max(raw_max, float(np.nanmax(data)))
 
+        shade = compute_hillshade(data, lon2, lat2, args.hillshade_azimuth)
+        shade_min = min(shade_min, float(np.nanmin(shade)))
+        shade_max = max(shade_max, float(np.nanmax(shade)))
+
         fid = f"{age:g}".replace('.', '_')
         frame_meta.append({'id': fid, 'age_ma': float(age)})
         resampled[age] = data
+        shaded[age] = shade
 
     encode_min, encode_max = raw_min, raw_max
     sea_level_t = (0.0 - encode_min) / (encode_max - encode_min)
     print(f"elevation range {encode_min:+.0f} to {encode_max:+.0f} m "
           f"(sea level at t={sea_level_t:.4f})")
+    print(f"hillshade range {shade_min:+.3f} to {shade_max:+.3f}  "
+          f"(encoding to fixed [{HILLSHADE_MIN:+.1f}, {HILLSHADE_MAX:+.1f}])")
+    if shade_min < HILLSHADE_MIN or shade_max > HILLSHADE_MAX:
+        print(f"  ** warning: hillshade range exceeds the fixed encode range -- will clip")
 
     total_mb = 0.0
     for age, fm in zip(ages, frame_meta):
@@ -207,7 +253,12 @@ def main():
         out_path = frame_dir / f"{fm['id']}.bin"
         vol.tofile(out_path)
         total_mb += out_path.stat().st_size / 1024 / 1024
-    print(f"wrote       {len(frame_meta)} frames, {total_mb:.1f} MB total")
+
+        shade_vol = encode_uint8(shaded[age], HILLSHADE_MIN, HILLSHADE_MAX)
+        shade_path = shade_dir / f"{fm['id']}.bin"
+        shade_vol.tofile(shade_path)
+        total_mb += shade_path.stat().st_size / 1024 / 1024
+    print(f"wrote       {len(frame_meta)} frames x 2 variables, {total_mb:.1f} MB total")
 
     manifest = {
         'id': args.id,
@@ -226,20 +277,41 @@ def main():
         'frames': frame_meta,
         'path_template': 'frames/{variable}/{resolution}/{frame}.bin',
         'default_variable': args.var_id,
-        'variables': [{
-            'id': args.var_id,
-            'name': args.var_name,
-            'source_var': 'z',
-            'units': args.units,
-            'diverging': False,
-            'encode_min': round(encode_min, 2),
-            'encode_max': round(encode_max, 2),
-            'value_min': round(raw_min, 2),
-            'value_max': round(raw_max, 2),
-            'default_clip_min': round(encode_min, 2),
-            'default_clip_max': round(encode_max, 2),
-            'default_colormap': 'geo',
-        }],
+        'variables': [
+            {
+                'id': args.var_id,
+                'name': args.var_name,
+                'source_var': 'z',
+                'units': args.units,
+                'diverging': False,
+                'encode_min': round(encode_min, 2),
+                'encode_max': round(encode_max, 2),
+                'value_min': round(raw_min, 2),
+                'value_max': round(raw_max, 2),
+                'default_clip_min': round(encode_min, 2),
+                'default_clip_max': round(encode_max, 2),
+                'default_colormap': 'geo',
+            },
+            {
+                # Drives ClimateInstance's shaded-relief overlay mesh only --
+                # overlay_only means the variable picker in climateUi.ts
+                # never offers it as a PRIMARY display choice (it has no
+                # scientific meaning on its own, just a rendering aid).
+                'id': args.hillshade_id,
+                'name': 'Shaded relief',
+                'source_var': 'z',
+                'units': 'intensity',
+                'diverging': False,
+                'encode_min': HILLSHADE_MIN,
+                'encode_max': HILLSHADE_MAX,
+                'value_min': round(shade_min, 3),
+                'value_max': round(shade_max, 3),
+                'default_clip_min': HILLSHADE_MIN,
+                'default_clip_max': HILLSHADE_MAX,
+                'default_colormap': 'gray',
+                'overlay_only': True,
+            },
+        ],
     }
     (model_dir / 'manifest.json').write_text(json.dumps(manifest, indent=2))
     print(f"wrote {model_dir / 'manifest.json'}")
@@ -265,6 +337,18 @@ def main():
         assert not np.array_equal(first, last), \
             "0 Ma and 540 Ma frames are byte-identical -- something is wrong"
         print(f"validate    {len(frame_meta)} frames all {expect} bytes, "
+              f"0 Ma != 540 Ma confirmed")
+
+        for fm in frame_meta:
+            back = np.fromfile(shade_dir / f"{fm['id']}.bin", dtype=np.uint8)
+            assert back.size == expect, f"hillshade {fm['id']}.bin is {back.size}, want {expect}"
+        sfirst = np.fromfile(shade_dir / f"{frame_meta[0]['id']}.bin",
+                              dtype=np.uint8).reshape(args.nlat, args.nlon)
+        slast = np.fromfile(shade_dir / f"{frame_meta[-1]['id']}.bin",
+                             dtype=np.uint8).reshape(args.nlat, args.nlon)
+        assert not np.array_equal(sfirst, slast), \
+            "hillshade 0 Ma and 540 Ma frames are byte-identical -- something is wrong"
+        print(f"validate    hillshade {len(frame_meta)} frames all {expect} bytes, "
               f"0 Ma != 540 Ma confirmed")
 
 

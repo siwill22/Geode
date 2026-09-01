@@ -6,7 +6,9 @@ import { PALETTE } from '../core/palette';
 import { fetchCoastlineData } from '../core/coastlines';
 import { loadArchive, loadColormaps } from '../core/volume';
 import type { ColormapData } from '../core/types';
-import { ClimateInstance, type ClimateInstanceDeps, type ClimateLayer } from './climateInstance';
+import {
+  ClimateInstance, DEFAULT_OVERLAY_OPACITY, type ClimateInstanceDeps, type ClimateLayer,
+} from './climateInstance';
 import { ClimateUI, type ClimateViewState } from './climateUi';
 
 // See main.ts for why this indirection exists: VITE_ARCHIVE_BASE is the seam
@@ -72,7 +74,10 @@ async function boot(): Promise<void> {
 
   instance = new ClimateInstance(camera, deps);
 
-  state = { layer: 'climate', variable: 'T', age: 0, month: 0, clipMin: 0, clipMax: 1 };
+  state = {
+    layer: 'climate', variable: 'T', age: 0, month: 0, clipMin: 0, clipMax: 1,
+    overlayOpacity: DEFAULT_OVERLAY_OPACITY,
+  };
   ui = new ClimateUI(state, {
     onLayer: async (layer) => {
       await instance.setLayer(layer);
@@ -88,6 +93,7 @@ async function boot(): Promise<void> {
     onAge: (age) => instance.applyAge(age),
     onMonth: (month) => instance.applyMonth(month),
     onClip: (lo, hi) => instance.applyClip(lo, hi),
+    onOverlayOpacity: (v) => instance.setOverlayOpacity(v),
   });
 
   ui.setStatus('loading...');
@@ -143,6 +149,11 @@ window.__climate = {
     instance.applyMonth(month);
     ui.refreshDisplay();
   },
+  setOverlayOpacity: (v: number) => {
+    state.overlayOpacity = v;
+    instance.setOverlayOpacity(v);
+    ui.refreshDisplay();
+  },
   setCamera: (o: { lon: number; lat: number; dist: number }) => {
     const [x, y, z] = lonLatToVec3(o.lon, o.lat, o.dist);
     camera.position.set(x, y, z);
@@ -167,6 +178,7 @@ window.__climate = {
     age: state.age,
     month: state.month,
     clip: [state.clipMin, state.clipMax],
+    overlayOpacity: state.overlayOpacity,
   }),
 };
 

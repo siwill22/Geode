@@ -137,13 +137,18 @@ export class DepthSlice {
   readonly mesh: Mesh;
   private readonly mat: ShaderMaterial;
 
-  constructor() {
+  /** `radius` defaults to R_SURFACE (every existing caller); a second
+   *  DepthSlice at a slightly larger radius is how the paleoclimate
+   *  viewer's shaded-relief overlay sits just clear of the primary field
+   *  without z-fighting it -- see climateInstance.ts and the LAND_R
+   *  precedent in coastlines.ts. */
+  constructor(radius: number = R_SURFACE) {
     this.mat = createVolumeSurfaceMaterial();
     this.mat.side = FrontSide; // a whole sphere: only the outward face is ever seen
     setMaskMode(this.mat, 'none'); // paints the WHOLE globe, ignoring any cutaway polygon
     this.mat.uniforms.uUseSliceDepth.value = 1;
 
-    this.mesh = new Mesh(new SphereGeometry(R_SURFACE, 256, 128), this.mat);
+    this.mesh = new Mesh(new SphereGeometry(radius, 256, 128), this.mat);
     this.mesh.renderOrder = 1;
     this.mesh.visible = false;
   }

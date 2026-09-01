@@ -1,10 +1,13 @@
 import {
-  Scene, Vector3, type Data3DTexture, type PerspectiveCamera, type Texture, type WebGLRenderer,
+  Scene, Vector3, type Data3DTexture, type PerspectiveCamera, type ShaderMaterial,
+  type Texture, type WebGLRenderer,
 } from 'three';
 
 import { DepthSlice } from '../core/depthSlice';
+import { setMaskMode } from '../core/material';
 import { createMaskTexture } from '../core/mask';
 import { Coastlines, type CoastlineData } from '../core/coastlines';
+import { R_SURFACE } from '../core/constants';
 import {
   FrameCache, loadManifest, makeColormapTexture, nearestFrame, physicalToEncoded,
 } from '../core/volume';
@@ -16,6 +19,14 @@ export interface ClimateInstanceDeps {
   colormaps: ColormapData;
   coastlineData: CoastlineData | null;
 }
+
+// Just clear of the primary field's sphere, same precedent as coastlines.ts's
+// LAND_R -- nothing else renders at this radius in climate.html (the
+// coastline LAND fill is permanently hidden here, only its outline at a
+// larger radius still is drawn), so there's no third thing to collide with.
+const OVERLAY_R = R_SURFACE * 1.0006;
+export const DEFAULT_OVERLAY_OPACITY = 0.4;
+const HILLSHADE_VARIABLE_ID = 'hillshade';
 
 /**
  * The two things this globe can show, plus a shared continent-outline
@@ -49,11 +60,18 @@ interface LayerSource {
  * sphere from one layer of a Data3DTexture" mechanism and FrameCache. A
  * paleogeography frame is a depth slice with ndepth=1; a climate frame's
  * "depth" is a calendar month (ndepth=12, see applyMonth()) -- see
- * prep/prep_climate.py and prep/prep_paleogeography.py.
+ * prep/prep_climate.py and prep/prep_paleogeography.py. A THIRD DepthSlice
+ * (`overlay`) draws paleogeography's shaded relief translucently on top of
+ * whichever primary field is active, independent of it -- see
+ * setOverlayOpacity() and loadOverlayFrame().
  */
 export class ClimateInstance {
   readonly scene = new Scene();
   readonly field = new DepthSlice();
+  /** Shaded-relief overlay: always sourced from paleogeography-scotese's
+   *  'hillshade' variable, independent of whichever layer/variable is
+   *  primary -- see prep_paleogeography.py and setOverlayOpacity(). */
+  readonly overlay = new DepthSlice(OVERLAY_R);
   coastlines: Coastlines | null = null;
 
   private sources!: Record<ClimateLayer, LayerSource>;
@@ -63,6 +81,8 @@ export class ClimateInstance {
   /** Guards a slow fetch for a stale age/layer landing after a newer one
    *  already applied -- same pattern as GlobeInstance.ageToken. */
   private ageToken = 0;
+  private overlayToken = 0;
+  private hasOverlay = false;
 
   constructor(
     private readonly camera: PerspectiveCamera,
@@ -71,6 +91,19 @@ export class ClimateInstance {
     this.field.mesh.visible = true;
     this.field.setDepthKm(0); // month 0, until applyMonth() picks a real one
     this.scene.add(this.field.mesh);
+
+    this.overlay.mesh.visible = true;
+    this.overlay.mesh.renderOrder = 2; // after the field (1), before coastline outlines (3)
+    this.overlay.setDepthKm(0); // hillshade has no month/depth axis of its own
+    setMaskMode(this.overlay.material, 'none');
+    this.overlay.material.transparent = true; // the whole point is being see-through
+    this.overlay.material.uniforms.uOpacity.value = DEFAULT_OVERLAY_OPACITY;
+    // Full encoded range, unclipped -- there's nothing to clip here, only
+    // opacity to dial. See loadOverlayFrame() for where the colormap/volume
+    // uniforms actually get set, once the paleogeography source has loaded.
+    this.overlay.material.uniforms.uClipLo.value = 0;
+    this.overlay.material.uniforms.uClipHi.value = 1;
+    this.scene.add(this.overlay.mesh);
   }
 
   get manifest(): Manifest { return this.sources[this.activeLayer].manifest; }
@@ -107,7 +140,17 @@ export class ClimateInstance {
       this.coastlines.setAge(0);
     }
 
+    const shadeVar = this.sources.paleogeography.variables.find(
+      (v) => v.id === HILLSHADE_VARIABLE_ID,
+    );
+    this.hasOverlay = !!shadeVar;
+    if (shadeVar) {
+      const cm = this.deps.colormaps[shadeVar.default_colormap];
+      this.overlay.material.uniforms.uColormap.value = makeColormapTexture(cm.colors);
+    }
+
     await this.switchLayer('climate', 0);
+    if (this.hasOverlay) await this.loadOverlayFrame(0);
   }
 
   private async loadSource(modelId: string): Promise<LayerSource> {
@@ -167,6 +210,11 @@ export class ClimateInstance {
     this.currentAge = age;
     this.coastlines?.setAge(age);
     void this.loadFrame(this.activeLayer, age);
+    if (this.hasOverlay) void this.loadOverlayFrame(age);
+  }
+
+  setOverlayOpacity(v: number): void {
+    this.overlay.material.uniforms.uOpacity.value = v;
   }
 
   /** Select a month (0-11) on the shared "layer axis" -- see prep_climate.py.
@@ -192,13 +240,28 @@ export class ClimateInstance {
     src.frames.prefetchNeighbours(src.manifest, variableId, frame.id);
   }
 
-  private applyVolume(manifest: Manifest, tex: Data3DTexture): void {
+  private applyVolume(
+    manifest: Manifest, tex: Data3DTexture, mat: ShaderMaterial = this.field.material,
+  ): void {
     const res = manifest.resolutions.find((r) => r.id === manifest.default_resolution)!;
-    const mat = this.field.material;
     mat.uniforms.uVolume.value = tex;
     (mat.uniforms.uGrid.value as Vector3).set(res.nlon, res.nlat, res.ndepth);
     mat.uniforms.uDepthMin.value = manifest.depth_min_km;
     mat.uniforms.uDepthMax.value = manifest.depth_max_km;
+  }
+
+  /** Fetch the hillshade frame nearest `age` and apply it to the overlay
+   *  mesh, independent of `activeLayer`/`variableId` -- the overlay always
+   *  tracks the paleogeography source's own 'hillshade' variable. Mirrors
+   *  loadFrame()'s stale-fetch guard with its own token. */
+  private async loadOverlayFrame(age: number): Promise<void> {
+    const src = this.sources.paleogeography;
+    const token = ++this.overlayToken;
+
+    const frame = nearestFrame(src.manifest, age);
+    const tex = await src.frames.get(src.manifest, HILLSHADE_VARIABLE_ID, frame.id);
+    if (token !== this.overlayToken) return;
+    this.applyVolume(src.manifest, tex, this.overlay.material);
   }
 
   render(renderer: WebGLRenderer): void {
