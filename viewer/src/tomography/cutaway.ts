@@ -4,10 +4,10 @@ import {
 } from 'three';
 import {
   R_SURFACE, densifyPolygon, depthToRadius, lonLatToVec3, type LonLat,
-} from './constants';
-import { createVolumeSurfaceMaterial, passthroughColor, setMaskMode } from './material';
-import { rasteriseMask, MASK_W, MASK_H } from './mask';
-import type { CutawayState } from './types';
+} from '../core/constants';
+import { createVolumeSurfaceMaterial, passthroughColor, setMaskMode } from '../core/material';
+import { rasteriseMask, MASK_W, MASK_H } from '../core/mask';
+import type { CutawayState } from '../core/types';
 
 const WALL_ROWS = 128;
 /** Keeps the floor clear of the volume's last depth sample -- see update(). */

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Geode Paleoclimate</title>
+    <style>
+      :root { color-scheme: dark; }
+      html, body {
+        margin: 0; height: 100%; overflow: hidden;
+        background: #0b0d10;
+        font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, sans-serif;
+        color: #d8dee4;
+      }
+      canvas { display: block; }
+      .status {
+        position: fixed; left: 12px; bottom: 12px;
+        padding: 6px 10px; border-radius: 4px;
+        background: rgba(0, 0, 0, 0.6); color: #cfd6dd;
+      }
+      .timeinfo {
+        position: fixed; left: 12px; bottom: 44px;
+        padding: 6px 10px; border-radius: 4px;
+        background: rgba(0, 0, 0, 0.6); color: #9fb4c8;
+        font-variant-numeric: tabular-nums;
+      }
+      .legend {
+        position: fixed; left: 12px; top: 12px;
+        padding: 8px 10px; border-radius: 4px;
+        background: rgba(0, 0, 0, 0.6);
+      }
+      .legend-label {
+        color: #cfd6dd; margin-bottom: 4px;
+      }
+      .legend-ramp {
+        display: block; width: 256px; height: 12px;
+        border-radius: 2px;
+      }
+      #credit {
+        position: fixed; right: 12px; bottom: 8px;
+        color: #5d6873; font-size: 11px; max-width: 40ch; text-align: right;
+      }
+      #error {
+        position: fixed; left: 12px; top: 60px; max-width: 60ch;
+        padding: 10px; border-radius: 4px; white-space: pre-wrap;
+        background: #3a1416; color: #ffb4b4;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="credit">
+      Li, X., Hu, Y. et al. 2022, A high-resolution climate simulation dataset
+      for the past 540 million years, Scientific Data &middot;
+      paleogeography Scotese &amp; Wright 2018, PALEOMAP PaleoDEMs &middot;
+      continents Scotese 2008 rotation model, via Cao et al. 2018
+    </div>
+    <script type="module" src="/src/climate/main.ts"></script>
+  </body>
+</html>

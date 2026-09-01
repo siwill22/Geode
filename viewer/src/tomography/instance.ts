@@ -3,28 +3,28 @@ import {
   Vector2, Vector3, type ShaderMaterial,
 } from 'three';
 
-import { densifyPolygon, vec3ToLonLat, type LonLat } from './constants';
+import { densifyPolygon, vec3ToLonLat, type LonLat } from '../core/constants';
 import {
   createCoreSphere, createPickSphere, createSurfaceSphere,
 } from './globe';
-import { createMaskTexture } from './mask';
+import { createMaskTexture } from '../core/mask';
 import { Cutaway, removedFraction } from './cutaway';
-import { Coastlines, type CoastlineData } from './coastlines';
-import { setMaskMode } from './material';
+import { Coastlines, type CoastlineData } from '../core/coastlines';
+import { setMaskMode } from '../core/material';
 import {
   DepthSlice, DEFAULT_DEPTH_SLICE, sinkingDepthKm, canUseSinkingMode,
   type DepthSliceState,
-} from './depthSlice';
+} from '../core/depthSlice';
 import {
   FrameCache, loadManifest, makeColormapTexture, nearestFrame, physicalToEncoded,
-} from './volume';
+} from '../core/volume';
 import { BoundaryOverlay } from './boundaries';
 import { DEFAULT_ISOSURFACE, Isosurface } from './isosurface';
 import type { Rect } from './layout';
 import { UI, type SurfaceMode, type ViewState } from './ui';
 import type {
   ArchiveIndex, ColormapData, CutawayState, Manifest, VariableInfo,
-} from './types';
+} from '../core/types';
 
 /** Everything a globe needs but that is the same for every globe, loaded once. */
 export interface GlobeInstanceDeps {

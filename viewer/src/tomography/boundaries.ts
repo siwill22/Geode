@@ -1,9 +1,9 @@
 import type { PerspectiveCamera } from 'three';
 import { Vector3 } from 'three';
-import { BoundarySeries, DEFAULT_STYLE } from '../vendor/deep-time-map/js/index.js';
+import { BoundarySeries, DEFAULT_STYLE } from '../../vendor/deep-time-map/js/index.js';
 
-import { R_SURFACE } from './constants';
-import { maskAt } from './mask';
+import { R_SURFACE } from '../core/constants';
+import { maskAt } from '../core/mask';
 import type { Rect } from './layout';
 
 /**

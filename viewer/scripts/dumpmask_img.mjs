@@ -1,6 +1,6 @@
 import { build } from 'esbuild';
 import { writeFileSync } from 'node:fs';
-const r = await build({entryPoints:['src/mask.ts'],bundle:true,format:'esm',platform:'neutral',write:false,logLevel:'silent'});
+const r = await build({entryPoints:['src/core/mask.ts'],bundle:true,format:'esm',platform:'neutral',write:false,logLevel:'silent'});
 const mod = await import('data:text/javascript;base64,'+Buffer.from(r.outputFiles[0].text).toString('base64'));
 const {rasteriseMask, MASK_W, MASK_H} = mod;
 const DEG=Math.PI/180;

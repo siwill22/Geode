@@ -1,15 +1,12 @@
 import {
   Mesh, SphereGeometry, MeshBasicMaterial, ShaderMaterial, TextureLoader,
   NoColorSpace, RepeatWrapping, ClampToEdgeWrapping, LinearFilter,
-  Vector3, type Texture,
+  type Texture,
 } from 'three';
-import { passthroughColor } from './material';
-import { GEOGRAPHIC_GLSL } from './glsl/geographic';
-import { R_CMB, R_SURFACE } from './constants';
-import { PALETTE } from './palette';
-
-/** Shared key-light direction, so surface and core agree on where the sun is. */
-export const LIGHT_DIR = new Vector3(0.6, 0.45, 0.65).normalize();
+import { passthroughColor } from '../core/material';
+import { GEOGRAPHIC_GLSL } from '../core/glsl/geographic';
+import { R_CMB, R_SURFACE, LIGHT_DIR } from '../core/constants';
+import { PALETTE } from '../core/palette';
 
 const SHARED_VERT = /* glsl */ `
 varying vec3 vWorldPos;

@@ -1,3 +1,5 @@
+import { Vector3 } from 'three';
+
 /**
  * Coordinate and radius conventions. Fixed here, used everywhere.
  *
@@ -32,6 +34,12 @@ export const R_SURFACE = 1.0;
 export const R_CMB = 3480 / 6371; // 0.54615
 
 export const DEG = Math.PI / 180;
+
+/** Shared key-light direction, so every lit surface (globe, core, coastline
+ *  fill) agrees on where the sun is. Lives here rather than in tomography's
+ *  globe.ts because coastlines.ts (shared between both viewers) needs it
+ *  too, and core/ must not import from an app-specific directory. */
+export const LIGHT_DIR = new Vector3(0.6, 0.45, 0.65).normalize();
 
 /** Depth in km -> radius in world units. */
 export function depthToRadius(depthKm: number): number {

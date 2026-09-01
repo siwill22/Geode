@@ -1,8 +1,8 @@
 import GUI from 'lil-gui';
 import { MAX_STEPS, type IsosurfaceState } from './isosurface';
-import { SINKING_RATE_PRESETS, CUSTOM_PRESET_ID, type DepthSliceState } from './depthSlice';
+import { SINKING_RATE_PRESETS, CUSTOM_PRESET_ID, type DepthSliceState } from '../core/depthSlice';
 import type { Rect } from './layout';
-import type { ArchiveIndex, Manifest, VariableInfo } from './types';
+import type { ArchiveIndex, Manifest, VariableInfo } from '../core/types';
 
 export type ToolMode = 'drag' | 'draw' | 'edit';
 
@@ -116,7 +116,15 @@ export class UI {
       .onChange(() => cb.onDepthSlice());
 
     const models: Record<string, string> = {};
-    for (const m of archive.models) models[m.name] = m.id;
+    // Climate/paleogeography models have their own page (climate.html) with
+    // an interface suited to them; listing one here would just be a
+    // confusing dead end, since this panel offers no path to anything but
+    // its cutaway/isosurface/sinking-rate controls, none of which apply to a
+    // single-layer field.
+    const CLIMATE_PAGE_TYPES = new Set(['climate', 'paleogeography']);
+    for (const m of archive.models) {
+      if (!CLIMATE_PAGE_TYPES.has(m.type)) models[m.name] = m.id;
+    }
 
     // "Data": what to look at and how to colour it -- model/variable choice
     // and the colour ramp both answer that one question.

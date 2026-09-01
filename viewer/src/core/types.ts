@@ -42,7 +42,7 @@ export interface FrameInfo {
 export interface Manifest {
   id: string;
   name: string;
-  type: 'tomography' | 'convection';
+  type: 'tomography' | 'convection' | 'climate' | 'paleogeography';
   source: string;
   lon_min: number;
   lon_max: number;
@@ -72,6 +72,7 @@ export interface ArchiveIndex {
     depth_max_km: number;
   }>;
   colormaps: string;
+  /** Muller et al., used by the tomography viewer (index.html). */
   coastlines: {
     geometry: string;
     rotations: string;
@@ -80,6 +81,16 @@ export interface ArchiveIndex {
   };
   /** deep-time-map series manifest, absent if the boundaries were not exported. */
   boundaries?: string;
+  /** Scotese, used by the paleoclimate viewer (climate.html) -- the Li et al.
+   *  climate simulations and the Scotese & Wright PaleoDEMs both sit on the
+   *  Scotese plate model, so this is the one that's geographically
+   *  consistent with them, not `coastlines` above. Absent if not exported. */
+  scotese_coastlines?: {
+    geometry: string;
+    rotations: string;
+    age_min: number;
+    age_max: number;
+  };
 }
 
 export interface ColormapData {

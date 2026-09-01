@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 
 // The generated archive is served from viewer/public/archive, which is a
@@ -13,5 +14,15 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   base: process.env.VITE_BASE ?? '/',
   server: { port: 5173 },
-  build: { target: 'es2022' },
+  build: {
+    target: 'es2022',
+    // Vite's implicit single-entry build only picks up index.html; climate.html
+    // needs to be named explicitly or `vite build` never emits it.
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL('index.html', import.meta.url)),
+        climate: fileURLToPath(new URL('climate.html', import.meta.url)),
+      },
+    },
+  },
 });

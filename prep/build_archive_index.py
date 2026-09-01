@@ -61,6 +61,23 @@ def main():
         print(f"  boundaries     {b['model']:18s} {len(times)} frames "
               f"{min(times)}-{max(times)} Ma")
 
+    # Scotese continent polygons, reconstructed the same way as `coastlines`
+    # (rotate present-day geometry in the browser) but for the paleoclimate
+    # viewer -- the Li et al. climate simulations and the Scotese & Wright
+    # PaleoDEMs both sit on the Scotese plate model, so this is the
+    # geographically-consistent overlay for climate.html, not `coastlines`
+    # above (Muller, used by the tomography viewer).
+    scpath = args.archive / "scotese_coastlines" / "rotations.json"
+    if scpath.exists():
+        ages = json.loads(scpath.read_text())["ages"]
+        index["scotese_coastlines"] = {
+            "geometry": "scotese_coastlines/geometry.bin",
+            "rotations": "scotese_coastlines/rotations.json",
+            "age_min": float(min(ages)),
+            "age_max": float(max(ages)),
+        }
+        print(f"  scotese coastlines cover {min(ages):.0f}-{max(ages):.0f} Ma")
+
     out = args.archive / "archive.json"
     out.write_text(json.dumps(index, indent=2))
     print(f"\nwrote {out}  ({len(models)} models)")

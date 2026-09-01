@@ -2,10 +2,9 @@ import {
   BackSide, Mesh, ShaderMaterial, SphereGeometry, Vector2, Vector3,
   type Camera, type Data3DTexture,
 } from 'three';
-import { GEOGRAPHIC_GLSL } from './glsl/geographic';
-import { passthroughColor } from './material';
-import { LIGHT_DIR } from './globe';
-import { depthToRadius } from './constants';
+import { GEOGRAPHIC_GLSL } from '../core/glsl/geographic';
+import { passthroughColor } from '../core/material';
+import { depthToRadius, LIGHT_DIR } from '../core/constants';
 
 /**
  * The proxy sphere is scaled slightly beyond the shell it stands for.

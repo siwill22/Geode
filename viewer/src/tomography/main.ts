@@ -4,17 +4,17 @@ import {
 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-import { R_CMB, R_SURFACE, lonLatToVec3, radiusToDepth } from './constants';
-import { PALETTE } from './palette';
+import { R_CMB, R_SURFACE, lonLatToVec3, radiusToDepth } from '../core/constants';
+import { PALETTE } from '../core/palette';
 import { loadTopography } from './globe';
-import { fetchCoastlineData } from './coastlines';
+import { fetchCoastlineData } from '../core/coastlines';
 import {
   loadArchive, loadColormaps, nearestFrame,
-} from './volume';
+} from '../core/volume';
 import { GlobeInstance, type GlobeInstanceDeps } from './instance';
 import { tileGrid, type Rect } from './layout';
 import type { IsosurfaceState } from './isosurface';
-import { sinkingDepthKm, type DepthSliceState } from './depthSlice';
+import { sinkingDepthKm, type DepthSliceState } from '../core/depthSlice';
 import type { SurfaceMode } from './ui';
 
 // Where the data lives. Defaults to the archive shipped beside the app, under

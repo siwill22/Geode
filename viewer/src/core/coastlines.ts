@@ -4,8 +4,7 @@ import {
 } from 'three';
 import { passthroughColor } from './material';
 import { GEOGRAPHIC_GLSL } from './glsl/geographic';
-import { LIGHT_DIR } from './globe';
-import { R_SURFACE } from './constants';
+import { R_SURFACE, LIGHT_DIR } from './constants';
 import { PALETTE } from './palette';
 import type { CoastlineLine, RotationTable } from './types';
 

@@ -38,7 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # viewer/src/boundaries.ts imports the vendored deep-time-map library
+      # viewer/src/tomography/boundaries.ts imports the vendored deep-time-map library
       # directly, so the build fails without it -- but checkout's built-in
       # `submodules: recursive` cannot fetch it. deep-time-map is a separate
       # private repo and a workflow's GITHUB_TOKEN is scoped to this one, so

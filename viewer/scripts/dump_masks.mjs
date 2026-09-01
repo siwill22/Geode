@@ -18,7 +18,7 @@ const OUT = process.argv[2] ?? 'masks.json';
 
 // Bundle the scanline (and its three.js import) into something node can load.
 const result = await build({
-  entryPoints: ['src/mask.ts'],
+  entryPoints: ['src/core/mask.ts'],
   bundle: true,
   format: 'esm',
   platform: 'neutral',
