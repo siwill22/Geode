@@ -3,7 +3,7 @@
 **Status: implemented**, on the `multi-globe` branch, ahead of the plate
 carrée box view this was originally bundled with -- the `None` surface mode
 needed for the multi-globe work turned out to be the missing piece that made
-building the slice on its own straightforward. See `viewer/src/depthSlice.ts`
+building the slice on its own straightforward. See `viewer/src/core/depthSlice.ts`
 for the sinking-rate arithmetic and the tomography/convection guard, and
 `viewer/scripts/shoot.mjs`'s "depth slice:" section for the verification this
 doc originally specified. Left here as the design record; the plate carrée
@@ -29,7 +29,7 @@ once plate carrée lands; building it after means it needs no new decisions.
 
 ## The cheap part: the material already does this
 
-The wall/floor material in `viewer/src/material.ts` differs from a depth slice
+The wall/floor material in `viewer/src/core/material.ts` differs from a depth slice
 in exactly one line. It currently derives depth from world position:
 
 ```glsl
