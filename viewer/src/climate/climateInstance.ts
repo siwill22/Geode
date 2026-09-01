@@ -9,6 +9,7 @@ import { createMaskTexture } from '../core/mask';
 import { Coastlines, type CoastlineData } from '../core/coastlines';
 import { R_SURFACE } from '../core/constants';
 import { WindGlyphs } from '../core/windGlyphs';
+import { WindStreaks } from '../core/windStreaks';
 import {
   FrameCache, loadManifest, makeColormapTexture, nearestFrame, physicalToEncoded,
 } from '../core/volume';
@@ -31,6 +32,8 @@ const HILLSHADE_VARIABLE_ID = 'hillshade';
 export const DEFAULT_WIND_VISIBLE = true;
 export const DEFAULT_WIND_SCALE = 1;
 export const DEFAULT_WIND_DENSITY = 1;
+export type WindStyle = 'glyph' | 'streak';
+export const DEFAULT_WIND_STYLE: WindStyle = 'glyph';
 
 /**
  * The two things this globe can show, plus a shared continent-outline
@@ -81,6 +84,11 @@ export class ClimateInstance {
    *  as `overlay` always sourcing from paleogeography. Tracks BOTH age and
    *  month (unlike the overlay, which has no month axis). */
   readonly wind = new WindGlyphs();
+  /** The wind field's other display mode -- animated particle streaks
+   *  instead of static arrows, same U/V source as `wind`. Mutually
+   *  exclusive with it; see setWindStyle() and
+   *  docs/adr/0002-world-space-trail-ribbons-for-wind-flow.md. */
+  readonly windStreaks = new WindStreaks();
   coastlines: Coastlines | null = null;
 
   private sources!: Record<ClimateLayer, LayerSource>;
@@ -98,6 +106,12 @@ export class ClimateInstance {
   private windVVar!: VariableInfo;
   private windUTex: Data3DTexture | null = null;
   private windVTex: Data3DTexture | null = null;
+  private windStyle: WindStyle = DEFAULT_WIND_STYLE;
+  private windVisible = DEFAULT_WIND_VISIBLE;
+  /** Whether Wind Streak is the currently-shown mode -- tracked separately
+   *  from windStyle/windVisible so applyWindVisibility() can tell a
+   *  transition INTO visible (needs resetAll()) from staying visible. */
+  private streakActive = false;
 
   constructor(
     private readonly camera: PerspectiveCamera,
@@ -126,6 +140,8 @@ export class ClimateInstance {
     // transparency.
     this.wind.mesh.renderOrder = 4;
     this.scene.add(this.wind.mesh);
+    this.windStreaks.mesh.renderOrder = 4;
+    this.scene.add(this.windStreaks.mesh);
   }
 
   get manifest(): Manifest { return this.sources[this.activeLayer].manifest; }
@@ -182,7 +198,7 @@ export class ClimateInstance {
     if (this.hasOverlay) await this.loadOverlayFrame(0);
     if (this.hasWind) {
       await this.loadWindFrame(0);
-      this.wind.setVisible(DEFAULT_WIND_VISIBLE);
+      this.setWindVisible(DEFAULT_WIND_VISIBLE);
     }
   }
 
@@ -275,20 +291,45 @@ export class ClimateInstance {
   }
 
   setWindVisible(v: boolean): void {
-    this.wind.setVisible(v);
+    this.windVisible = v;
+    this.applyWindVisibility();
   }
 
-  /** Repose immediately from whichever U/V frame is already held -- the
-   *  scale itself carries no data, so there's nothing to fetch. */
+  /** Switch between the two wind display modes -- mutually exclusive, see
+   *  the `windStreaks` field's doc comment and ADR-0002. */
+  setWindStyle(style: WindStyle): void {
+    this.windStyle = style;
+    this.applyWindVisibility();
+  }
+
+  /** Show whichever mode (`windStyle`) is current and hide the other.
+   *  Wind Streak gets a full resetAll() the moment it TRANSITIONS from
+   *  hidden to visible (mode switch, or the "wind" checkbox turning back
+   *  on) rather than resuming whatever stale particle state it had -- see
+   *  WindStreaks.resetAll()'s own doc comment for why. */
+  private applyWindVisibility(): void {
+    const glyphVisible = this.windVisible && this.windStyle === 'glyph';
+    const streakVisible = this.windVisible && this.windStyle === 'streak';
+    this.wind.setVisible(glyphVisible);
+    if (streakVisible && !this.streakActive) this.windStreaks.resetAll();
+    this.streakActive = streakVisible;
+    this.windStreaks.setVisible(streakVisible);
+  }
+
+  /** Repose/rescale immediately from whichever U/V frame is already held --
+   *  applied to BOTH wind modes (not just the active one) so switching
+   *  style later doesn't land on a stale scale/density from whenever that
+   *  mode was last active; only the visible mode's mesh actually renders. */
   setWindScale(v: number): void {
     this.wind.setSize(v);
+    this.windStreaks.setSize(v);
     this.refreshWindGlyphs();
   }
 
-  /** Same immediacy as setWindScale() -- a new lattice, but still reposed
-   *  from data already in hand. */
+  /** Same reasoning as setWindScale(). */
   setWindDensity(v: number): void {
     this.wind.setDensity(v);
+    this.windStreaks.setDensity(v);
     this.refreshWindGlyphs();
   }
 
@@ -363,21 +404,52 @@ export class ClimateInstance {
     this.refreshWindGlyphs();
   }
 
-  /** Re-pose every wind glyph from whichever U/V textures are currently
-   *  held, sliced to the current month's plane -- see loadVolume()'s doc
-   *  comment for why a plane is a contiguous (nlat*nlon) slice at
-   *  `month * nlat * nlon` (longitude fastest, then latitude, then depth). */
-  private refreshWindGlyphs(): void {
-    if (!this.windUTex || !this.windVTex) return;
+  /** The current month's (nlat*nlon) plane of the climate model's U/V
+   *  textures -- shared by refreshWindGlyphs() (WindGlyphs) and tick()
+   *  (WindStreaks), both reading the exact same slice of the same data. See
+   *  loadVolume()'s doc comment for why a plane is a contiguous
+   *  (nlat*nlon) slice at `month * nlat * nlon` (longitude fastest, then
+   *  latitude, then depth). Null when no wind frame has loaded yet. */
+  private currentWindPlane(): {
+    uData: Uint8Array; vData: Uint8Array; nlon: number; nlat: number;
+  } | null {
+    if (!this.windUTex || !this.windVTex) return null;
     const manifest = this.sources.climate.manifest;
     const res = manifest.resolutions.find((r) => r.id === manifest.default_resolution)!;
     const plane = res.nlon * res.nlat;
     const offset = this.currentMonth * plane;
     const uData = this.windUTex.image.data as Uint8Array;
     const vData = this.windVTex.image.data as Uint8Array;
+    return {
+      uData: uData.subarray(offset, offset + plane),
+      vData: vData.subarray(offset, offset + plane),
+      nlon: res.nlon,
+      nlat: res.nlat,
+    };
+  }
+
+  /** Re-pose every wind glyph from whichever U/V plane is currently held. */
+  private refreshWindGlyphs(): void {
+    const plane = this.currentWindPlane();
+    if (!plane) return;
     this.wind.update(
-      uData.subarray(offset, offset + plane), vData.subarray(offset, offset + plane),
-      res.nlon, res.nlat, this.windUVar, this.windVVar,
+      plane.uData, plane.vData, plane.nlon, plane.nlat, this.windUVar, this.windVVar,
+    );
+  }
+
+  /** Advance the Wind Streak particle simulation by one animation frame's
+   *  worth of (real, wall-clock) time. Called every frame regardless of
+   *  whether any data changed -- unlike WindGlyphs, which only reposes on
+   *  data/control changes, Wind Streak must keep moving between them (it is
+   *  a perpetual flow along a static snapshot, see the class doc comment on
+   *  WindStreaks) or it would just sit frozen. A no-op whenever Wind Streak
+   *  isn't the active, visible mode. */
+  tick(dt: number): void {
+    if (!this.streakActive) return;
+    const plane = this.currentWindPlane();
+    if (!plane) return;
+    this.windStreaks.update(
+      dt, plane.uData, plane.vData, plane.nlon, plane.nlat, this.windUVar, this.windVVar,
     );
   }
 

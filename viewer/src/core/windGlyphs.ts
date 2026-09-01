@@ -4,7 +4,7 @@ import {
 } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { DEG, R_SURFACE, eastNorthAt, lonLatToVec3 } from './constants';
-import { texelToPhysical } from './volume';
+import { texelIndex, texelToPhysical } from './volume';
 import type { VariableInfo } from './types';
 
 // Just clear of the overlay sphere (R_SURFACE * 1.0006, see
@@ -83,19 +83,6 @@ function makeArrowGeometry(): BufferGeometry {
   head.dispose();
   if (!merged) throw new Error('windGlyphs: failed to merge shaft+head arrow geometry');
   return merged;
-}
-
-/** (lon, lat) -> the flat index into one month's (nlat, nlon) plane. Mirrors
- *  geographic.ts's volumeUVW mapping exactly (see GEOGRAPHIC_GLSL): no
- *  half-texel offset on longitude (it wraps, no duplicate column), nearest
- *  gridline-registered row on latitude. */
-function texelIndex(nlon: number, nlat: number, lon: number, lat: number): number {
-  const pLon = (lon + 180) / 360;
-  let iLon = Math.floor(pLon * nlon) % nlon;
-  if (iLon < 0) iLon += nlon;
-  const pLat = (lat + 90) / 180;
-  const jLat = Math.min(nlat - 1, Math.max(0, Math.round(pLat * (nlat - 1))));
-  return jLat * nlon + iLon;
 }
 
 const UP = new Vector3(0, 1, 0);

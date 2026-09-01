@@ -1,5 +1,5 @@
 import GUI, { type Controller } from 'lil-gui';
-import type { ClimateLayer } from './climateInstance';
+import type { ClimateLayer, WindStyle } from './climateInstance';
 import type { ColormapData, VariableInfo } from '../core/types';
 
 export interface ClimateViewState {
@@ -11,6 +11,7 @@ export interface ClimateViewState {
   clipMax: number;
   overlayOpacity: number;
   showWind: boolean;
+  windStyle: WindStyle;
   windScale: number;
   windDensity: number;
 }
@@ -23,6 +24,7 @@ export interface ClimateUICallbacks {
   onClip(lo: number, hi: number): void;
   onOverlayOpacity(v: number): void;
   onShowWind(v: boolean): void;
+  onWindStyle(style: WindStyle): void;
   onWindScale(v: number): void;
   onWindDensity(v: number): void;
 }
@@ -116,13 +118,25 @@ export class ClimateUI {
     this.gui.add(this.state, 'showWind')
       .name('wind')
       .onChange((v: boolean) => cb.onShowWind(v));
+    // Arrows (WindGlyph) and Streaks (WindStreaks) are mutually exclusive
+    // display modes for the SAME field -- see ClimateInstance.setWindStyle()
+    // and docs/adr/0002-world-space-trail-ribbons-for-wind-flow.md.
+    this.gui.add(this.state, 'windStyle', { Arrows: 'glyph', Streaks: 'streak' })
+      .name('wind style')
+      .onChange((v: WindStyle) => cb.onWindStyle(v));
     // Up to 3x -- a plain user-facing "how big", independent of wind speed
-    // (which already drives length on its own, see windGlyphs.ts).
+    // (which already drives length/colour on its own, see windGlyphs.ts and
+    // windStreaks.ts). Shared by both modes: "size" is ribbon width in
+    // Streak mode, arrow length in Glyph mode; "density" is particle count
+    // vs. lattice spacing. One pair of sliders rather than two, since
+    // ClimateInstance already applies both to whichever mode isn't visible
+    // too (see setWindScale()/setWindDensity()), so nothing is ever stale.
     this.gui.add(this.state, 'windScale', 0.5, 3, 0.1)
       .name('wind size')
       .onChange((v: number) => cb.onWindScale(v));
     // Same 0.5-3 range as size, same "1 = today's default" convention --
-    // see windGlyphs.ts's setDensity() for how this maps to a lattice step.
+    // see windGlyphs.ts's setDensity() for how this maps to a lattice step
+    // and windStreaks.ts's for how it maps to a particle count.
     this.gui.add(this.state, 'windDensity', 0.5, 3, 0.1)
       .name('wind density')
       .onChange((v: number) => cb.onWindDensity(v));

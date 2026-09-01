@@ -1,4 +1,4 @@
-import { Color, PerspectiveCamera, WebGLRenderer } from 'three';
+import { Clock, Color, PerspectiveCamera, WebGLRenderer } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 import { R_SURFACE, lonLatToVec3 } from '../core/constants';
@@ -8,7 +8,8 @@ import { loadArchive, loadColormaps } from '../core/volume';
 import type { ColormapData } from '../core/types';
 import {
   ClimateInstance, DEFAULT_OVERLAY_OPACITY, DEFAULT_WIND_VISIBLE, DEFAULT_WIND_SCALE,
-  DEFAULT_WIND_DENSITY, type ClimateInstanceDeps, type ClimateLayer,
+  DEFAULT_WIND_DENSITY, DEFAULT_WIND_STYLE, type ClimateInstanceDeps, type ClimateLayer,
+  type WindStyle,
 } from './climateInstance';
 import { ClimateUI, type ClimateViewState } from './climateUi';
 
@@ -78,7 +79,7 @@ async function boot(): Promise<void> {
   state = {
     layer: 'climate', variable: 'T', age: 0, month: 0, clipMin: 0, clipMax: 1,
     overlayOpacity: DEFAULT_OVERLAY_OPACITY, showWind: DEFAULT_WIND_VISIBLE,
-    windScale: DEFAULT_WIND_SCALE, windDensity: DEFAULT_WIND_DENSITY,
+    windStyle: DEFAULT_WIND_STYLE, windScale: DEFAULT_WIND_SCALE, windDensity: DEFAULT_WIND_DENSITY,
   };
   ui = new ClimateUI(state, {
     onLayer: async (layer) => {
@@ -97,6 +98,7 @@ async function boot(): Promise<void> {
     onClip: (lo, hi) => instance.applyClip(lo, hi),
     onOverlayOpacity: (v) => instance.setOverlayOpacity(v),
     onShowWind: (v) => instance.setWindVisible(v),
+    onWindStyle: (v) => instance.setWindStyle(v),
     onWindScale: (v) => instance.setWindScale(v),
     onWindDensity: (v) => instance.setWindDensity(v),
   });
@@ -166,6 +168,11 @@ window.__climate = {
     instance.setWindVisible(v);
     ui.refreshDisplay();
   },
+  setWindStyle: (v: WindStyle) => {
+    state.windStyle = v;
+    instance.setWindStyle(v);
+    ui.refreshDisplay();
+  },
   setWindScale: (v: number) => {
     state.windScale = v;
     instance.setWindScale(v);
@@ -202,14 +209,18 @@ window.__climate = {
     clip: [state.clipMin, state.clipMax],
     overlayOpacity: state.overlayOpacity,
     showWind: state.showWind,
+    windStyle: state.windStyle,
     windScale: state.windScale,
     windDensity: state.windDensity,
   }),
 };
 
+const clock = new Clock();
+
 function animate(): void {
   requestAnimationFrame(animate);
   controls.update();
+  instance?.tick(clock.getDelta());
   instance?.render(renderer);
 }
 

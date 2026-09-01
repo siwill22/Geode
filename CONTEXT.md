@@ -1,7 +1,8 @@
 # Geode — Domain Glossary
 
-Vocabulary for the 3D mantle volume viewer. Glossary only — no implementation
-detail, no spec content. The spec lives in `tomography-globe-viewer-spec.md`.
+Vocabulary for Geode's viewers (mantle tomography and paleoclimate). Glossary
+only — no implementation detail, no spec content. The tomography viewer's
+spec lives in `tomography-globe-viewer-spec.md`.
 
 ## Model
 
@@ -143,3 +144,25 @@ actually painted onto.
 The rasterised footprint of the Cutaway polygon, used to hide the parts of the
 surface and coastlines that fall inside it. An implementation of the Cutaway's
 effect on the surface, not a separate concept from it.
+
+## Wind Glyph
+
+One arrow instance in the paleoclimate viewer's wind vector-field overlay: a
+fixed position on a lattice, oriented and scaled each update from the wind
+(u, v) sampled there. Static — it shows the field's instantaneous shape at
+one point, not motion. See Wind Streak for the overlay's other mode.
+
+## Wind Streak
+
+The wind overlay's other display mode: particles seeded at random positions
+and advected each frame along a single, unchanging (u, v) snapshot — whichever
+month/age frame is currently selected — leaving a fading world-space trail
+ribbon tinted by local speed. Mutually exclusive with Wind Glyph; the two
+never render together.
+
+"Perpetual" in the NASA *Perpetual Ocean* sense: the flow keeps moving even
+though the field driving it is one static frame, not a time-evolving
+simulation. A particle has a finite lifetime and respawns at a new random
+position on expiry — without this, particles drift into convergence zones
+(e.g. the ITCZ) and pile up there while divergent regions empty out, so
+coverage would visibly degrade the longer the animation runs.

@@ -226,3 +226,18 @@ export function physicalToEncoded(v: VariableInfo, x: number): number {
 export function texelToPhysical(v: VariableInfo, byte: number): number {
   return v.encode_min + (byte / 255) * (v.encode_max - v.encode_min);
 }
+
+/** (lon, lat) -> the flat index into one month's (nlat, nlon) plane. Mirrors
+ *  geographic.ts's volumeUVW mapping exactly (see GEOGRAPHIC_GLSL): no
+ *  half-texel offset on longitude (it wraps, no duplicate column), nearest
+ *  gridline-registered row on latitude. Shared by every CPU-side consumer of
+ *  a wind plane's raw bytes (core/windGlyphs.ts, core/windStreaks.ts) so the
+ *  two can never drift apart on this mapping. */
+export function texelIndex(nlon: number, nlat: number, lon: number, lat: number): number {
+  const pLon = (lon + 180) / 360;
+  let iLon = Math.floor(pLon * nlon) % nlon;
+  if (iLon < 0) iLon += nlon;
+  const pLat = (lat + 90) / 180;
+  const jLat = Math.min(nlat - 1, Math.max(0, Math.round(pLat * (nlat - 1))));
+  return jLat * nlon + iLon;
+}

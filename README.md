@@ -171,6 +171,51 @@ clamping the selector into the active layer's own range on every layer
 switch and month change (`clampToActiveDepthRange`), rather than handing the
 shader a value that could be stale from the other layer.
 
+### Wind Streaks
+
+A second wind display mode, alongside Wind Glyph: animated particles
+trailing fading "comet" streaks along the flow, in the style of NASA's
+*Perpetual Ocean* — a `wind style` dropdown switches between the two.
+They're mutually exclusive, not layered together: one shows the field's
+instantaneous shape at fixed points, the other its qualitative flow, and
+showing both at once would just be noise. See
+`docs/adr/0002-world-space-trail-ribbons-for-wind-flow.md` for why trails
+are real 3D geometry glued to the globe rather than the classic
+screen-space canvas-fade technique those reference visualizations use —
+that trick assumes a view that never moves, and this globe orbits freely
+under the user's mouse.
+
+`core/windStreaks.ts` is a generic engine primitive, sibling to
+`windGlyphs.ts`: particles advect along whichever month/age's `(u, v)`
+snapshot is currently selected — a perpetual flow along a static field, not
+a live time-evolving simulation, the same thing the NASA piece itself
+visualizes — using the same `eastNorthAt()` tangent-frame math the arrows
+use, stepped forward each animation frame and renormalised back onto the
+sphere (a small-step spherical Euler integration; the flat 2D prototype
+this was modeled on can get away with plain `position += velocity * dt`
+precisely because it has no sphere to fall off of). Real wind speeds are
+imperceptibly slow at this scale — a 10 m/s wind takes about a week to
+circle the globe — so positions are advanced by a `STREAK_SPEED_SCALE`
+constant, an explicit artistic time-compression tuned by eye, the same
+thing every visualization in this genre does.
+
+Two details worth calling out because they weren't obvious until the first
+version was visibly wrong: a trail's ring buffer only committing a new
+point every *animation frame* made streaks span about 0.2 real seconds
+regardless of the particle's actual speed — trails need a slower, decoupled
+recording cadence (`RECORD_INTERVAL_S`) so a handful of stored points can
+span a couple of real seconds instead. And spawn positions must be sampled
+`lat = asin(uniform(-1, 1))`, not a uniform draw over `[-90°, 90°]` — the
+latter clusters particles toward the poles, since the ground area a degree
+of latitude covers shrinks by `cos(lat)` away from the equator.
+
+Particle state lives in flat typed arrays rather than particle objects, and
+the advection step is written as a self-contained unit inside the update
+loop — not because this needs it today (particle counts are modest and
+CPU-driven, matching `WindGlyphs`), but because it is the seam a future
+GPU (`GPUComputationRenderer`) version would replace without touching how
+positions become ribbon geometry.
+
 ### Derived variables: Annual mean, seasonality, Köppen classes
 
 Three more layers in `climate-540myr`, none pulled straight from the source:
