@@ -1,5 +1,5 @@
 import {
-  Data3DTexture, RedFormat, UnsignedByteType, LinearFilter,
+  Data3DTexture, RedFormat, UnsignedByteType, LinearFilter, NearestFilter,
   RepeatWrapping, ClampToEdgeWrapping, DataTexture, RGBAFormat,
 } from 'three';
 import type {
@@ -92,6 +92,11 @@ async function fetchVolumeBytes(path: string): Promise<Uint8Array> {
  * Data3DTexture expects for (width, height, depth). RepeatWrapping on S so that
  * profiles crossing the antimeridian interpolate across the seam; clamp on T
  * and R so the poles and the top/bottom levels do not wrap into each other.
+ *
+ * Categorical variables (e.g. Köppen class) use NearestFilter instead: their
+ * texel values are class indices, not samples of a continuous field, so
+ * blending two neighbouring classes' bytes produces a meaningless third
+ * class rather than an in-between physical value.
  */
 export async function loadVolume(
   base: string,
@@ -109,11 +114,14 @@ export async function loadVolume(
     throw new Error(`${path}: got ${buf.length} bytes, expected ${expected}`);
   }
 
+  const categorical = manifest.variables.find((v) => v.id === variableId)?.categorical ?? false;
+  const filter = categorical ? NearestFilter : LinearFilter;
+
   const tex = new Data3DTexture(buf, res.nlon, res.nlat, res.ndepth);
   tex.format = RedFormat;
   tex.type = UnsignedByteType;
-  tex.magFilter = LinearFilter;
-  tex.minFilter = LinearFilter;
+  tex.magFilter = filter;
+  tex.minFilter = filter;
   tex.wrapS = RepeatWrapping;
   tex.wrapT = ClampToEdgeWrapping;
   tex.wrapR = ClampToEdgeWrapping;
