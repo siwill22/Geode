@@ -57,7 +57,7 @@ from prep_model import (
     resample_horizontal,
 )
 
-HILLSHADE_MIN, HILLSHADE_MAX = -1.0, 1.0
+DEFAULT_HILLSHADE_CLIP_PERCENTILE = 99.5
 
 GPRM_REPO = Path.home() / 'GIT' / 'GPlatesReconstructionModel'
 
@@ -144,8 +144,11 @@ def make_geo_colormap(encode_min, encode_max, master_half_range_m=8000.0):
 
 
 def compute_hillshade(data, lon, lat, azimuth=315.0):
-    """Shaded-relief intensity from a resampled elevation grid, for the
-    overlay's greyscale render (see ClimateInstance's overlay mesh).
+    """RAW (unnormalized) shaded-relief intensity from a resampled elevation
+    grid, for the overlay's greyscale render (see ClimateInstance's overlay
+    mesh). Caller encodes across a clip range fit ONCE across the whole
+    series -- see main()'s two-pass structure -- not per age; see the two
+    bugs below for why.
 
     `data` is on the -180..180/gridline-registered grid resample_horizontal()
     already produces. grdgradient's derivative is a SLOPE, and on a lon/lat
@@ -158,17 +161,47 @@ def compute_hillshade(data, lon, lat, azimuth=315.0):
     computed intensity by ~45% at the same point -- not a rounding
     difference.
 
-    normalize='t1' is PyGMT's bounded (arctangent-based) normalization, which
-    is why the encode range below is a fixed [-1, 1] rather than a per-age
-    percentile the way prep_model.py's REVEAL ingest needs.
+    Two bugs found by comparing output across ages, both about to do with
+    the geographic longitude axis specifically:
+
+    1. **The pole rows are numerically degenerate.** At exactly +-90 deg
+       latitude, every longitude is the same physical point, so an
+       azimuthal (longitude-direction) derivative there is meaningless --
+       and grdgradient does not know this, so it computes one anyway,
+       producing a spurious value up to 1000x the magnitude of real
+       terrain slope across the WHOLE pole row (confirmed: value 6553.6 at
+       the antimeridian/south-pole corner on real data, against a real
+       max elsewhere in the same grid of ~0.4). Fixed by overwriting each
+       pole row with its immediate neighbour before differencing -- this
+       makes the pole-to-neighbour derivative exactly zero rather than
+       fabricated, which is the closest thing to correct a single grid row
+       standing in for one point can be.
+    2. **PyGMT's per-call `normalize` option contrast-stretches each grid
+       independently.** With a single dominant outlier (bug #1) skewing
+       that per-grid fit, some ages' real terrain signal was compressed to
+       a THIRD of its intended dynamic range and pushed almost entirely
+       to one sign (observed: std 0.07 and one-sided vs. std 0.28 and
+       symmetric on an adjacent age) -- the "shading present for some ages,
+       absent for others" symptom this function exists to fix. Even after
+       fixing bug #1, per-grid normalization would still make otherwise
+       comparable ages look inconsistently contrasted, since "stretch to
+       fill the range" is relative to THAT grid's own extremes. Returning
+       the raw derivative and clipping every age against ONE series-wide
+       range (chosen in main()) fixes both at once.
     """
+    fixed = data[0].copy()
+    fixed[0, :] = fixed[1, :]
+    fixed[-1, :] = fixed[-2, :]
+
     da = xr.DataArray(
-        data[0], coords={'lat': lat, 'lon': lon}, dims=('lat', 'lon'),
+        fixed, coords={'lat': lat, 'lon': lon}, dims=('lat', 'lon'),
     )
     da.gmt.registration = 0  # gridline-registered, matching resample_horizontal's grid
     da.gmt.gtype = 1         # geographic, NOT Cartesian -- see docstring
-    shaded = pygmt.grdgradient(grid=da, azimuth=azimuth, normalize='t1')
-    return np.asarray(shaded.values, dtype=np.float32)[np.newaxis, :, :]
+    raw = np.asarray(pygmt.grdgradient(grid=da, azimuth=azimuth).values, dtype=np.float32)
+    raw[0, :] = 0.0   # no meaningful azimuthal slope AT a pole
+    raw[-1, :] = 0.0
+    return raw[np.newaxis, :, :]
 
 
 def main():
@@ -186,6 +219,11 @@ def main():
     ap.add_argument('--units', default='m')
     ap.add_argument('--hillshade-id', default='hillshade')
     ap.add_argument('--hillshade-azimuth', type=float, default=315.0)
+    ap.add_argument('--hillshade-clip-percentile', type=float,
+                     default=DEFAULT_HILLSHADE_CLIP_PERCENTILE,
+                     help='symmetric percentile of |gradient|, computed once '
+                          'across the whole series, that becomes the fixed '
+                          'encode range -- see compute_hillshade()')
     ap.add_argument('--nlon', type=int, default=DEFAULT_NLON)
     ap.add_argument('--nlat', type=int, default=DEFAULT_NLAT)
     ap.add_argument('--resolution-id', default='std')
@@ -205,11 +243,10 @@ def main():
     shade_dir.mkdir(parents=True, exist_ok=True)
 
     raw_min, raw_max = np.inf, -np.inf
-    shade_min, shade_max = np.inf, -np.inf
     frame_meta = []
-    # Resampled arrays kept in memory between the two passes (109 x 181 x 360
-    # float32 =~ 28 MB per variable) -- cheap enough not to need a third disk
-    # read once the series-wide encode range is known below.
+    # Resampled/shaded arrays kept in memory between the two passes (109 x
+    # 181 x 360 float32 =~ 28 MB per variable) -- cheap enough not to need a
+    # third disk read once the series-wide encode ranges are known below.
     resampled = {}
     shaded = {}
 
@@ -229,23 +266,26 @@ def main():
         raw_min = min(raw_min, float(np.nanmin(data)))
         raw_max = max(raw_max, float(np.nanmax(data)))
 
-        shade = compute_hillshade(data, lon2, lat2, args.hillshade_azimuth)
-        shade_min = min(shade_min, float(np.nanmin(shade)))
-        shade_max = max(shade_max, float(np.nanmax(shade)))
-
         fid = f"{age:g}".replace('.', '_')
         frame_meta.append({'id': fid, 'age_ma': float(age)})
         resampled[age] = data
-        shaded[age] = shade
+        shaded[age] = compute_hillshade(data, lon2, lat2, args.hillshade_azimuth)
 
     encode_min, encode_max = raw_min, raw_max
     sea_level_t = (0.0 - encode_min) / (encode_max - encode_min)
     print(f"elevation range {encode_min:+.0f} to {encode_max:+.0f} m "
           f"(sea level at t={sea_level_t:.4f})")
-    print(f"hillshade range {shade_min:+.3f} to {shade_max:+.3f}  "
-          f"(encoding to fixed [{HILLSHADE_MIN:+.1f}, {HILLSHADE_MAX:+.1f}])")
-    if shade_min < HILLSHADE_MIN or shade_max > HILLSHADE_MAX:
-        print(f"  ** warning: hillshade range exceeds the fixed encode range -- will clip")
+
+    # ONE clip range for the whole series -- not per age -- so shading
+    # intensity is comparable across time rather than each age being
+    # independently contrast-stretched. See compute_hillshade()'s docstring
+    # (bug #2) for what per-age normalization did instead.
+    all_shade = np.concatenate([s.ravel() for s in shaded.values()])
+    shade_clip = float(np.percentile(np.abs(all_shade), args.hillshade_clip_percentile))
+    hillshade_min, hillshade_max = -shade_clip, shade_clip
+    print(f"hillshade range {float(all_shade.min()):+.3f} to {float(all_shade.max()):+.3f} raw  "
+          f"(clipping to +-{shade_clip:.3f}, the {args.hillshade_clip_percentile} "
+          f"percentile of |gradient| across all {len(ages)} ages)")
 
     total_mb = 0.0
     for age, fm in zip(ages, frame_meta):
@@ -254,7 +294,7 @@ def main():
         vol.tofile(out_path)
         total_mb += out_path.stat().st_size / 1024 / 1024
 
-        shade_vol = encode_uint8(shaded[age], HILLSHADE_MIN, HILLSHADE_MAX)
+        shade_vol = encode_uint8(shaded[age], hillshade_min, hillshade_max)
         shade_path = shade_dir / f"{fm['id']}.bin"
         shade_vol.tofile(shade_path)
         total_mb += shade_path.stat().st_size / 1024 / 1024
@@ -302,12 +342,12 @@ def main():
                 'source_var': 'z',
                 'units': 'intensity',
                 'diverging': False,
-                'encode_min': HILLSHADE_MIN,
-                'encode_max': HILLSHADE_MAX,
-                'value_min': round(shade_min, 3),
-                'value_max': round(shade_max, 3),
-                'default_clip_min': HILLSHADE_MIN,
-                'default_clip_max': HILLSHADE_MAX,
+                'encode_min': round(hillshade_min, 4),
+                'encode_max': round(hillshade_max, 4),
+                'value_min': round(float(all_shade.min()), 4),
+                'value_max': round(float(all_shade.max()), 4),
+                'default_clip_min': round(hillshade_min, 4),
+                'default_clip_max': round(hillshade_max, 4),
                 'default_colormap': 'gray',
                 'overlay_only': True,
             },
