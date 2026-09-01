@@ -34,6 +34,16 @@ export interface VariableInfo {
    *  the primary display variable -- see Manifest.vector_fields for how
    *  such a pair is declared. Absent/false for every normal variable. */
   vector_only?: boolean;
+  /** True for a variable whose encoded value is a CLASS INDEX (e.g. a
+   *  Koppen climate classification), not a continuous physical quantity --
+   *  the clip sliders are meaningless for it and the colour ramp must be
+   *  read as discrete flat blocks, not interpolated. See class_names for
+   *  the label of each index and ClimateInstance for where this drives
+   *  the shader's uSteps uniform. Absent/false for every normal variable. */
+  categorical?: boolean;
+  /** Ordered class names/abbreviations matching the encoded class indices
+   *  0..N-1, present only when categorical is true. */
+  class_names?: string[];
 }
 
 /** Declares that two scalar variables in this manifest are the components

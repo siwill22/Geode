@@ -254,6 +254,12 @@ export class ClimateInstance {
     const v = this.variable;
     this.field.material.uniforms.uClipLo.value = physicalToEncoded(v, lo);
     this.field.material.uniforms.uClipHi.value = physicalToEncoded(v, hi);
+    // Categorical variables (e.g. Koppen classes) reuse the EXISTING
+    // "discrete contour bands" uSteps uniform to turn the continuous ramp
+    // into flat class colours -- see material.ts's fragment shader and
+    // prep_colormaps.py's build_categorical_colormap(). 0 = continuous,
+    // the default for every ordinary variable.
+    this.field.material.uniforms.uSteps.value = v.categorical ? (v.class_names?.length ?? 0) : 0;
   }
 
   applyAge(age: number): void {

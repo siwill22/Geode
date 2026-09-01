@@ -24,6 +24,13 @@ Orientation is MEASURED from the sampled RGB rather than hardcoded from
 matplotlib's `_r` naming, and then asserted. Getting it backwards paints every
 slab red and every plume blue, which looks entirely plausible and is entirely
 wrong -- it has already happened twice in this project.
+
+RUN THIS BEFORE prep_paleogeography.py, NOT AFTER. This script OVERWRITES
+archive/colormaps.json wholesale (out = {} below); prep_paleogeography.py
+MERGES its own 'geo' entry into whatever is already on disk. Running this
+script second silently deletes 'geo' -- every variable using it (paleogeography
+elevation) then fails to load with "Cannot read properties of undefined
+(reading 'colors')" until prep_paleogeography.py is re-run to restore it.
 """
 
 import argparse
@@ -34,11 +41,35 @@ import numpy as np
 from matplotlib import colormaps
 
 DIVERGING = ["RdBu", "Spectral", "coolwarm", "seismic", "bwr"]
-SEQUENTIAL = ["viridis", "magma", "cividis", "gray"]
+SEQUENTIAL = ["viridis", "magma", "cividis", "gray", "plasma"]
 
 # Suffix for the warm-at-high variant. The unsuffixed name keeps its original
 # meaning (cool at high) so manifests written before this change still resolve.
 HOT_SUFFIX = "_hot"
+
+# Order MUST match prep_climate.py's KOPPEN_CLASS_NAMES exactly -- kept as a
+# literal list here rather than importing it, since prep_colormaps.py runs
+# BEFORE prep_climate.py in the pipeline (see README, "Regenerating data")
+# and colour choice for a qualitative palette is a display convention, not
+# something that needs to share code with the classification logic itself.
+# 0 = Ocean; 1-13 = the 13 land classes, tropical (blue) -> arid (red/orange)
+# -> temperate (green/yellow) -> cold (purple/teal) -> polar (grey/white).
+KOPPEN_COLORS = [
+    (25, 60, 120),     # 0  Ocean
+    (170, 170, 170),   # 1  Tundra (ET)
+    (240, 240, 240),   # 2  Frost (EF)
+    (180, 120, 200),   # 3  Cold, dry winter (Dw)
+    (140, 0, 140),     # 4  Cold, dry summer (Ds)
+    (0, 130, 130),     # 5  Cold, no dry season (Df)
+    (170, 220, 120),   # 6  Temperate, dry winter (Cw)
+    (230, 220, 0),     # 7  Temperate, dry summer (Cs)
+    (40, 160, 40),     # 8  Temperate, no dry season (Cf)
+    (220, 20, 20),     # 9  Desert (BW)
+    (245, 165, 0),     # 10 Steppe (BS)
+    (120, 200, 255),   # 11 Savannah (Aw)
+    (0, 110, 255),     # 12 Monsoon (Am)
+    (0, 0, 180),       # 13 Fully humid (Af)
+]
 
 
 def sample(mpl_name):
@@ -64,6 +95,19 @@ def orient(colors, high_end):
     if high_is_warm != (high_end == "warm"):
         colors = colors[::-1]
     return colors
+
+
+def build_categorical_colormap(colors):
+    """colors: list of N (r, g, b) tuples -> 256-entry flat-colour-block RGB
+    list. Texel i gets colors[floor(i/256*N)] -- matches how the viewer's
+    uSteps=N quantises the ramp into N discrete bands and samples each
+    band's CENTRE (see material.ts's fragment shader): every texel around a
+    sampled band centre is guaranteed to be the same flat colour regardless
+    of whether N divides 256 evenly, so LinearFilter interpolation never
+    blends two different classes together.
+    """
+    n = len(colors)
+    return [list(colors[min(n - 1, int(i * n / 256))]) for i in range(256)]
 
 
 def check(colors, high_end):
@@ -108,6 +152,10 @@ def main():
         out[base] = {"diverging": False, "high_end": None, "colors": colors}
         print(f"  {base:14s} sequential              "
               f"low={tuple(colors[0])} high={tuple(colors[-1])}")
+
+    koppen_colors = build_categorical_colormap(KOPPEN_COLORS)
+    out["koppen"] = {"diverging": False, "high_end": None, "colors": koppen_colors}
+    print(f"  {'koppen':14s} categorical ({len(KOPPEN_COLORS)} classes)")
 
     if failures:
         raise SystemExit(f"\npolarity check failed for: {', '.join(failures)}")

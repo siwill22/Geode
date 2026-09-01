@@ -27,15 +27,19 @@ export interface ClimateUICallbacks {
   onWindDensity(v: number): void;
 }
 
-const N_MONTHS = 12; // must match prep_climate.py's month axis
+const N_REAL_MONTHS = 12; // the calendar months -- must match prep_climate.py's N_MONTHS
+const N_LAYERS = N_REAL_MONTHS + 1; // + the derived Annual layer -- must match prep_climate.py's N_LAYERS
 const PLAY_INTERVAL_MS = 350;
 // Month 0 = January per the source's own coordinate metadata (checked
 // directly against the .nc file's 'month' comment, 'From January to
 // December' -- this axis has already had one inversion bug this session,
-// on age, so this one got verified rather than assumed).
+// on age, so this one got verified rather than assumed). Index 12 ("Annual")
+// is prep_climate.py's derived 13th layer, the mean of the 12 real months --
+// see add_annual_layer() there.
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December',
+  'Annual',
 ];
 
 /**
@@ -62,6 +66,7 @@ export class ClimateUI {
   private legend: HTMLDivElement;
   private legendLabel: HTMLDivElement;
   private legendCanvas: HTMLCanvasElement;
+  private legendKey: HTMLDivElement;
   /** The variable-name/units portion of the legend text, set by
    *  setVariable(); combined with monthName (below) by updateLegendLabel()
    *  since the two change independently. */
@@ -93,7 +98,7 @@ export class ClimateUI {
     this.ageCtrl = this.gui.add(this.state, 'age', 0, 540, 1)
       .name('age (Ma)')
       .onChange((v: number) => cb.onAge(v));
-    this.monthCtrl = this.gui.add(this.state, 'month', 0, N_MONTHS - 1, 1)
+    this.monthCtrl = this.gui.add(this.state, 'month', 0, N_LAYERS - 1, 1)
       .name('month')
       .onChange((v: number) => cb.onMonth(v));
     this.playCtrl = this.gui
@@ -146,7 +151,9 @@ export class ClimateUI {
     this.legendCanvas.className = 'legend-ramp';
     this.legendCanvas.width = 256;
     this.legendCanvas.height = 12;
-    this.legend.append(this.legendLabel, this.legendCanvas);
+    this.legendKey = document.createElement('div');
+    this.legendKey.className = 'legend-key';
+    this.legend.append(this.legendLabel, this.legendCanvas, this.legendKey);
     document.body.appendChild(this.legend);
   }
 
@@ -190,7 +197,10 @@ export class ClimateUI {
     if (this.playTimer) { this.stopPlay(); return; }
     this.playCtrl.name('⏸ pause');
     this.playTimer = setInterval(() => {
-      this.state.month = (this.state.month + 1) % N_MONTHS;
+      // Cycles the 12 REAL months only -- N_REAL_MONTHS, not N_LAYERS.
+      // Animating through to "Annual" mid-loop would be a strange pause,
+      // not a season.
+      this.state.month = (this.state.month + 1) % N_REAL_MONTHS;
       this.monthCtrl.updateDisplay();
       this.cb.onMonth(this.state.month);
     }, PLAY_INTERVAL_MS);
@@ -203,18 +213,28 @@ export class ClimateUI {
   }
 
   setVariable(v: VariableInfo, colormap: ColormapData[string]): void {
-    // setValue() only repaints the DOM when it differs from the bound state's
-    // CURRENT value (lil-gui's own dirty check) -- assigning state.clipMin
-    // directly first, then calling setValue() with that same number, makes
-    // the two look equal and silently skips both updateDisplay() and
-    // onChange. Let setValue() itself own the assignment.
-    this.clipMinCtrl.min(v.encode_min).max(v.encode_max).setValue(v.default_clip_min);
-    this.clipMaxCtrl.min(v.encode_min).max(v.encode_max).setValue(v.default_clip_max);
-    this.clipMinCtrl.name(`clip min (${v.units})`);
-    this.clipMaxCtrl.name(`clip max (${v.units})`);
-    this.variableLabel = `${v.name} (${v.units})`;
+    if (v.categorical) {
+      this.clipMinCtrl.hide();
+      this.clipMaxCtrl.hide();
+    } else {
+      // setValue() only repaints the DOM when it differs from the bound
+      // state's CURRENT value (lil-gui's own dirty check) -- assigning
+      // state.clipMin directly first, then calling setValue() with that
+      // same number, makes the two look equal and silently skips both
+      // updateDisplay() and onChange. Let setValue() itself own the
+      // assignment.
+      this.clipMinCtrl.min(v.encode_min).max(v.encode_max).setValue(v.default_clip_min);
+      this.clipMaxCtrl.min(v.encode_min).max(v.encode_max).setValue(v.default_clip_max);
+      this.clipMinCtrl.name(`clip min (${v.units})`);
+      this.clipMaxCtrl.name(`clip max (${v.units})`);
+      this.clipMinCtrl.show();
+      this.clipMaxCtrl.show();
+    }
+    this.variableLabel = v.categorical ? v.name : `${v.name} (${v.units})`;
     this.updateLegendLabel();
     this.paintLegend(colormap);
+    if (v.categorical && v.class_names) this.showLegendKey(v.class_names, colormap.colors);
+    else this.hideLegendKey();
   }
 
   /** Show the active month's name on both the slider itself and next to the
@@ -232,6 +252,40 @@ export class ClimateUI {
     this.legendLabel.textContent = this.monthName
       ? `${this.variableLabel} — ${this.monthName}`
       : this.variableLabel;
+  }
+
+  /** A compact swatch-and-name key for a categorical variable (e.g. Koppen
+   *  classes) -- the colour bar alone is a row of unlabelled flat bands,
+   *  not legible on its own the way a continuous ramp's min/max sliders
+   *  make a gradient legible. Swatch colour for class i is sampled at that
+   *  class's BAND CENTRE, (i+0.5)/N of the way across the 256-texel ramp --
+   *  the same point the shader itself samples for a quantised band (see
+   *  material.ts's uSteps), so the key always matches what's actually
+   *  drawn. NOT the inverse of prep_colormaps.py's texel->class assignment
+   *  (floor(texel*N/256)) -- integer floor() isn't symmetric, so inverting
+   *  it naively (floor(class*256/N)) lands one texel into the WRONG class's
+   *  block for most classes; sampling the centre avoids the boundary
+   *  entirely instead of trying to invert it. */
+  private showLegendKey(classNames: string[], colors256: [number, number, number][]): void {
+    const n = classNames.length;
+    this.legendKey.replaceChildren();
+    for (let i = 0; i < n; i++) {
+      const [r, g, b] = colors256[Math.min(255, Math.floor(((i + 0.5) * 256) / n))];
+      const row = document.createElement('div');
+      row.className = 'legend-key-row';
+      const swatch = document.createElement('span');
+      swatch.className = 'legend-key-swatch';
+      swatch.style.background = `rgb(${r}, ${g}, ${b})`;
+      const label = document.createElement('span');
+      label.textContent = classNames[i];
+      row.append(swatch, label);
+      this.legendKey.appendChild(row);
+    }
+    this.legendKey.style.display = 'grid';
+  }
+
+  private hideLegendKey(): void {
+    this.legendKey.style.display = 'none';
   }
 
   private paintLegend(cm: ColormapData[string]): void {

@@ -171,6 +171,57 @@ clamping the selector into the active layer's own range on every layer
 switch and month change (`clampToActiveDepthRange`), rather than handing the
 shader a value that could be stale from the other layer.
 
+### Derived variables: Annual mean, seasonality, Köppen classes
+
+Three more layers in `climate-540myr`, none pulled straight from the source:
+
+- **Annual** is a 13th layer on the existing month axis (index 12,
+  `prep_climate.py`'s `add_annual_layer()`) rather than a separate control —
+  every variable in this manifest already shares one generic "layer" slot
+  (month today, a single static layer for `LANDFRAC`), and an annual mean is
+  exactly what that slot was designed to carry. The mean of the 12 real
+  months for `T`/`P`/`SALB`/`U`/`V`; the same static value again for
+  `LANDFRAC`. `U`/`V`'s Annual layer is a real, useful thing on its own —
+  annual-mean circulation — and `core/windGlyphs.ts` needed no changes to
+  show it, since it already reads whatever layer is currently selected.
+- **Seasonality** (`T_RANGE`) is warmest-month-mean minus
+  coldest-month-mean temperature per grid cell — "continentality" in the
+  paleoclimate literature — computed from `T`'s own physical values (not
+  round-tripped through its lossy uint8 encoding) and, like `LANDFRAC`,
+  broadcast across every layer since a range has already collapsed the month
+  axis by definition.
+- **Köppen** is a 13-class simplified Köppen-Geiger climate classification
+  (matching Pohl et al. 2022 Table 3, not the fuller ~30-subtype Peel,
+  Finlayson & McMahon 2007 taxonomy), computed from `T` and `P` per age.
+  Rendered as flat class colours rather than a smooth gradient by reusing
+  the shader's existing `uSteps` "discrete contour bands" uniform — set
+  `uSteps` to the class count and a colormap built as flat colour blocks
+  (`prep_colormaps.py`'s `build_categorical_colormap()`) turns the same
+  continuous-ramp pipeline categorical for free, no shader changes needed.
+  `VariableInfo.categorical`/`class_names` mark it generically (any future
+  categorical variable can reuse the same path); the UI hides the clip
+  sliders and shows a swatch-and-name key instead of relying on an
+  unlabelled row of bands.
+
+  Two real bugs turned up building this, both worth recording since they're
+  easy to reintroduce. First, the working reference implementation this was
+  ported from (an internal notebook computing Köppen classes from the same
+  source data) defined its summer/winter half-year month lists as if months
+  were 1-indexed (Jan=1..Dec=12), but the source's actual `month` coordinate
+  is 0-indexed (Jan=0..Dec=11, confirmed against the .nc file's own
+  metadata) — both windows ended up shifted a month late. Second, and more
+  subtly: `encode_uint8`'s `astype(np.uint8)` *truncates* rather than
+  rounds, and the shader's band recovery *floors* — composing a truncating
+  encode with a flooring decode silently shifts every class index except 0
+  down by one band (confirmed by decoding the actual written bytes: central
+  Sahara, unambiguously desert, was being stored and rendered as "temperate,
+  no dry season"). Fixed by encoding each class at its **band centre**
+  (`class + 0.5`, not the raw integer) — a wide enough margin either side of
+  one encode step that the round trip recovers the intended class exactly
+  for all 14 classes, verified directly rather than assumed. The original
+  `--validate` spot check had read the pre-encoding array directly and so
+  never caught this; it now decodes the same way the shader does.
+
 Both layers are reconstructed against the **Scotese** plate model, not
 Müller — that is the model the climate simulation itself was run on, and
 mixing reconstruction frames the way the mantle viewer's Müller 2019/2022 pair
