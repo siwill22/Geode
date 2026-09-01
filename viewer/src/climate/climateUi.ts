@@ -11,6 +11,7 @@ export interface ClimateViewState {
   clipMax: number;
   overlayOpacity: number;
   showWind: boolean;
+  windScale: number;
 }
 
 export interface ClimateUICallbacks {
@@ -21,6 +22,7 @@ export interface ClimateUICallbacks {
   onClip(lo: number, hi: number): void;
   onOverlayOpacity(v: number): void;
   onShowWind(v: boolean): void;
+  onWindScale(v: number): void;
 }
 
 const N_MONTHS = 12; // must match prep_climate.py's month axis
@@ -92,6 +94,11 @@ export class ClimateUI {
     this.gui.add(this.state, 'showWind')
       .name('wind')
       .onChange((v: boolean) => cb.onShowWind(v));
+    // Up to 3x -- a plain user-facing "how big", independent of wind speed
+    // (which already drives length on its own, see windGlyphs.ts).
+    this.gui.add(this.state, 'windScale', 0.5, 3, 0.1)
+      .name('wind size')
+      .onChange((v: number) => cb.onWindScale(v));
     this.clipMinCtrl = this.gui.add(this.state, 'clipMin', -60, 50, 0.1)
       .name('clip min')
       .onChange(() => cb.onClip(this.state.clipMin, this.state.clipMax));

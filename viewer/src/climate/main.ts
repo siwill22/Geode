@@ -7,7 +7,7 @@ import { fetchCoastlineData } from '../core/coastlines';
 import { loadArchive, loadColormaps } from '../core/volume';
 import type { ColormapData } from '../core/types';
 import {
-  ClimateInstance, DEFAULT_OVERLAY_OPACITY, DEFAULT_WIND_VISIBLE,
+  ClimateInstance, DEFAULT_OVERLAY_OPACITY, DEFAULT_WIND_VISIBLE, DEFAULT_WIND_SCALE,
   type ClimateInstanceDeps, type ClimateLayer,
 } from './climateInstance';
 import { ClimateUI, type ClimateViewState } from './climateUi';
@@ -78,6 +78,7 @@ async function boot(): Promise<void> {
   state = {
     layer: 'climate', variable: 'T', age: 0, month: 0, clipMin: 0, clipMax: 1,
     overlayOpacity: DEFAULT_OVERLAY_OPACITY, showWind: DEFAULT_WIND_VISIBLE,
+    windScale: DEFAULT_WIND_SCALE,
   };
   ui = new ClimateUI(state, {
     onLayer: async (layer) => {
@@ -96,6 +97,7 @@ async function boot(): Promise<void> {
     onClip: (lo, hi) => instance.applyClip(lo, hi),
     onOverlayOpacity: (v) => instance.setOverlayOpacity(v),
     onShowWind: (v) => instance.setWindVisible(v),
+    onWindScale: (v) => instance.setWindScale(v),
   });
 
   ui.setStatus('loading...');
@@ -161,6 +163,11 @@ window.__climate = {
     instance.setWindVisible(v);
     ui.refreshDisplay();
   },
+  setWindScale: (v: number) => {
+    state.windScale = v;
+    instance.setWindScale(v);
+    ui.refreshDisplay();
+  },
   setCamera: (o: { lon: number; lat: number; dist: number }) => {
     const [x, y, z] = lonLatToVec3(o.lon, o.lat, o.dist);
     camera.position.set(x, y, z);
@@ -187,6 +194,7 @@ window.__climate = {
     clip: [state.clipMin, state.clipMax],
     overlayOpacity: state.overlayOpacity,
     showWind: state.showWind,
+    windScale: state.windScale,
   }),
 };
 

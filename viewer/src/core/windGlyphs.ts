@@ -103,6 +103,10 @@ export class WindGlyphs {
   private readonly lattice = buildLattice();
   private readonly tmp = new Object3D();
   private readonly dir = new Vector3();
+  /** Uniform multiplier on top of the speed-driven length (and, unlike
+   *  speed, the thickness too) -- a user-facing "how big" control,
+   *  independent of the physical wind magnitude. See setSize(). */
+  private sizeScale = 1;
 
   constructor() {
     const geo = makeArrowGeometry();
@@ -113,6 +117,14 @@ export class WindGlyphs {
 
   setVisible(v: boolean): void {
     this.mesh.visible = v;
+  }
+
+  /** Set the size multiplier applied on the NEXT update() -- does not repose
+   *  existing instances itself, since it has no data of its own to repose
+   *  them from (see ClimateInstance.setWindScale, which follows this with a
+   *  refreshWindGlyphs() using whatever U/V frame is already held). */
+  setSize(scale: number): void {
+    this.sizeScale = scale;
   }
 
   /** uData/vData: ONE month's plane, nlon*nlat bytes each, lon-fastest --
@@ -147,9 +159,12 @@ export class WindGlyphs {
       const [px, py, pz] = lonLatToVec3(lon, lat, GLYPH_R);
       this.tmp.position.set(px, py, pz);
       this.tmp.quaternion.setFromUnitVectors(UP, this.dir);
-      const len = MIN_ARROW_LEN
-        + (Math.min(speed, SPEED_CLIP_MS) / SPEED_CLIP_MS) * (MAX_ARROW_LEN - MIN_ARROW_LEN);
-      this.tmp.scale.set(1, len, 1);
+      const len = (MIN_ARROW_LEN
+        + (Math.min(speed, SPEED_CLIP_MS) / SPEED_CLIP_MS) * (MAX_ARROW_LEN - MIN_ARROW_LEN))
+        * this.sizeScale;
+      // Thickness scales too (not just length): a bigger arrow should look
+      // like the same arrow zoomed in, not a longer thin one.
+      this.tmp.scale.set(this.sizeScale, len, this.sizeScale);
       this.tmp.updateMatrix();
       this.mesh.setMatrixAt(i, this.tmp.matrix);
     }

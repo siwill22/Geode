@@ -29,6 +29,7 @@ const OVERLAY_R = R_SURFACE * 1.0006;
 export const DEFAULT_OVERLAY_OPACITY = 0.4;
 const HILLSHADE_VARIABLE_ID = 'hillshade';
 export const DEFAULT_WIND_VISIBLE = true;
+export const DEFAULT_WIND_SCALE = 1;
 
 /**
  * The two things this globe can show, plus a shared continent-outline
@@ -268,6 +269,13 @@ export class ClimateInstance {
 
   setWindVisible(v: boolean): void {
     this.wind.setVisible(v);
+  }
+
+  /** Repose immediately from whichever U/V frame is already held -- the
+   *  scale itself carries no data, so there's nothing to fetch. */
+  setWindScale(v: number): void {
+    this.wind.setSize(v);
+    this.refreshWindGlyphs();
   }
 
   /** Select a month (0-11) on the shared "layer axis" -- see prep_climate.py.
