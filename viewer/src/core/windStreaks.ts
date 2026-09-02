@@ -147,12 +147,8 @@ export class WindStreaks {
 
     // Seed every slot up front (not lazily on density increase -- it's
     // cheap and this way setDensity() never needs a special first-activation
-    // branch). Ages are randomised on this COLD START only, so respawns
-    // stay staggered across the whole particle set forever after; a natural
-    // mid-simulation respawn always resets to the FULL lifetime, which
-    // preserves the phase offset each particle was seeded with rather than
-    // resynchronising it. Without the initial randomisation every particle
-    // would respawn in the same visible pulse every PARTICLE_LIFETIME_S.
+    // branch). bulk=true here for the same reason as resetAll(): see
+    // respawn()'s doc comment.
     for (let p = 0; p < MAX_PARTICLES; p++) this.respawn(p, true);
   }
 
@@ -170,25 +166,53 @@ export class WindStreaks {
     this.geometry.setDrawRange(0, this.activeCount * INDICES_PER_PARTICLE);
   }
 
-  /** Respawn every active particle at a fresh random position with a full
-   *  lifetime -- used when the mode becomes visible again after being
-   *  hidden, so stale state (and the large dt that hiding accumulates)
-   *  never produces a single huge, wrong-looking jump on the next update(). */
+  /** Respawn every active particle at a fresh random position -- used when
+   *  the mode becomes visible again after being hidden, so stale state (and
+   *  the large dt that hiding accumulates) never produces a single huge,
+   *  wrong-looking jump on the next update(). bulk=true, same reasoning as
+   *  the constructor's cold-start seeding -- see respawn()'s doc comment. */
   resetAll(): void {
-    for (let p = 0; p < this.activeCount; p++) this.respawn(p, false);
+    for (let p = 0; p < this.activeCount; p++) this.respawn(p, true);
   }
 
   /** Uniform-area random respawn: `lat` must be drawn via asin(uniform(-1,1)),
    *  NOT a uniform draw over [-90, 90] -- the latter clusters samples toward
    *  the poles, because the area a degree of latitude covers shrinks by
-   *  cos(lat) away from the equator. `randomiseAge` is true only for the
-   *  one-time cold-start seeding in the constructor; see its comment there. */
-  private respawn(p: number, randomiseAge: boolean): void {
+   *  cos(lat) away from the equator.
+   *
+   *  `age` is NEVER reset to one fixed value, in either branch -- an
+   *  earlier version reset every ordinary respawn to exactly
+   *  PARTICLE_LIFETIME_S, on the reasoning that only the very first
+   *  cold-start seeding needed randomisation and a fixed reset afterwards
+   *  would preserve each particle's already-staggered phase forever. That
+   *  reasoning missed a real failure mode: a single large `dt` in one
+   *  frame (a layer/age/variable switch stalling the main thread for a
+   *  moment) can push MANY particles' remaining age below zero in the SAME
+   *  tick. Resetting all of them to the same fixed value phase-locked that
+   *  whole cohort together -- and since every particle shares the same
+   *  `dt` on every later tick, they stayed locked forever after, visibly
+   *  worse the longer the page ran as more cohorts got caught by more
+   *  hitches. resetAll() had the same bug in its own right: switching Wind
+   *  Streak back to visible reset the ENTIRE active set to one fixed age
+   *  at once, no hitch required.
+   *
+   *  `bulk` (cold-start seeding and resetAll(), reseeding a large
+   *  population that needs to look staggered from frame one) draws
+   *  uniformly over the FULL lifetime. An ordinary mid-simulation respawn
+   *  (one particle at a time, already part of an established, staggered
+   *  population) instead jitters +-30% around the full lifetime, not the
+   *  full [0, lifetime) spread -- that keeps the mean respawn rate/trail
+   *  quality where it was tuned, while still self-healing: even particles
+   *  caught together by the same dt-spike or resetAll() immediately
+   *  re-scatter into different phases rather than staying locked. */
+  private respawn(p: number, bulk: boolean): void {
     const lat = Math.asin(Math.random() * 2 - 1) / DEG;
     const lon = Math.random() * 360 - 180;
     this.lat[p] = lat;
     this.lon[p] = lon;
-    this.age[p] = randomiseAge ? PARTICLE_LIFETIME_S * Math.random() : PARTICLE_LIFETIME_S;
+    this.age[p] = bulk
+      ? PARTICLE_LIFETIME_S * Math.random()
+      : PARTICLE_LIFETIME_S * (0.7 + 0.6 * Math.random());
     this.speed[p] = 0;
 
     const [x, y, z] = lonLatToVec3(lon, lat, RIBBON_R);
