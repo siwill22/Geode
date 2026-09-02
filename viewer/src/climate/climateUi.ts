@@ -5,6 +5,11 @@ import type { ColormapData, ResolutionInfo, VariableInfo } from '../core/types';
 
 export interface ClimateViewState {
   layer: ClimateLayer;
+  /** Which registered model of type 'climate' backs the 'climate' layer --
+   *  see ClimateInstance's `activeClimateModelId`/setClimateModel(). Only
+   *  meaningful while `layer === 'climate'`; a dropdown of one (today: just
+   *  Li et al.) hides itself, see ClimateUI.setClimateModels(). */
+  climateModelId: string;
   variable: string;
   /** Which of the paleogeography source's `manifest.resolutions` entries is
    *  active -- see ClimateInstance's `activeResolution`/`setResolution()`.
@@ -25,6 +30,7 @@ export interface ClimateViewState {
 
 export interface ClimateUICallbacks {
   onLayer(layer: ClimateLayer): void;
+  onClimateModel(id: string): void;
   onVariable(id: string): void;
   onResolution(id: string): void;
   onAge(age: number): void;
@@ -64,6 +70,7 @@ const MONTH_NAMES = [
 export class ClimateUI {
   readonly gui: GUI;
   private layerCtrl: Controller;
+  private climateModelCtrl: Controller;
   private resolutionCtrl: Controller;
   private variableCtrl: Controller;
   private ageCtrl: Controller;
@@ -72,12 +79,27 @@ export class ClimateUI {
   private playTimer: ReturnType<typeof setInterval> | null = null;
   private clipMinCtrl: Controller;
   private clipMaxCtrl: Controller;
+  private showWindCtrl: Controller;
+  private windStyleCtrl: Controller;
+  private windScaleCtrl: Controller;
+  private windDensityCtrl: Controller;
+  /** How many models of type 'climate' are registered -- the climate-model
+   *  dropdown hides itself when there's only one, same "dropdown of one is
+   *  a dead control" precedent as setResolutions(). Set by
+   *  setClimateModels(), read by updateClimateModelVisibility(). */
+  private climateModelCount = 1;
   private status: HTMLDivElement;
   private timeInfo: HTMLDivElement;
   private legend: HTMLDivElement;
   private legendLabel: HTMLDivElement;
   private legendCanvas: HTMLCanvasElement;
   private legendKey: HTMLDivElement;
+  /** Data-source attribution, bottom-right of this instance's own tile --
+   *  see setCredit(), driven by ClimateInstance.updateCredit() from the
+   *  ACTIVE model(s)' own manifest.source, not a fixed string. Used to be
+   *  static HTML in climate.html naming only Li et al., which went stale
+   *  the moment a second climate model existed. */
+  private credit: HTMLDivElement;
   /** Positioned per-instance by setRect(); anchors the panel's top-right
    *  corner, same trick as tomography/ui.ts's UI class -- lil-gui's own
    *  auto-placement is a single fixed panel pinned to the window's top-right
@@ -113,6 +135,16 @@ export class ClimateUI {
       .add(this.state, 'layer', { Climate: 'climate', Paleogeography: 'paleogeography' })
       .name('layer')
       .onChange((v: ClimateLayer) => cb.onLayer(v));
+    // Options populated once boot() knows every registered climate-type
+    // model -- see setClimateModels(). Layer-gated (unlike resolutionCtrl
+    // below): which CLIMATE model is selected is meaningless while
+    // paleogeography is the primary field, so this hides whenever
+    // `layer !== 'climate'`, on top of the "only one registered" hide --
+    // see updateClimateModelVisibility(), called from setLayerVariables().
+    this.climateModelCtrl = this.gui
+      .add(this.state, 'climateModelId', {})
+      .name('climate model')
+      .onChange((v: string) => cb.onClimateModel(v));
     // Options populated once boot() knows the paleogeography source's own
     // resolutions -- see setResolutions(). Hidden entirely when there's only
     // one (a dropdown of one is a dead control, same precedent as the
@@ -143,16 +175,17 @@ export class ClimateUI {
     this.gui.add(this.state, 'overlayOpacity', 0, 0.8, 0.01)
       .name('relief overlay')
       .onChange((v: number) => cb.onOverlayOpacity(v));
-    // Always visible, same reasoning as the overlay slider above -- wind is
-    // always sourced from the climate model regardless of active layer, so
-    // there's no layer where it has nothing to show.
-    this.gui.add(this.state, 'showWind')
+    // Visible whenever the ACTIVE climate model has a wind field -- not
+    // every one does (Pohl doesn't), unlike when this was written, when
+    // "the climate model" meant exactly one fixed thing. See
+    // setWindAvailable(), called from ClimateInstance.resolveWind().
+    this.showWindCtrl = this.gui.add(this.state, 'showWind')
       .name('wind')
       .onChange((v: boolean) => cb.onShowWind(v));
     // Arrows (WindGlyph) and Streaks (WindStreaks) are mutually exclusive
     // display modes for the SAME field -- see ClimateInstance.setWindStyle()
     // and docs/adr/0002-world-space-trail-ribbons-for-wind-flow.md.
-    this.gui.add(this.state, 'windStyle', { Arrows: 'glyph', Streaks: 'streak' })
+    this.windStyleCtrl = this.gui.add(this.state, 'windStyle', { Arrows: 'glyph', Streaks: 'streak' })
       .name('wind style')
       .onChange((v: WindStyle) => cb.onWindStyle(v));
     // Up to 3x -- a plain user-facing "how big", independent of wind speed
@@ -162,13 +195,13 @@ export class ClimateUI {
     // vs. lattice spacing. One pair of sliders rather than two, since
     // ClimateInstance already applies both to whichever mode isn't visible
     // too (see setWindScale()/setWindDensity()), so nothing is ever stale.
-    this.gui.add(this.state, 'windScale', 0.5, 3, 0.1)
+    this.windScaleCtrl = this.gui.add(this.state, 'windScale', 0.5, 3, 0.1)
       .name('wind size')
       .onChange((v: number) => cb.onWindScale(v));
     // Same 0.5-3 range as size, same "1 = today's default" convention --
     // see windGlyphs.ts's setDensity() for how this maps to a lattice step
     // and windStreaks.ts's for how it maps to a particle count.
-    this.gui.add(this.state, 'windDensity', 0.5, 3, 0.1)
+    this.windDensityCtrl = this.gui.add(this.state, 'windDensity', 0.5, 3, 0.1)
       .name('wind density')
       .onChange((v: number) => cb.onWindDensity(v));
     this.clipMinCtrl = this.gui.add(this.state, 'clipMin', -60, 50, 0.1)
@@ -209,6 +242,10 @@ export class ClimateUI {
     this.legend.append(this.legendLabel, this.legendCanvas, this.legendKey);
     document.body.appendChild(this.legend);
 
+    this.credit = document.createElement('div');
+    this.credit.className = 'credit';
+    document.body.appendChild(this.credit);
+
     this.applyRect();
   }
 
@@ -224,12 +261,14 @@ export class ClimateUI {
    *  PICKABLE variable to show (paleogeography's 'elevation' -- its
    *  'hillshade' is overlay_only, filtered out here rather than offered as a
    *  second primary choice: it exists to drive the overlay mesh, not to be
-   *  selected on its own; similarly climate's 'U'/'V' are vector_only --
-   *  they back the wind glyph field, not a colour-mapped display of their
-   *  own). A dropdown of one and a season slider with nothing to season are
-   *  dead controls, not useful disabled ones. */
-  setLayerVariables(variables: VariableInfo[]): void {
-    const pickable = variables.filter((v) => !v.overlay_only && !v.vector_only);
+   *  selected on its own; similarly climate's 'U'/'V' are vector_only, and
+   *  a continental-only model's own landmask is mask_only -- none of these
+   *  back a colour-mapped display of their own). A dropdown of one and a
+   *  season slider with nothing to season are dead controls, not useful
+   *  disabled ones. Also updates the climate-model dropdown's visibility --
+   *  see updateClimateModelVisibility() -- since that's layer-gated too. */
+  setLayerVariables(variables: VariableInfo[], layer: ClimateLayer): void {
+    const pickable = variables.filter((v) => !v.overlay_only && !v.vector_only && !v.mask_only);
     if (pickable.length <= 1) {
       this.variableCtrl.hide();
       this.monthCtrl.hide();
@@ -237,15 +276,47 @@ export class ClimateUI {
       if (this.playTimer) this.stopPlay();
       this.monthName = null;
       this.updateLegendLabel();
-      return;
+    } else {
+      const choices: Record<string, string> = {};
+      for (const v of pickable) choices[v.name] = v.id;
+      this.variableCtrl.options(choices);
+      this.variableCtrl.show();
+      this.monthCtrl.show();
+      this.playCtrl.show();
+      this.setMonth(this.state.month);
     }
+    this.updateClimateModelVisibility(layer);
+  }
+
+  /** Populate the climate-model dropdown from every registered model of
+   *  type 'climate' -- called once at boot, mirrors setResolutions()'s
+   *  show/hide-when-one precedent, plus its own layer-gating (see
+   *  updateClimateModelVisibility()). Labelled by the model's own archive
+   *  name (e.g. "Li et al. 2022 Paleoclimate"), not its id. */
+  setClimateModels(models: { id: string; name: string }[]): void {
+    this.climateModelCount = models.length;
     const choices: Record<string, string> = {};
-    for (const v of pickable) choices[v.name] = v.id;
-    this.variableCtrl.options(choices);
-    this.variableCtrl.show();
-    this.monthCtrl.show();
-    this.playCtrl.show();
-    this.setMonth(this.state.month);
+    for (const m of models) choices[m.name] = m.id;
+    this.climateModelCtrl.options(choices);
+    this.updateClimateModelVisibility(this.state.layer);
+  }
+
+  private updateClimateModelVisibility(layer: ClimateLayer): void {
+    if (layer === 'climate' && this.climateModelCount > 1) this.climateModelCtrl.show();
+    else this.climateModelCtrl.hide();
+  }
+
+  /** Show/hide the wind controls as a group -- not every climate model has
+   *  a wind field (Pohl doesn't), unlike when this panel was designed
+   *  around exactly one climate model that always did. Independent of
+   *  `layer`: showing a dead wind control while paleogeography happens to
+   *  be the primary field would be no better than while climate is. */
+  setWindAvailable(has: boolean): void {
+    const action = has ? 'show' : 'hide';
+    this.showWindCtrl[action]();
+    this.windStyleCtrl[action]();
+    this.windScaleCtrl[action]();
+    this.windDensityCtrl[action]();
   }
 
   /** Populate the resolution dropdown from the paleogeography source's own
@@ -394,6 +465,20 @@ export class ClimateUI {
     this.timeInfo.style.display = msg ? 'block' : 'none';
   }
 
+  setCredit(text: string): void {
+    this.credit.textContent = text;
+  }
+
+  /** Hides this instance's WHOLE legend (label, ramp, and any class key) --
+   *  used by main.ts's refreshLegendVisibility() to suppress every globe's
+   *  legend but one when more than one is showing the SAME categorical
+   *  variable at once (today: only Koppen). Idempotent and safe to call with
+   *  `true` even when already visible -- setVariable()/setLayerVariables()
+   *  don't need to know or care that this was ever hidden. */
+  setLegendVisible(visible: boolean): void {
+    this.legend.style.display = visible ? 'block' : 'none';
+  }
+
   /** Move this instance's panel, legend, status and time-info onto a new
    *  tile, in CSS pixels. Called once at boot with the full window and
    *  again whenever the globe grid is relaid out -- mirrors
@@ -417,6 +502,10 @@ export class ClimateUI {
     this.status.style.bottom = `${innerHeight - (y + height) + 12}px`;
     this.timeInfo.style.left = `${x + 12}px`;
     this.timeInfo.style.bottom = `${innerHeight - (y + height) + 44}px`;
+    // Bottom-right -- the same corner the original static #credit div in
+    // climate.html used, back when there was only ever one thing to credit.
+    this.credit.style.right = `${innerWidth - (x + width) + 12}px`;
+    this.credit.style.bottom = `${innerHeight - (y + height) + 8}px`;
   }
 
   dispose(): void {
@@ -426,5 +515,6 @@ export class ClimateUI {
     this.status.remove();
     this.timeInfo.remove();
     this.legend.remove();
+    this.credit.remove();
   }
 }

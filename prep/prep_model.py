@@ -281,11 +281,20 @@ def fill_nan(data):
     return data, total
 
 
-def _interp_axis(y, x, xnew, axis):
-    """Linear interpolation along one axis of an N-d array, vectorised."""
+def _interp_axis(y, x, xnew, axis, kind="linear"):
+    """Interpolation along one axis of an N-d array, vectorised.
+
+    `kind='nearest'` matters for a precomputed CLASS-INDEX field (e.g.
+    Pohl et al.'s own Koppen classification, ingested as-is rather than
+    recomputed -- see prep_pohl.py): linearly interpolating class codes
+    fabricates in-between classes that don't exist, the same reasoning
+    material.ts's shader already applies via NearestFilter when sampling a
+    categorical variable's GPU texture. Every existing caller keeps its
+    default 'linear' behaviour unchanged.
+    """
     from scipy.interpolate import interp1d
 
-    f = interp1d(x, y, axis=axis, kind="linear",
+    f = interp1d(x, y, axis=axis, kind=kind,
                  bounds_error=False, fill_value=(
                      np.take(y, 0, axis=axis), np.take(y, -1, axis=axis)))
     return f(xnew).astype(np.float32)
@@ -301,8 +310,11 @@ def resample_depth(data, depth, ndepth, dmin, dmax):
     return _interp_axis(data, depth, target, axis=0), target
 
 
-def resample_horizontal(data, lon, lat, nlon, nlat):
-    """Decimate/interpolate onto a regular nlon x nlat equirectangular grid."""
+def resample_horizontal(data, lon, lat, nlon, nlat, kind="linear"):
+    """Decimate/interpolate onto a regular nlon x nlat equirectangular grid.
+
+    `kind='nearest'` -- see _interp_axis's docstring -- for categorical data.
+    """
     # Target longitudes exclude the +180 duplicate (the texture wraps on S);
     # latitudes include both poles.
     tlon = np.linspace(-180.0, 180.0, nlon, endpoint=False)
@@ -311,13 +323,13 @@ def resample_horizontal(data, lon, lat, nlon, nlat):
         return data, lon, lat
 
     if len(lat) != nlat:
-        data = _interp_axis(data, lat, tlat, axis=1)
+        data = _interp_axis(data, lat, tlat, axis=1, kind=kind)
     if len(lon) != nlon:
         # Pad by one wrapped column so targets past the last source longitude
         # interpolate across the seam rather than clamping to it.
         lon_p = np.append(lon, lon[0] + 360.0)
         data_p = np.concatenate([data, data[:, :, :1]], axis=2)
-        data = _interp_axis(data_p, lon_p, tlon, axis=2)
+        data = _interp_axis(data_p, lon_p, tlon, axis=2, kind=kind)
     return data, tlon, tlat
 
 

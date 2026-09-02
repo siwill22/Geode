@@ -44,6 +44,12 @@ export interface VariableInfo {
   /** Ordered class names/abbreviations matching the encoded class indices
    *  0..N-1, present only when categorical is true. */
   class_names?: string[];
+  /** True for a variable that exists only to drive a per-texel validity
+   *  mask (land=1/ocean=0 for a continental-only climate run) rather than
+   *  being picked as the primary display variable or shown in a legend --
+   *  same idea as overlay_only, see Manifest.mask_variable for how the
+   *  active one is declared. Absent/false for every normal variable. */
+  mask_only?: boolean;
 }
 
 /** Declares that two scalar variables in this manifest are the components
@@ -91,6 +97,11 @@ export interface Manifest {
   default_variable: string;
   variables: VariableInfo[];
   vector_fields?: VectorFieldInfo[];
+  /** Which variable (marked mask_only) is this model's own land/ocean
+   *  validity mask, for a continental-only run -- absent for a model with
+   *  full global coverage (nothing to mask). See core/material.ts's
+   *  uValidMask and climate/climateInstance.ts's landmask fetch. */
+  mask_variable?: string;
 }
 
 export interface ArchiveIndex {

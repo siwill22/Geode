@@ -43,6 +43,7 @@ ${GEOGRAPHIC_GLSL}
 uniform sampler3D uVolume;
 uniform sampler2D uColormap;
 uniform sampler2D uMask;
+uniform sampler2D uValidMask;
 uniform vec3  uGrid;         // nlon, nlat, ndepth
 uniform float uDepthMin;     // km -- the MODEL's valid range, not the mantle's
 uniform float uDepthMax;
@@ -52,6 +53,7 @@ uniform float uClipLo;       // encoded 0..1 space
 uniform float uClipHi;
 uniform vec3  uNoDataColor;
 uniform float uUseMask;      // 0 = ignore, 1 = keep inside cut, -1 = keep outside
+uniform float uUseValidMask; // 0 = ignore, 1 = discard where uValidMask < 0.5
 uniform float uOpacity;
 uniform float uSteps;   // 0 = continuous ramp, else this many discrete bands
 uniform float uDebug;   // 0 off, 1 pDep, 2 lat, 3 raw sample
@@ -66,6 +68,17 @@ void main() {
     // uUseMask > 0: this surface exists only inside the cut (floor).
     // uUseMask < 0: this surface exists only outside it (globe surface).
     if (uUseMask > 0.0 ? (m < 0.5) : (m > 0.5)) discard;
+  }
+
+  // A per-texel validity mask, for a model that doesn't cover the whole
+  // sphere (e.g. a continental-only climate run) -- distinct from uMask
+  // above (a static cutaway polygon): this one is per-age data, sourced the
+  // same way as the primary field itself. Same "say so, don't fabricate"
+  // principle as the no-data-depth branch below, just along the horizontal
+  // axis instead of the vertical one. See climateInstance.ts.
+  if (uUseValidMask > 0.5) {
+    float valid = texture(uValidMask, geographicToUV(ll)).r;
+    if (valid < 0.5) discard;
   }
 
   // A depth slice supplies its depth directly instead of deriving it from
@@ -127,6 +140,7 @@ export function createVolumeSurfaceMaterial(): ShaderMaterial {
       uVolume: { value: null as Data3DTexture | null },
       uColormap: { value: null as Texture | null },
       uMask: { value: null as Texture | null },
+      uValidMask: { value: null as Texture | null },
       uGrid: { value: new Vector3(360, 181, 192) },
       uDepthMin: { value: 0 },
       uDepthMax: { value: 2840 },
@@ -136,6 +150,7 @@ export function createVolumeSurfaceMaterial(): ShaderMaterial {
       uClipHi: { value: 1 },
       uNoDataColor: { value: passthroughColor(0x555555) },
       uUseMask: { value: 0 },
+      uUseValidMask: { value: 0 },
       uOpacity: { value: 1 },
       uSteps: { value: 0 },
       uDebug: { value: 0 },
@@ -146,4 +161,13 @@ export function createVolumeSurfaceMaterial(): ShaderMaterial {
 export function setMaskMode(mat: ShaderMaterial, mode: MaskMode): void {
   mat.uniforms.uUseMask.value =
     mode === 'none' ? 0 : mode === 'inside' ? 1 : -1;
+}
+
+/** Set/clear this material's per-texel validity mask -- see uValidMask's
+ *  shader-side doc comment. `texture` null both disables the check and
+ *  clears the uniform, so a stale texture from a previously-active model
+ *  never lingers bound once masking turns off. */
+export function setValidMask(mat: ShaderMaterial, texture: Texture | null): void {
+  mat.uniforms.uValidMask.value = texture;
+  mat.uniforms.uUseValidMask.value = texture ? 1 : 0;
 }

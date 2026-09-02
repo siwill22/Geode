@@ -74,8 +74,10 @@
         border: 1px solid #3a4048; border-radius: 4px;
         padding: 6px 12px; cursor: pointer;
       }
-      #credit {
-        position: fixed; right: 12px; bottom: 8px;
+      /* Positioned per-instance in JS (ClimateUI.setRect()), like .status/
+       * .timeinfo/.legend above -- see ClimateUI.setCredit(). */
+      .credit {
+        position: fixed;
         color: #5d6873; font-size: 11px; max-width: 40ch; text-align: right;
       }
       #error {
@@ -90,12 +92,6 @@
       <button id="add-globe">+ Add globe</button>
       <label class="sync-toggle"><input type="checkbox" id="sync-age" /> sync time</label>
       <label class="sync-toggle"><input type="checkbox" id="sync-month" /> sync month</label>
-    </div>
-    <div id="credit">
-      Li, X., Hu, Y. et al. 2022, A high-resolution climate simulation dataset
-      for the past 540 million years, Scientific Data &middot;
-      paleogeography Scotese &amp; Wright 2018, PALEOMAP PaleoDEMs &middot;
-      continents Scotese 2008 rotation model, via Cao et al. 2018
     </div>
     <script type="module" src="/src/climate/main.ts"></script>
   </body>

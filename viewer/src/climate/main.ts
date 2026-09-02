@@ -46,7 +46,10 @@ controls.enablePan = false;
 const instances: ClimateInstance[] = [];
 let layoutRects: Rect[] = [];
 let deps: ClimateInstanceDeps;
-let climateModelId = '';
+// Every registered model of type 'climate' (plural: unlike a single fixed
+// climate simulation, `view.climateModelId` now lets each instance pick
+// among them) -- see ClimateInstance.boot()'s own plural signature.
+let climateModelIds: string[] = [];
 let paleogeographyModelId = '';
 
 /** Whichever globe was most recently clicked -- used only as the
@@ -115,11 +118,36 @@ function relayout(): void {
   instances.forEach((inst, i) => inst.applyLayout(layoutRects[i]));
 }
 
+/** When two or more globes show the SAME categorical variable at once
+ *  (today: only Koppen -- every model that has one uses the identical
+ *  class list and 'koppen' colormap, see prep_bridge.py's reuse of
+ *  prep_climate.py's own compute_koppen()/KOPPEN_CLASS_NAMES), duplicate
+ *  legends add nothing -- so only the FIRST such globe (in `instances`
+ *  order, i.e. "Globe 1" before "Globe 2") keeps its legend; every other
+ *  categorical-showing globe hides its own. Non-categorical legends are
+ *  never touched. Recomputed from scratch on every call rather than
+ *  tracking a delta -- cheap for a handful of globes, and self-correcting
+ *  (a globe that stops showing Koppen, or is removed, un-hides whichever
+ *  globe is now first without any extra bookkeeping). Called from
+ *  ClimateInstance's onDisplayChange hook (variable/layer/climate-model
+ *  changed) and from addInstance()/removeInstance() (the SET of globes
+ *  itself changed). */
+function refreshLegendVisibility(): void {
+  let shownCategorical = false;
+  for (const inst of instances) {
+    const isCategorical = !!inst.variable?.categorical;
+    const visible = !isCategorical || !shownCategorical;
+    inst.ui.setLegendVisible(visible);
+    if (isCategorical && visible) shownCategorical = true;
+  }
+}
+
 function createInstance(label: string): ClimateInstance {
   return new ClimateInstance(camera, deps, {
     onRemove: (self) => removeInstance(self),
     onAgeChange: (self) => broadcastAge(self),
     onMonthChange: (self) => broadcastMonth(self),
+    onDisplayChange: () => refreshLegendVisibility(),
   }, label);
 }
 
@@ -150,7 +178,7 @@ async function addInstance(): Promise<void> {
   const inst = createInstance(`Globe ${instances.length + 1}`);
   instances.push(inst);
   relayout();
-  await inst.boot(climateModelId, paleogeographyModelId);
+  await inst.boot(climateModelIds, paleogeographyModelId);
   // A globe added while a sync is active joins the synced group immediately,
   // rather than booting at age 0 / month 0 and waiting for the next drag
   // elsewhere to catch it up.
@@ -168,6 +196,10 @@ function removeInstance(inst: ClimateInstance): void {
   if (lastAgeEdit === inst) lastAgeEdit = null;
   if (lastMonthEdit === inst) lastMonthEdit = null;
   relayout();
+  // The removed globe fires no hook of its own -- if it was the one keeping
+  // a categorical legend visible, the next-first categorical globe (if any)
+  // needs to pick it back up explicitly.
+  refreshLegendVisibility();
 }
 
 addEventListener('resize', () => {
@@ -225,18 +257,18 @@ async function boot(): Promise<void> {
     archiveBase: ARCHIVE, archive, colormaps, coastlineData,
   };
 
-  const climateModel = archive.models.find((m) => m.type === 'climate')?.id;
+  const climateModels = archive.models.filter((m) => m.type === 'climate').map((m) => m.id);
   const paleogeographyModel = archive.models.find((m) => m.type === 'paleogeography')?.id;
-  if (!climateModel) throw new Error('archive.json has no model of type "climate"');
+  if (climateModels.length === 0) throw new Error('archive.json has no model of type "climate"');
   if (!paleogeographyModel) throw new Error('archive.json has no model of type "paleogeography"');
-  climateModelId = climateModel;
+  climateModelIds = climateModels;
   paleogeographyModelId = paleogeographyModel;
 
   const first = createInstance('Globe 1');
   instances.push(first);
   focusedInstance = first;
   relayout();
-  await first.boot(climateModelId, paleogeographyModelId);
+  await first.boot(climateModelIds, paleogeographyModelId);
 
   if (window.__climate) window.__climate.ready = true;
 }
@@ -275,6 +307,11 @@ window.__climate = {
   setVariable: async (id: string) => {
     const inst = primary();
     await inst.setVariable(id);
+    inst.ui.refreshDisplay();
+  },
+  setClimateModel: async (id: string) => {
+    const inst = primary();
+    await inst.setClimateModel(id);
     inst.ui.refreshDisplay();
   },
   setMonth: (month: number) => {
@@ -350,15 +387,30 @@ window.__climate = {
     inst.ui.refreshDisplay();
     broadcastMonth(inst);
   },
+  setClimateModelOn: async (index: number, id: string) => {
+    const inst = instances[index];
+    await inst.setClimateModel(id);
+    inst.ui.refreshDisplay();
+  },
+  setVariableOn: async (index: number, id: string) => {
+    const inst = instances[index];
+    await inst.setVariable(id);
+    inst.ui.refreshDisplay();
+  },
+  climateModelIds: () => climateModelIds,
   instanceState: (index: number) => {
     const inst = instances[index];
-    return { age: inst.view.age, month: inst.view.month, layer: inst.view.layer };
+    return {
+      age: inst.view.age, month: inst.view.month, layer: inst.view.layer,
+      climateModelId: inst.view.climateModelId,
+    };
   },
   stats: () => {
     const inst = primary();
     return {
       model: inst.manifest?.id,
       layer: inst.layer,
+      climateModelId: inst.view.climateModelId,
       variable: inst.variable?.id,
       age: inst.view.age,
       month: inst.view.month,

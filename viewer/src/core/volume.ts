@@ -133,6 +133,45 @@ export async function loadVolume(
   return tex;
 }
 
+/**
+ * Load a per-age validity/landmask frame as a plain 2D DataTexture, for
+ * core/material.ts's uValidMask -- distinct from loadVolume()'s
+ * Data3DTexture, since a land/ocean mask has no month axis (ClimateInstance
+ * only re-fetches this on an age change, see applyAge()). The frame file on
+ * disk is still shaped (ndepth, nlat, nlon) like every other variable in the
+ * manifest -- broadcast across every layer at prep time (see
+ * prep_pohl.py's MASK_VAR_ID), so every layer is an identical copy and only
+ * the first nlat*nlon slice is used here. No FrameCache entry: at ~65 KB
+ * (360x181) and only refetched per age, not worth generalising that class's
+ * Data3DTexture-only typing for this one caller.
+ */
+export async function loadMask2D(
+  base: string,
+  modelId: string,
+  manifest: Manifest,
+  variableId: string,
+  frameId: string,
+  resolutionId: string = manifest.default_resolution,
+): Promise<DataTexture> {
+  const res = manifest.resolutions.find((r) => r.id === resolutionId)!;
+  const path = `${base}/models/${modelId}/${resolvePath(manifest, variableId, frameId, resolutionId)}`;
+  const buf = await fetchVolumeBytes(path);
+
+  const plane = res.nlon * res.nlat;
+  const expected = plane * res.ndepth;
+  if (buf.length !== expected) {
+    throw new Error(`${path}: got ${buf.length} bytes, expected ${expected}`);
+  }
+
+  const tex = new DataTexture(buf.subarray(0, plane), res.nlon, res.nlat, RedFormat, UnsignedByteType);
+  tex.magFilter = LinearFilter;
+  tex.minFilter = LinearFilter;
+  tex.wrapS = RepeatWrapping;
+  tex.wrapT = ClampToEdgeWrapping;
+  tex.needsUpdate = true;
+  return tex;
+}
+
 /** The frame whose age is closest to `age`. Frames need not be evenly spaced. */
 export function nearestFrame(m: Manifest, age: number): FrameInfo {
   let best = m.frames[0];

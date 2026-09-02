@@ -4,7 +4,7 @@ import {
 } from 'three';
 
 import { DepthSlice } from '../core/depthSlice';
-import { setMaskMode } from '../core/material';
+import { setMaskMode, setValidMask } from '../core/material';
 import { createMaskTexture } from '../core/mask';
 import { Coastlines, type CoastlineData } from '../core/coastlines';
 import { R_SURFACE } from '../core/constants';
@@ -12,7 +12,7 @@ import type { Rect } from '../core/layout';
 import { WindGlyphs } from '../core/windGlyphs';
 import { WindStreaks } from '../core/windStreaks';
 import {
-  FrameCache, loadManifest, makeColormapTexture, nearestFrame, physicalToEncoded,
+  FrameCache, loadManifest, loadMask2D, makeColormapTexture, nearestFrame, physicalToEncoded,
 } from '../core/volume';
 import { ClimateUI, type ClimateViewState } from './climateUi';
 import type { ArchiveIndex, ColormapData, Manifest, VariableInfo } from '../core/types';
@@ -44,6 +44,16 @@ export interface ClimateInstanceHooks {
   /** Same idea for the month slider / play-seasons control -- climate's own
    *  axis, with no tomography equivalent. */
   onMonthChange?(self: ClimateInstance, month: number): void;
+  /** Fired whenever THIS instance's own displayed variable/layer/climate
+   *  model changes -- not just when it starts/stops showing a CATEGORICAL
+   *  variable, since main.ts can't cheaply tell which without asking every
+   *  instance anyway (see its own refreshLegendVisibility(), which recomputes
+   *  from scratch across every globe rather than trying to track deltas).
+   *  Exists so that when two or more globes show the same categorical
+   *  variable (today: only Koppen) at once, main.ts can hide the legend on
+   *  every one but the first -- duplicate legends for the identical class
+   *  list/colours add nothing, see setLegendVisible(). */
+  onDisplayChange?(self: ClimateInstance): void;
 }
 
 // Just clear of the primary field's sphere, same precedent as coastlines.ts's
@@ -58,19 +68,25 @@ export const DEFAULT_WIND_SCALE = 1;
 export const DEFAULT_WIND_DENSITY = 1;
 export type WindStyle = 'glyph' | 'streak';
 export const DEFAULT_WIND_STYLE: WindStyle = 'glyph';
+// No manifest field carries this -- the coastline OUTLINE (not any model's
+// own data) is always this one fixed rotation model, regardless of which
+// climate/paleogeography model is active. See updateCredit().
+const COASTLINE_CREDIT = 'continents Scotese 2008 rotation model, via Cao et al. 2018';
 
 /**
  * The two things this globe can show, plus a shared continent-outline
- * overlay -- all THREE now on the SAME reconstruction lineage (Scotese),
- * unlike an earlier version of this viewer, which draped temperature under
- * Muller et al. coastlines: a different plate model than the one the climate
+ * overlay -- all on the SAME reconstruction lineage (Scotese), unlike an
+ * earlier version of this viewer, which draped temperature under Muller et
+ * al. coastlines: a different plate model than the one the climate
  * simulations were actually run on, so the continents under the field were
  * subtly wrong at every age but 0 Ma. "Paleogeography" here means a Scotese &
  * Wright (2018) PaleoDEM elevation raster; the overlay is Scotese (2008)
  * continent polygons rotated through time by prep/prep_coastlines.py (reused
  * unchanged, just pointed at Scotese's rotation file instead of Muller's) --
  * there is no Scotese plate-BOUNDARY dataset (subduction/ridge/transform),
- * only these continent outlines.
+ * only these continent outlines. "climate" itself can be backed by more than
+ * one registered model (Li et al. 2022, Pohl et al.) -- see
+ * `view.climateModelId`/setClimateModel().
  */
 export type ClimateLayer = 'climate' | 'paleogeography';
 
@@ -84,14 +100,14 @@ interface LayerSource {
 
 /**
  * One paleoclimate globe: a scalar field draped on the whole sphere, toggled
- * between the climate simulation's own variable(s) and the Scotese
+ * between a climate simulation's own variable(s) and the Scotese
  * paleogeography raster. Deliberately NOT a GlobeInstance -- that class
  * carries cutaway/isosurface/sinking-rate machinery with no climate
  * equivalent. What IS reused (verbatim): the DepthSlice "paint the whole
  * sphere from one layer of a Data3DTexture" mechanism and FrameCache. A
  * paleogeography frame is a depth slice with ndepth=1; a climate frame's
- * "depth" is a calendar month (ndepth=12, see applyMonth()) -- see
- * prep/prep_climate.py and prep/prep_paleogeography.py. A THIRD DepthSlice
+ * "depth" is a calendar month -- see prep/prep_climate.py,
+ * prep/prep_pohl.py and prep/prep_paleogeography.py. A THIRD DepthSlice
  * (`overlay`) draws paleogeography's shaded relief translucently on top of
  * whichever primary field is active, independent of it -- see
  * setOverlayOpacity() and loadOverlayFrame().
@@ -111,7 +127,8 @@ export class ClimateInstance {
    *  'hillshade' variable, independent of whichever layer/variable is
    *  primary -- see prep_paleogeography.py and setOverlayOpacity(). */
   readonly overlay = new DepthSlice(OVERLAY_R);
-  /** Wind arrow field: always sourced from the climate model's own U/V,
+  /** Wind arrow field: always sourced from the ACTIVE climate model's own
+   *  U/V (not every climate model has one -- see resolveWind()),
    *  independent of whichever layer/variable is primary -- same reasoning
    *  as `overlay` always sourcing from paleogeography. Tracks BOTH age and
    *  month (unlike the overlay, which has no month axis). */
@@ -128,12 +145,17 @@ export class ClimateInstance {
    *  class doc comment. Defaults mirror what climate/main.ts used to
    *  construct externally before this instance owned its own panel. */
   readonly view: ClimateViewState = {
-    layer: 'climate', variable: 'T', resolution: '', age: 0, month: 0, clipMin: 0, clipMax: 1,
-    overlayOpacity: DEFAULT_OVERLAY_OPACITY, showWind: DEFAULT_WIND_VISIBLE,
+    layer: 'climate', variable: 'T', climateModelId: '', resolution: '', age: 0, month: 0,
+    clipMin: 0, clipMax: 1, overlayOpacity: DEFAULT_OVERLAY_OPACITY, showWind: DEFAULT_WIND_VISIBLE,
     windStyle: DEFAULT_WIND_STYLE, windScale: DEFAULT_WIND_SCALE, windDensity: DEFAULT_WIND_DENSITY,
   };
 
-  private sources!: Record<ClimateLayer, LayerSource>;
+  /** Keyed by model id (not by ClimateLayer) -- 'climate' can now be backed
+   *  by more than one registered model, so a fixed two-entry record can't
+   *  express this. sourceKey() resolves which entry a given layer means
+   *  right now. */
+  private sources!: Record<string, LayerSource>;
+  private paleogeographyModelId!: string;
   /** Tracks which layer is actually loaded on screen, separate from
    *  `view.layer` -- see setLayer()'s doc comment for why comparing against
    *  the shared, UI-bound `view` object doesn't work. Set only inside
@@ -145,6 +167,9 @@ export class ClimateInstance {
    *  separately-tracked field, not `view.resolution`. Set only inside
    *  setResolution(), after a real switch decision has been made. */
   private activeResolution!: string;
+  /** Same reasoning again -- the climate-model control also binds directly
+   *  to `view`. Set only inside setClimateModel(). */
+  private activeClimateModelId!: string;
   /** Guards a slow fetch for a stale age/layer landing after a newer one
    *  already applied -- same pattern as GlobeInstance.ageToken. */
   private ageToken = 0;
@@ -156,6 +181,9 @@ export class ClimateInstance {
   private windVVar!: VariableInfo;
   private windUTex: Data3DTexture | null = null;
   private windVTex: Data3DTexture | null = null;
+  /** Guards a slow landmask fetch the same way ageToken/overlayToken do --
+   *  see applyValidMask(). */
+  private maskToken = 0;
   /** Whether Wind Streak is the currently-shown mode -- tracked separately
    *  from view.showWind/view.windStyle so applyWindVisibility() can tell a
    *  transition INTO visible (needs resetAll()) from staying visible. */
@@ -195,6 +223,7 @@ export class ClimateInstance {
 
     this.ui = new ClimateUI(this.view, {
       onLayer: (l) => void this.setLayer(l),
+      onClimateModel: (id) => void this.setClimateModel(id),
       onVariable: (id) => void this.setVariable(id),
       onResolution: (id) => void this.setResolution(id),
       onAge: (age) => { this.applyAge(age); this.hooks.onAgeChange?.(this, age); },
@@ -208,22 +237,57 @@ export class ClimateInstance {
     }, label, () => this.hooks.onRemove(this));
   }
 
-  get manifest(): Manifest { return this.sources[this.view.layer].manifest; }
+  /** Which `sources` entry a layer means RIGHT NOW -- 'paleogeography' is
+   *  always the one registered paleogeography model; 'climate' is whichever
+   *  one `view.climateModelId` currently selects. */
+  private sourceKey(layer: ClimateLayer): string {
+    return layer === 'paleogeography' ? this.paleogeographyModelId : this.view.climateModelId;
+  }
+
+  get manifest(): Manifest { return this.sources[this.sourceKey(this.view.layer)].manifest; }
 
   get variable(): VariableInfo {
-    const src = this.sources[this.view.layer];
+    const src = this.sources[this.sourceKey(this.view.layer)];
     return src.variables.find((v) => v.id === src.variableId) ?? src.variables[0];
   }
 
   get layer(): ClimateLayer { return this.view.layer; }
 
-  async boot(climateModelId: string, paleogeographyModelId: string): Promise<void> {
+  /** Rebuilds the bottom-right attribution line from the ACTIVE model(s)'
+   *  own manifest.source, not a fixed string -- used to be static HTML
+   *  naming only Li et al., which went stale the moment a second climate
+   *  model existed (see climate.html's history). While `layer === 'climate'`
+   *  this credits both the active climate model AND paleogeography (the
+   *  relief overlay is always paleogeography-sourced regardless of which
+   *  layer is primary, see setOverlayOpacity's own doc comment); while
+   *  `layer === 'paleogeography'` that source alone already covers both the
+   *  primary field and the overlay. Call after anything that changes which
+   *  model is active: boot(), setLayer(), setClimateModel(). */
+  private updateCredit(): void {
+    const paleoCredit = this.sources[this.paleogeographyModelId].manifest.source;
+    const parts = this.view.layer === 'climate'
+      ? [this.sources[this.activeClimateModelId].manifest.source, `paleogeography ${paleoCredit}`]
+      : [paleoCredit];
+    if (this.coastlines) parts.push(COASTLINE_CREDIT);
+    this.ui.setCredit(parts.join(' · '));
+  }
+
+  async boot(climateModelIds: string[], paleogeographyModelId: string): Promise<void> {
     this.ui.setStatus('loading...');
-    const [climate, paleogeography] = await Promise.all([
-      this.loadSource(climateModelId),
-      this.loadSource(paleogeographyModelId),
-    ]);
-    this.sources = { climate, paleogeography };
+    this.paleogeographyModelId = paleogeographyModelId;
+
+    const ids = [...climateModelIds, paleogeographyModelId];
+    const loaded = await Promise.all(ids.map((id) => this.loadSource(id)));
+    const entries: [string, LayerSource][] = ids.map((id, i) => [id, loaded[i]]);
+    this.sources = Object.fromEntries(entries);
+
+    this.activeClimateModelId = climateModelIds[0];
+    this.view.climateModelId = this.activeClimateModelId;
+    this.ui.setClimateModels(climateModelIds.map((id) => ({
+      id, name: this.deps.archive.models.find((m) => m.id === id)?.name ?? id,
+    })));
+
+    const paleogeography = this.sources[paleogeographyModelId];
     this.activeResolution = paleogeography.manifest.default_resolution;
     this.view.resolution = this.activeResolution;
     this.ui.setResolutions(paleogeography.manifest.resolutions);
@@ -246,21 +310,15 @@ export class ClimateInstance {
       this.coastlines.setAge(0);
     }
 
-    const shadeVar = this.sources.paleogeography.variables.find(
-      (v) => v.id === HILLSHADE_VARIABLE_ID,
-    );
+    const shadeVar = paleogeography.variables.find((v) => v.id === HILLSHADE_VARIABLE_ID);
     this.hasOverlay = !!shadeVar;
     if (shadeVar) {
       const cm = this.deps.colormaps[shadeVar.default_colormap];
       this.overlay.material.uniforms.uColormap.value = makeColormapTexture(cm.colors);
     }
 
-    const windField = this.sources.climate.manifest.vector_fields?.[0] ?? null;
-    this.hasWind = !!windField;
-    if (windField) {
-      this.windUVar = this.sources.climate.variables.find((v) => v.id === windField.u_variable)!;
-      this.windVVar = this.sources.climate.variables.find((v) => v.id === windField.v_variable)!;
-    }
+    this.resolveWind();
+    this.ui.setWindAvailable(this.hasWind);
 
     await this.switchLayer('climate', 0);
     if (this.hasOverlay) await this.loadOverlayFrame(0);
@@ -275,11 +333,13 @@ export class ClimateInstance {
     const ages = this.manifest.frames.map((f) => f.age_ma);
     this.ui.setAgeRange(Math.min(...ages), Math.max(...ages));
     this.view.variable = this.variable.id;
-    this.ui.setLayerVariables(this.manifest.variables);
+    this.ui.setLayerVariables(this.manifest.variables, this.view.layer);
     this.ui.setVariable(this.variable, this.deps.colormaps[this.variable.default_colormap]);
     this.applyMonth(this.view.month);
     this.ui.setTimeInfo(`age ${this.view.age.toFixed(0)} Ma`);
     this.ui.setStatus('');
+    this.updateCredit();
+    this.hooks.onDisplayChange?.(this);
   }
 
   applyLayout(rect: Rect): void {
@@ -316,15 +376,17 @@ export class ClimateInstance {
     if (layer === this.activeLayer) return;
     await this.switchLayer(layer, this.view.age);
     this.view.variable = this.variable.id;
-    this.ui.setLayerVariables(this.manifest.variables);
+    this.ui.setLayerVariables(this.manifest.variables, this.view.layer);
     this.ui.setVariable(this.variable, this.deps.colormaps[this.variable.default_colormap]);
     this.ui.refreshDisplay();
+    this.updateCredit();
+    this.hooks.onDisplayChange?.(this);
   }
 
   private async switchLayer(layer: ClimateLayer, age: number): Promise<void> {
     this.activeLayer = layer;
     this.view.layer = layer;
-    const src = this.sources[layer];
+    const src = this.sources[this.sourceKey(layer)];
     this.field.material.uniforms.uColormap.value = src.colormapTexture;
     // A month picked on the OTHER layer can sit outside this one's own
     // depth_min_km/depth_max_km (e.g. month 6 is valid for climate's 0-11
@@ -340,7 +402,7 @@ export class ClimateInstance {
    *  the whole globe its flat "no data" grey -- it does not clamp on its
    *  own, despite depth_max_km=1 for paleogeography making every value in
    *  range sample the exact same (only) layer regardless. Without this, a
-   *  month picked while on the climate layer (0-11) survives a switch to
+   *  month picked while on the climate layer survives a switch to
    *  paleogeography and silently blanks it. */
   private clampToActiveDepthRange(km: number): number {
     const m = this.manifest;
@@ -351,7 +413,7 @@ export class ClimateInstance {
    *  manifest reload, just a different variable id fetched from the same
    *  FrameCache (which already keys frames by variable, see volume.ts). */
   async setVariable(variableId: string): Promise<void> {
-    const src = this.sources[this.view.layer];
+    const src = this.sources[this.sourceKey(this.view.layer)];
     if (variableId === src.variableId) return;
     src.variableId = variableId;
     const cm = this.deps.colormaps[this.variable.default_colormap];
@@ -360,6 +422,7 @@ export class ClimateInstance {
     this.applyClip(this.variable.default_clip_min, this.variable.default_clip_max);
     await this.loadFrame(this.view.layer, this.view.age);
     this.ui.setVariable(this.variable, this.deps.colormaps[this.variable.default_colormap]);
+    this.hooks.onDisplayChange?.(this);
   }
 
   /** Switch which of the paleogeography source's `manifest.resolutions`
@@ -377,6 +440,56 @@ export class ClimateInstance {
     if (this.view.layer === 'paleogeography') work.push(this.loadFrame('paleogeography', this.view.age));
     await Promise.all(work);
     this.ui.refreshDisplay();
+  }
+
+  /** Switch which registered climate-type model backs the 'climate' layer.
+   *  Guards against redundant work with `activeClimateModelId`, not
+   *  `view.climateModelId` -- same lesson as setLayer()'s `activeLayer`
+   *  guard, since this control also binds directly to `view`.
+   *
+   *  Doesn't force the layer to 'climate' if paleogeography is currently
+   *  showing -- the user can pick a different climate model while looking
+   *  at paleogeography, and the switch takes effect (variable list, wind
+   *  availability) the next time they switch layer back, the same lazy
+   *  fetch-on-display timing setVariable() already uses. */
+  async setClimateModel(modelId: string): Promise<void> {
+    if (modelId === this.activeClimateModelId) return;
+    this.activeClimateModelId = modelId;
+    this.view.climateModelId = modelId;
+
+    this.resolveWind();
+    this.ui.setWindAvailable(this.hasWind);
+    if (this.hasWind) {
+      await this.loadWindFrame(this.view.age);
+    } else {
+      this.windUTex = null;
+      this.windVTex = null;
+    }
+    this.applyWindVisibility();
+
+    if (this.view.layer === 'climate') {
+      await this.switchLayer('climate', this.view.age);
+      this.view.variable = this.variable.id;
+      this.ui.setLayerVariables(this.manifest.variables, this.view.layer);
+      this.ui.setVariable(this.variable, this.deps.colormaps[this.variable.default_colormap]);
+    }
+    this.ui.refreshDisplay();
+    this.updateCredit();
+    this.hooks.onDisplayChange?.(this);
+  }
+
+  /** Re-resolve hasWind/windUVar/windVVar from whichever climate model is
+   *  now selected -- not every climate model has a wind vector field (Pohl
+   *  doesn't), unlike before this was a fixed, boot-time-only fact. */
+  private resolveWind(): void {
+    const manifest = this.sources[this.view.climateModelId].manifest;
+    const windField = manifest.vector_fields?.[0] ?? null;
+    this.hasWind = !!windField;
+    if (windField) {
+      const src = this.sources[this.view.climateModelId];
+      this.windUVar = src.variables.find((v) => v.id === windField.u_variable)!;
+      this.windVVar = src.variables.find((v) => v.id === windField.v_variable)!;
+    }
   }
 
   applyClip(lo: number, hi: number): void {
@@ -416,14 +529,15 @@ export class ClimateInstance {
     this.applyWindVisibility();
   }
 
-  /** Show whichever mode (view.windStyle) is current and hide the other.
-   *  Wind Streak gets a full resetAll() the moment it TRANSITIONS from
-   *  hidden to visible (mode switch, or the "wind" checkbox turning back
-   *  on) rather than resuming whatever stale particle state it had -- see
-   *  WindStreaks.resetAll()'s own doc comment for why. */
+  /** Show whichever mode (view.windStyle) is current and hide the other --
+   *  both forced off if the active climate model has no wind field at all
+   *  (see resolveWind()). Wind Streak gets a full resetAll() the moment it
+   *  TRANSITIONS from hidden to visible (mode switch, or the "wind"
+   *  checkbox turning back on) rather than resuming whatever stale particle
+   *  state it had -- see WindStreaks.resetAll()'s own doc comment for why. */
   private applyWindVisibility(): void {
-    const glyphVisible = this.view.showWind && this.view.windStyle === 'glyph';
-    const streakVisible = this.view.showWind && this.view.windStyle === 'streak';
+    const glyphVisible = this.hasWind && this.view.showWind && this.view.windStyle === 'glyph';
+    const streakVisible = this.hasWind && this.view.showWind && this.view.windStyle === 'streak';
     this.wind.setVisible(glyphVisible);
     if (streakVisible && !this.streakActive) this.windStreaks.resetAll();
     this.streakActive = streakVisible;
@@ -447,7 +561,7 @@ export class ClimateInstance {
     this.refreshWindGlyphs();
   }
 
-  /** Select a month (0-11) on the shared "layer axis" -- see prep_climate.py.
+  /** Select a month on the shared "layer axis" -- see prep_climate.py.
    *  Layer-agnostic in effect (paleogeography's manifest is still ndepth=1,
    *  so any in-range value lands on its one layer) but NOT in the raw value:
    *  see clampToActiveDepthRange() for why it has to go through that rather
@@ -462,15 +576,16 @@ export class ClimateInstance {
     this.ui.setMonth(month);
   }
 
-  /** `layer`'s own default resolution for the climate source (exactly one
-   *  today); `view.resolution` for paleogeography -- the one source with a
-   *  user-facing choice. */
+  /** `layer`'s own default resolution for a climate source (exactly one
+   *  today, for every registered climate model); `view.resolution` for
+   *  paleogeography -- the one source with a user-facing choice. */
   private resolutionFor(layer: ClimateLayer): string {
-    return layer === 'paleogeography' ? this.view.resolution : this.sources[layer].manifest.default_resolution;
+    return layer === 'paleogeography' ? this.view.resolution : this.sources[this.sourceKey(layer)].manifest.default_resolution;
   }
 
   private async loadFrame(layer: ClimateLayer, age: number): Promise<void> {
-    const src = this.sources[layer];
+    const key = this.sourceKey(layer);
+    const src = this.sources[key];
     const variableId = src.variableId; // captured now -- src.variableId may change under us
     const resolutionId = this.resolutionFor(layer);
     const token = ++this.ageToken;
@@ -478,11 +593,12 @@ export class ClimateInstance {
     const frame = nearestFrame(src.manifest, age);
     src.frames.pin(src.manifest, variableId, frame.id, resolutionId);
     const tex = await src.frames.get(src.manifest, variableId, frame.id, resolutionId);
-    // A layer/variable/resolution switch or a newer age can all land after this fetch started.
-    if (token !== this.ageToken || layer !== this.view.layer || variableId !== src.variableId
+    // A layer/model/variable/resolution switch or a newer age can all land after this fetch started.
+    if (token !== this.ageToken || key !== this.sourceKey(this.view.layer) || variableId !== src.variableId
       || resolutionId !== this.resolutionFor(layer)) return;
     this.applyVolume(src.manifest, tex, resolutionId);
     src.frames.prefetchNeighbours(src.manifest, variableId, frame.id, resolutionId);
+    void this.applyValidMask(src, key, frame.id, resolutionId);
   }
 
   private applyVolume(
@@ -496,13 +612,35 @@ export class ClimateInstance {
     mat.uniforms.uDepthMax.value = manifest.depth_max_km;
   }
 
+  /** Fetch (or clear) the primary field's per-texel land/ocean validity
+   *  mask for a continental-only model (e.g. Pohl) -- see
+   *  core/material.ts's uValidMask. A model with full coverage (no
+   *  `manifest.mask_variable`, e.g. Li et al. or paleogeography) clears
+   *  any mask left over from a previously-active model instead of fetching
+   *  anything. Mirrors loadFrame()/loadOverlayFrame()'s own stale-fetch
+   *  guard with its own token, since this runs as an un-awaited side effect
+   *  of loadFrame() and could otherwise land after a newer one. */
+  private async applyValidMask(
+    src: LayerSource, modelId: string, frameId: string, resolutionId: string,
+  ): Promise<void> {
+    const maskVar = src.manifest.mask_variable;
+    const token = ++this.maskToken;
+    if (!maskVar) {
+      setValidMask(this.field.material, null);
+      return;
+    }
+    const tex = await loadMask2D(this.deps.archiveBase, modelId, src.manifest, maskVar, frameId, resolutionId);
+    if (token !== this.maskToken) return;
+    setValidMask(this.field.material, tex);
+  }
+
   /** Fetch the hillshade frame nearest `age` and apply it to the overlay
    *  mesh, independent of `view.layer`/`variableId` -- the overlay always
    *  tracks the paleogeography source's own 'hillshade' variable, at
    *  whichever resolution `view.resolution` currently selects. Mirrors
    *  loadFrame()'s stale-fetch guard with its own token. */
   private async loadOverlayFrame(age: number): Promise<void> {
-    const src = this.sources.paleogeography;
+    const src = this.sources[this.paleogeographyModelId];
     const resolutionId = this.view.resolution;
     const token = ++this.overlayToken;
 
@@ -512,11 +650,13 @@ export class ClimateInstance {
     this.applyVolume(src.manifest, tex, resolutionId, this.overlay.material);
   }
 
-  /** Fetch the U/V frames nearest `age` (always from the climate source,
-   *  independent of `view.layer`) and hand their raw bytes to WindGlyphs.
-   *  Mirrors loadFrame()/loadOverlayFrame()'s stale-fetch guard. */
+  /** Fetch the U/V frames nearest `age` (always from the ACTIVE climate
+   *  model, independent of `view.layer`) and hand their raw bytes to
+   *  WindGlyphs. Mirrors loadFrame()/loadOverlayFrame()'s stale-fetch
+   *  guard. A no-op if the active model has no wind field -- callers
+   *  already check `hasWind` first. */
   private async loadWindFrame(age: number): Promise<void> {
-    const src = this.sources.climate;
+    const src = this.sources[this.view.climateModelId];
     const field = src.manifest.vector_fields![0];
     const token = ++this.windToken;
 
@@ -531,8 +671,8 @@ export class ClimateInstance {
     this.refreshWindGlyphs();
   }
 
-  /** The current month's (nlat*nlon) plane of the climate model's U/V
-   *  textures -- shared by refreshWindGlyphs() (WindGlyphs) and tick()
+  /** The current month's (nlat*nlon) plane of the active climate model's
+   *  U/V textures -- shared by refreshWindGlyphs() (WindGlyphs) and tick()
    *  (WindStreaks), both reading the exact same slice of the same data. See
    *  loadVolume()'s doc comment for why a plane is a contiguous
    *  (nlat*nlon) slice at `month * nlat * nlon` (longitude fastest, then
@@ -541,7 +681,7 @@ export class ClimateInstance {
     uData: Uint8Array; vData: Uint8Array; nlon: number; nlat: number;
   } | null {
     if (!this.windUTex || !this.windVTex) return null;
-    const manifest = this.sources.climate.manifest;
+    const manifest = this.sources[this.view.climateModelId].manifest;
     const res = manifest.resolutions.find((r) => r.id === manifest.default_resolution)!;
     const plane = res.nlon * res.nlat;
     const offset = this.view.month * plane;

@@ -11,6 +11,10 @@
 # viewer/public/archive is a relative symlink to /archive and IS tracked,
 # so a fresh clone wires up correctly once the prep scripts have been run.
 
+# Raw netCDFs fetched from the BRIDGE server by fetch_bridge.py (~1.7 GB) --
+# fully reproducible from prep/bridge_runs.py, shouldn't live in git history.
+/prep/cache/
+
 node_modules/
 dist/
 shots/
