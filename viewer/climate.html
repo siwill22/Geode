@@ -13,19 +13,25 @@
         color: #d8dee4;
       }
       canvas { display: block; }
+      /*
+       * Positioned per-instance in JS (ClimateUI.setRect()), since each
+       * globe tile gets its own status/timeinfo/legend element -- these
+       * rules only carry the look, never left/top/bottom, which would
+       * collide as soon as there is more than one globe on screen.
+       */
       .status {
-        position: fixed; left: 12px; bottom: 12px;
+        position: fixed;
         padding: 6px 10px; border-radius: 4px;
         background: rgba(0, 0, 0, 0.6); color: #cfd6dd;
       }
       .timeinfo {
-        position: fixed; left: 12px; bottom: 44px;
+        position: fixed;
         padding: 6px 10px; border-radius: 4px;
         background: rgba(0, 0, 0, 0.6); color: #9fb4c8;
         font-variant-numeric: tabular-nums;
       }
       .legend {
-        position: fixed; left: 12px; top: 12px;
+        position: fixed;
         padding: 8px 10px; border-radius: 4px;
         background: rgba(0, 0, 0, 0.6);
       }
@@ -47,6 +53,27 @@
       .legend-key-swatch {
         flex: none; width: 10px; height: 10px; border-radius: 2px;
       }
+      #toolbar {
+        position: fixed; left: 50%; top: 8px; transform: translateX(-50%);
+        display: flex; gap: 8px;
+        /* Above each instance's own panel (z-index 10, see ClimateUI's
+           panelAnchor) -- a globe's panel is anchored top-right of its own
+           tile, which sits near screen centre for a globe adjacent to the
+           middle of a multi-globe layout, the same place this toolbar lives. */
+        z-index: 20;
+      }
+      #toolbar button {
+        font: inherit; color: #d8dee4; background: #1b1f24;
+        border: 1px solid #3a4048; border-radius: 4px;
+        padding: 6px 12px; cursor: pointer;
+      }
+      #toolbar button:hover { background: #262b32; }
+      .sync-toggle {
+        display: flex; align-items: center; gap: 5px;
+        font: inherit; color: #d8dee4; background: #1b1f24;
+        border: 1px solid #3a4048; border-radius: 4px;
+        padding: 6px 12px; cursor: pointer;
+      }
       #credit {
         position: fixed; right: 12px; bottom: 8px;
         color: #5d6873; font-size: 11px; max-width: 40ch; text-align: right;
@@ -59,6 +86,11 @@
     </style>
   </head>
   <body>
+    <div id="toolbar">
+      <button id="add-globe">+ Add globe</button>
+      <label class="sync-toggle"><input type="checkbox" id="sync-age" /> sync time</label>
+      <label class="sync-toggle"><input type="checkbox" id="sync-month" /> sync month</label>
+    </div>
     <div id="credit">
       Li, X., Hu, Y. et al. 2022, A high-resolution climate simulation dataset
       for the past 540 million years, Scientific Data &middot;

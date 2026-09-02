@@ -51,8 +51,11 @@ import xarray as xr
 from prep_model import (
     DEFAULT_NLAT,
     DEFAULT_NLON,
+    LAT_NAMES,
+    LON_NAMES,
     drop_duplicate_seam,
     encode_uint8,
+    find_coord,
     normalise_longitude,
     resample_horizontal,
 )
@@ -227,12 +230,36 @@ def main():
     ap.add_argument('--nlon', type=int, default=DEFAULT_NLON)
     ap.add_argument('--nlat', type=int, default=DEFAULT_NLAT)
     ap.add_argument('--resolution-id', default='std')
+    ap.add_argument('--source-resolution', choices=['01d', '06m'], default='01d',
+                     help="gprm's own PaleoDEM source grid: '01d' (1 degree, "
+                          "the default) or '06m' (6 arc-minutes, ~100x the "
+                          "pixel count) -- see fetch_Paleomap(). Independent "
+                          "of --nlon/--nlat, the OUTPUT grid this resamples "
+                          "onto; a finer source only pays off if the output "
+                          "grid is also finer.")
+    ap.add_argument('--encode-min', type=float, default=None,
+                     help='pin elevation encode_min instead of computing it '
+                          "from this run's own data -- see --encode-max")
+    ap.add_argument('--encode-max', type=float, default=None,
+                     help="pin elevation encode_max. Needed when generating "
+                          "a second resolution: each run's own data has "
+                          "slightly different extremes (finer sampling "
+                          "resolves more extreme peaks), but the viewer "
+                          "stores one encode_min/max per variable regardless "
+                          "of resolution -- pass the FIRST run's printed "
+                          "range into the second run so both write the same "
+                          "encode range.")
+    ap.add_argument('--hillshade-clip', type=float, default=None,
+                     help='pin the symmetric hillshade encode range instead '
+                          'of computing it from --hillshade-clip-percentile '
+                          'on this run\'s own data -- same reasoning as '
+                          '--encode-min/--encode-max.')
     ap.add_argument('--out', type=Path, default=Path('archive'))
     ap.add_argument('--validate', action='store_true')
     args = ap.parse_args()
 
     fetch_Paleomap = load_fetch_paleomap()
-    raster_dict = fetch_Paleomap(resolution='01d')
+    raster_dict = fetch_Paleomap(resolution=args.source_resolution)
     ages = sorted(raster_dict.keys())
     print(f"{len(ages)} PaleoDEM maps, {ages[0]:.0f}-{ages[-1]:.0f} Ma")
 
@@ -252,12 +279,25 @@ def main():
 
     for age in ages:
         ds = xr.open_dataset(raster_dict[age])
-        lat = np.asarray(ds['lat'].values, dtype=np.float64)
-        lon = np.asarray(ds['lon'].values, dtype=np.float64)
+        # The 01d and 06m PaleoDEM series don't share coordinate names ('lat'/
+        # 'lon' vs 'latitude'/'longitude') -- resolve them the same way every
+        # other prep script does rather than hardcoding one series' names.
+        lat_name = find_coord(ds, LAT_NAMES)
+        lon_name = find_coord(ds, LON_NAMES)
+        if lat_name is None or lon_name is None:
+            raise SystemExit(f"{age} Ma: could not find lat/lon coords among {list(ds.coords)}")
+        lat = np.asarray(ds[lat_name].values, dtype=np.float64)
+        lon = np.asarray(ds[lon_name].values, dtype=np.float64)
         z = ds['z'].values.astype(np.float32)[np.newaxis, :, :]  # (1, lat, lon)
         ds.close()
+        # The 06m series stores latitude descending (north to south), unlike
+        # 01d's ascending order -- flip both into the ascending order the
+        # rest of this pipeline (and compute_hillshade's gtype=1 gradient)
+        # assumes, rather than rejecting a source that's just oriented the
+        # other way.
         if lat[0] > lat[-1]:
-            raise SystemExit(f"{age} Ma: expected ascending latitude")
+            lat = lat[::-1]
+            z = z[:, ::-1, :]
 
         data, lon2 = normalise_longitude(z, lon)
         data, lon2 = drop_duplicate_seam(data, lon2)
@@ -271,21 +311,31 @@ def main():
         resampled[age] = data
         shaded[age] = compute_hillshade(data, lon2, lat2, args.hillshade_azimuth)
 
-    encode_min, encode_max = raw_min, raw_max
+    # --encode-min/--encode-max pin the range instead of computing it from
+    # THIS run's own data -- see the CLI help for why a second resolution of
+    # the same variable needs to reuse the first run's range.
+    encode_min = args.encode_min if args.encode_min is not None else raw_min
+    encode_max = args.encode_max if args.encode_max is not None else raw_max
     sea_level_t = (0.0 - encode_min) / (encode_max - encode_min)
     print(f"elevation range {encode_min:+.0f} to {encode_max:+.0f} m "
-          f"(sea level at t={sea_level_t:.4f})")
+          f"(sea level at t={sea_level_t:.4f})"
+          + (' [pinned]' if args.encode_min is not None else ''))
 
     # ONE clip range for the whole series -- not per age -- so shading
     # intensity is comparable across time rather than each age being
     # independently contrast-stretched. See compute_hillshade()'s docstring
-    # (bug #2) for what per-age normalization did instead.
+    # (bug #2) for what per-age normalization did instead. --hillshade-clip
+    # pins this too, same reasoning as --encode-min/--encode-max above.
     all_shade = np.concatenate([s.ravel() for s in shaded.values()])
-    shade_clip = float(np.percentile(np.abs(all_shade), args.hillshade_clip_percentile))
+    shade_clip = args.hillshade_clip if args.hillshade_clip is not None else float(
+        np.percentile(np.abs(all_shade), args.hillshade_clip_percentile)
+    )
     hillshade_min, hillshade_max = -shade_clip, shade_clip
     print(f"hillshade range {float(all_shade.min()):+.3f} to {float(all_shade.max()):+.3f} raw  "
-          f"(clipping to +-{shade_clip:.3f}, the {args.hillshade_clip_percentile} "
-          f"percentile of |gradient| across all {len(ages)} ages)")
+          f"(clipping to +-{shade_clip:.3f}"
+          + (' [pinned]' if args.hillshade_clip is not None
+             else f', the {args.hillshade_clip_percentile} percentile of '
+                  f'|gradient| across all {len(ages)} ages') + ')')
 
     total_mb = 0.0
     for age, fm in zip(ages, frame_meta):
@@ -300,6 +350,24 @@ def main():
         total_mb += shade_path.stat().st_size / 1024 / 1024
     print(f"wrote       {len(frame_meta)} frames x 2 variables, {total_mb:.1f} MB total")
 
+    # If a manifest already exists (e.g. this is the second of two resolution
+    # runs against the same model id), upsert this run's entry into its
+    # `resolutions` list by id rather than overwriting the whole file --
+    # otherwise the second run would silently drop the first run's
+    # resolution. Everything else is written fresh each run; with
+    # --encode-min/--encode-max/--hillshade-clip pinned to match, the rest of
+    # the manifest ends up byte-identical between runs anyway.
+    manifest_path = model_dir / 'manifest.json'
+    resolutions = [{
+        'id': args.resolution_id,
+        'nlon': args.nlon, 'nlat': args.nlat, 'ndepth': 1,
+    }]
+    if manifest_path.exists():
+        existing = json.loads(manifest_path.read_text())
+        resolutions = [r for r in existing.get('resolutions', []) if r['id'] != args.resolution_id] + resolutions
+        print(f"merging into existing manifest -- resolutions now: "
+              f"{[r['id'] for r in resolutions]}")
+
     manifest = {
         'id': args.id,
         'name': args.name,
@@ -310,10 +378,7 @@ def main():
         'depth_min_km': 0.0, 'depth_max_km': 1.0,  # unused layer axis; see prep_climate.py
         'dtype': 'uint8',
         'default_resolution': args.resolution_id,
-        'resolutions': [{
-            'id': args.resolution_id,
-            'nlon': args.nlon, 'nlat': args.nlat, 'ndepth': 1,
-        }],
+        'resolutions': resolutions,
         'frames': frame_meta,
         'path_template': 'frames/{variable}/{resolution}/{frame}.bin',
         'default_variable': args.var_id,

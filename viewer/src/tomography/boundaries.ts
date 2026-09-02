@@ -4,7 +4,7 @@ import { BoundarySeries, DEFAULT_STYLE } from '../../vendor/deep-time-map/js/ind
 
 import { R_SURFACE } from '../core/constants';
 import { maskAt } from '../core/mask';
-import type { Rect } from './layout';
+import type { Rect } from '../core/layout';
 
 /**
  * Plate boundaries, drawn by the vendored deep-time-map library onto a 2D canvas

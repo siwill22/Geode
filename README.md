@@ -283,6 +283,42 @@ Unlike the mantle viewer's Müller coastlines (capped at 200 Ma), the Scotese
 continent outlines and paleogeography rasters both cover the full 0-540 Ma
 span, matching the climate data end to end.
 
+### Multiple globes
+
+An "+ Add globe" toolbar button tiles an arbitrary number of globes on one
+canvas, each independently choosing its own layer/variable/age/month/clip —
+porting the mantle viewer's own multi-globe support (`tomography/main.ts`)
+rather than building a second version of it. One shared camera and
+`OrbitControls` instance is the whole trick: rotation and zoom stay locked
+across every globe for free, because there is only ever one camera object,
+re-aimed at each tile's own viewport/scissor rect (`core/layout.ts`'s
+`tileGrid()`, moved out of `tomography/` since it never had any
+tomography-specific knowledge — pure rectangle packing) once per tile, once
+per frame.
+
+Age and month get their own **explicit** sync toggles ("sync time"/"sync
+month"); nothing else does. A user edit on one globe pushes the new value
+into every other globe's own state and re-applies it there — the same
+broadcast pattern the mantle viewer uses for age/depth-slice — but layer,
+variable, clip range and wind style stay independent per globe on purpose,
+so e.g. Precipitation on one globe and Surface Temperature on another, at
+the same synced age and month, is the point, not an edge case to guard
+against.
+
+This needed one structural change beyond the port itself: `ClimateInstance`
+now owns its own `ClimateUI` panel and view state directly (constructed
+internally, from a `hooks`/`label` pair — mirroring `GlobeInstance` owning
+`UI`), rather than the two being separate objects wired together by
+`climate/main.ts` as they were for the single-globe version. A view state
+object living outside the instance it describes, kept in sync only by
+convention (every mutation happens to flow through a callback that updates
+both), is fine for exactly one instance and a live bug waiting to happen for
+N of them — the same "two things that must agree, nothing enforces it"
+shape this project has hit more than once. Each instance's control panel is
+now anchored to its own tile (`ClimateUI.setRect()`) instead of lil-gui's
+single fixed top-right placement, the same trick `tomography/ui.ts` already
+uses.
+
 ## Regenerating the archive
 
 Everything runs in the `pygmt17` conda environment.

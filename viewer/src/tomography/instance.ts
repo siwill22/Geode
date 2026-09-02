@@ -20,7 +20,7 @@ import {
 } from '../core/volume';
 import { BoundaryOverlay } from './boundaries';
 import { DEFAULT_ISOSURFACE, Isosurface } from './isosurface';
-import type { Rect } from './layout';
+import type { Rect } from '../core/layout';
 import { UI, type SurfaceMode, type ViewState } from './ui';
 import type {
   ArchiveIndex, ColormapData, CutawayState, Manifest, VariableInfo,

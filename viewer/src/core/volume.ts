@@ -50,10 +50,12 @@ export function makeColormapTexture(colors: [number, number, number][]): DataTex
   return tex;
 }
 
-export function resolvePath(m: Manifest, variable: string, frame: string): string {
+export function resolvePath(
+  m: Manifest, variable: string, frame: string, resolutionId: string = m.default_resolution,
+): string {
   return m.path_template
     .replace('{variable}', variable)
-    .replace('{resolution}', m.default_resolution)
+    .replace('{resolution}', resolutionId)
     .replace('{frame}', frame);
 }
 
@@ -104,9 +106,10 @@ export async function loadVolume(
   manifest: Manifest,
   variableId: string,
   frameId: string,
+  resolutionId: string = manifest.default_resolution,
 ): Promise<Data3DTexture> {
-  const res = manifest.resolutions.find((r) => r.id === manifest.default_resolution)!;
-  const path = `${base}/models/${modelId}/${resolvePath(manifest, variableId, frameId)}`;
+  const res = manifest.resolutions.find((r) => r.id === resolutionId)!;
+  const path = `${base}/models/${modelId}/${resolvePath(manifest, variableId, frameId, resolutionId)}`;
   const buf = await fetchVolumeBytes(path);
 
   const expected = res.nlon * res.nlat * res.ndepth;
@@ -161,12 +164,22 @@ export class FrameCache {
 
   constructor(private base: string) {}
 
-  private key(m: Manifest, variableId: string, frameId: string): string {
-    return `${m.id}/${variableId}/${m.default_resolution}/${frameId}`;
+  /** `resolutionId` defaults to the manifest's own default so every
+   *  existing caller (which never had a resolution to choose) keeps working
+   *  unchanged. Embedding the ACTUALLY-requested resolution here (not
+   *  `m.default_resolution`) is what makes a resolution switch fetch a new
+   *  texture instead of silently re-serving whatever is cached under the
+   *  default -- see climate/climateInstance.ts's setResolution(). */
+  private key(
+    m: Manifest, variableId: string, frameId: string, resolutionId: string = m.default_resolution,
+  ): string {
+    return `${m.id}/${variableId}/${resolutionId}/${frameId}`;
   }
 
-  async get(m: Manifest, variableId: string, frameId: string): Promise<Data3DTexture> {
-    const k = this.key(m, variableId, frameId);
+  async get(
+    m: Manifest, variableId: string, frameId: string, resolutionId: string = m.default_resolution,
+  ): Promise<Data3DTexture> {
+    const k = this.key(m, variableId, frameId, resolutionId);
 
     const hit = this.lru.get(k);
     if (hit) {                       // refresh recency
@@ -177,7 +190,7 @@ export class FrameCache {
     const pending = this.inflight.get(k);
     if (pending) return pending;
 
-    const p = loadVolume(this.base, m.id, m, variableId, frameId)
+    const p = loadVolume(this.base, m.id, m, variableId, frameId, resolutionId)
       .then((tex) => {
         this.lru.set(k, tex);
         this.inflight.delete(k);
@@ -190,17 +203,21 @@ export class FrameCache {
   }
 
   /** Mark a frame as on-screen so it survives eviction. */
-  pin(m: Manifest, variableId: string, frameId: string): void {
-    this.pinned = this.key(m, variableId, frameId);
+  pin(
+    m: Manifest, variableId: string, frameId: string, resolutionId: string = m.default_resolution,
+  ): void {
+    this.pinned = this.key(m, variableId, frameId, resolutionId);
   }
 
   /** Warm the neighbours of `frameId` in the background; failures are ignored. */
-  prefetchNeighbours(m: Manifest, variableId: string, frameId: string): void {
+  prefetchNeighbours(
+    m: Manifest, variableId: string, frameId: string, resolutionId: string = m.default_resolution,
+  ): void {
     const i = m.frames.findIndex((f) => f.id === frameId);
     if (i < 0) return;
     for (const j of [i + 1, i - 1]) {
       if (j >= 0 && j < m.frames.length) {
-        void this.get(m, variableId, m.frames[j].id).catch(() => {});
+        void this.get(m, variableId, m.frames[j].id, resolutionId).catch(() => {});
       }
     }
   }

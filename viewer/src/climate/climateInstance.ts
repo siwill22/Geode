@@ -8,11 +8,13 @@ import { setMaskMode } from '../core/material';
 import { createMaskTexture } from '../core/mask';
 import { Coastlines, type CoastlineData } from '../core/coastlines';
 import { R_SURFACE } from '../core/constants';
+import type { Rect } from '../core/layout';
 import { WindGlyphs } from '../core/windGlyphs';
 import { WindStreaks } from '../core/windStreaks';
 import {
   FrameCache, loadManifest, makeColormapTexture, nearestFrame, physicalToEncoded,
 } from '../core/volume';
+import { ClimateUI, type ClimateViewState } from './climateUi';
 import type { ArchiveIndex, ColormapData, Manifest, VariableInfo } from '../core/types';
 
 export interface ClimateInstanceDeps {
@@ -20,6 +22,28 @@ export interface ClimateInstanceDeps {
   archive: ArchiveIndex;
   colormaps: ColormapData;
   coastlineData: CoastlineData | null;
+}
+
+/**
+ * Cross-instance concerns for a multi-globe layout -- deliberately smaller
+ * than tomography/instance.ts's GlobeInstanceHooks, which also carries an
+ * onFocus (there is no per-instance TOOL state here competing with
+ * OrbitControls for the same drag gesture, so nothing needs to know when
+ * this instance gains "focus"; main.ts's own pointerdown/hitTest handler
+ * sets its focus-tracking variable directly, with no round trip through the
+ * instance needed).
+ */
+export interface ClimateInstanceHooks {
+  /** This instance's own "remove this globe" button was pressed. */
+  onRemove(self: ClimateInstance): void;
+  /** A user dragged THIS instance's own age slider. Only fired from the UI
+   *  callback (a real user edit) -- never from inside applyAge() itself, so
+   *  a broadcast-driven follower update can't re-trigger this and echo.
+   *  Mirrors GlobeInstanceHooks.onAgeChange exactly. */
+  onAgeChange?(self: ClimateInstance, age: number): void;
+  /** Same idea for the month slider / play-seasons control -- climate's own
+   *  axis, with no tomography equivalent. */
+  onMonthChange?(self: ClimateInstance, month: number): void;
 }
 
 // Just clear of the primary field's sphere, same precedent as coastlines.ts's
@@ -71,6 +95,14 @@ interface LayerSource {
  * (`overlay`) draws paleogeography's shaded relief translucently on top of
  * whichever primary field is active, independent of it -- see
  * setOverlayOpacity() and loadOverlayFrame().
+ *
+ * Owns its own view state (`view`) and control panel (`ui`), the same shape
+ * as tomography/instance.ts's GlobeInstance owning `view`/`ui` -- this is
+ * what lets main.ts manage an arbitrary number of these without a second,
+ * externally-tracked state object that has to be kept in sync with this
+ * one's internals by convention (which is exactly the "two things that must
+ * agree but nothing enforces it" bug class this codebase has hit and fixed
+ * more than once this session).
  */
 export class ClimateInstance {
   readonly scene = new Scene();
@@ -89,12 +121,30 @@ export class ClimateInstance {
    *  exclusive with it; see setWindStyle() and
    *  docs/adr/0002-world-space-trail-ribbons-for-wind-flow.md. */
   readonly windStreaks = new WindStreaks();
+  readonly ui: ClimateUI;
   coastlines: Coastlines | null = null;
 
+  /** Every piece of state a control panel binds to, in one place -- see the
+   *  class doc comment. Defaults mirror what climate/main.ts used to
+   *  construct externally before this instance owned its own panel. */
+  readonly view: ClimateViewState = {
+    layer: 'climate', variable: 'T', resolution: '', age: 0, month: 0, clipMin: 0, clipMax: 1,
+    overlayOpacity: DEFAULT_OVERLAY_OPACITY, showWind: DEFAULT_WIND_VISIBLE,
+    windStyle: DEFAULT_WIND_STYLE, windScale: DEFAULT_WIND_SCALE, windDensity: DEFAULT_WIND_DENSITY,
+  };
+
   private sources!: Record<ClimateLayer, LayerSource>;
-  private activeLayer: ClimateLayer = 'climate';
-  private currentAge = 0;
-  private currentMonth = 0;
+  /** Tracks which layer is actually loaded on screen, separate from
+   *  `view.layer` -- see setLayer()'s doc comment for why comparing against
+   *  the shared, UI-bound `view` object doesn't work. Set only inside
+   *  switchLayer(), after a real switch decision has been made. */
+  private activeLayer!: ClimateLayer;
+  /** Same reasoning as `activeLayer` -- the resolution control also binds
+   *  directly to `view` (lil-gui writes the new value into it before firing
+   *  onChange), so setResolution()'s guard must compare against this
+   *  separately-tracked field, not `view.resolution`. Set only inside
+   *  setResolution(), after a real switch decision has been made. */
+  private activeResolution!: string;
   /** Guards a slow fetch for a stale age/layer landing after a newer one
    *  already applied -- same pattern as GlobeInstance.ageToken. */
   private ageToken = 0;
@@ -106,16 +156,16 @@ export class ClimateInstance {
   private windVVar!: VariableInfo;
   private windUTex: Data3DTexture | null = null;
   private windVTex: Data3DTexture | null = null;
-  private windStyle: WindStyle = DEFAULT_WIND_STYLE;
-  private windVisible = DEFAULT_WIND_VISIBLE;
   /** Whether Wind Streak is the currently-shown mode -- tracked separately
-   *  from windStyle/windVisible so applyWindVisibility() can tell a
+   *  from view.showWind/view.windStyle so applyWindVisibility() can tell a
    *  transition INTO visible (needs resetAll()) from staying visible. */
   private streakActive = false;
 
   constructor(
     private readonly camera: PerspectiveCamera,
     private readonly deps: ClimateInstanceDeps,
+    private readonly hooks: ClimateInstanceHooks,
+    label: string,
   ) {
     this.field.mesh.visible = true;
     this.field.setDepthKm(0); // month 0, until applyMonth() picks a real one
@@ -142,23 +192,41 @@ export class ClimateInstance {
     this.scene.add(this.wind.mesh);
     this.windStreaks.mesh.renderOrder = 4;
     this.scene.add(this.windStreaks.mesh);
+
+    this.ui = new ClimateUI(this.view, {
+      onLayer: (l) => void this.setLayer(l),
+      onVariable: (id) => void this.setVariable(id),
+      onResolution: (id) => void this.setResolution(id),
+      onAge: (age) => { this.applyAge(age); this.hooks.onAgeChange?.(this, age); },
+      onMonth: (month) => { this.applyMonth(month); this.hooks.onMonthChange?.(this, month); },
+      onClip: (lo, hi) => this.applyClip(lo, hi),
+      onOverlayOpacity: (v) => this.setOverlayOpacity(v),
+      onShowWind: (v) => this.setWindVisible(v),
+      onWindStyle: (v) => this.setWindStyle(v),
+      onWindScale: (v) => this.setWindScale(v),
+      onWindDensity: (v) => this.setWindDensity(v),
+    }, label, () => this.hooks.onRemove(this));
   }
 
-  get manifest(): Manifest { return this.sources[this.activeLayer].manifest; }
+  get manifest(): Manifest { return this.sources[this.view.layer].manifest; }
 
   get variable(): VariableInfo {
-    const src = this.sources[this.activeLayer];
+    const src = this.sources[this.view.layer];
     return src.variables.find((v) => v.id === src.variableId) ?? src.variables[0];
   }
 
-  get layer(): ClimateLayer { return this.activeLayer; }
+  get layer(): ClimateLayer { return this.view.layer; }
 
   async boot(climateModelId: string, paleogeographyModelId: string): Promise<void> {
+    this.ui.setStatus('loading...');
     const [climate, paleogeography] = await Promise.all([
       this.loadSource(climateModelId),
       this.loadSource(paleogeographyModelId),
     ]);
     this.sources = { climate, paleogeography };
+    this.activeResolution = paleogeography.manifest.default_resolution;
+    this.view.resolution = this.activeResolution;
+    this.ui.setResolutions(paleogeography.manifest.resolutions);
 
     if (this.deps.coastlineData) {
       // Blank, permanently disabled mask: there is no cutaway concept here,
@@ -200,6 +268,22 @@ export class ClimateInstance {
       await this.loadWindFrame(0);
       this.setWindVisible(DEFAULT_WIND_VISIBLE);
     }
+
+    // Post-boot panel setup -- previously done externally in climate/main.ts
+    // once instance.boot() resolved; now internal, same as GlobeInstance's
+    // own boot() configuring its ui directly.
+    const ages = this.manifest.frames.map((f) => f.age_ma);
+    this.ui.setAgeRange(Math.min(...ages), Math.max(...ages));
+    this.view.variable = this.variable.id;
+    this.ui.setLayerVariables(this.manifest.variables);
+    this.ui.setVariable(this.variable, this.deps.colormaps[this.variable.default_colormap]);
+    this.applyMonth(this.view.month);
+    this.ui.setTimeInfo(`age ${this.view.age.toFixed(0)} Ma`);
+    this.ui.setStatus('');
+  }
+
+  applyLayout(rect: Rect): void {
+    this.ui.setRect(rect);
   }
 
   private async loadSource(modelId: string): Promise<LayerSource> {
@@ -221,20 +305,31 @@ export class ClimateInstance {
 
   /** Switch which loaded source is on screen. The colormap and clip range
    *  change with it -- each variable has its own encode range and ramp -- but
-   *  the age carries over so switching layers mid-scrub doesn't reset it. */
+   *  the age carries over so switching layers mid-scrub doesn't reset it.
+   *
+   *  Guards against redundant work with `activeLayer`, NOT `view.layer`:
+   *  lil-gui writes the new value straight into `view` (the same object
+   *  ClimateUI is bound to) before firing onChange, so by the time this runs
+   *  `view.layer` already equals `layer` -- comparing against it here would
+   *  always be true and silently no-op every real dropdown switch. */
   async setLayer(layer: ClimateLayer): Promise<void> {
     if (layer === this.activeLayer) return;
-    await this.switchLayer(layer, this.currentAge);
+    await this.switchLayer(layer, this.view.age);
+    this.view.variable = this.variable.id;
+    this.ui.setLayerVariables(this.manifest.variables);
+    this.ui.setVariable(this.variable, this.deps.colormaps[this.variable.default_colormap]);
+    this.ui.refreshDisplay();
   }
 
   private async switchLayer(layer: ClimateLayer, age: number): Promise<void> {
     this.activeLayer = layer;
+    this.view.layer = layer;
     const src = this.sources[layer];
     this.field.material.uniforms.uColormap.value = src.colormapTexture;
     // A month picked on the OTHER layer can sit outside this one's own
     // depth_min_km/depth_max_km (e.g. month 6 is valid for climate's 0-11
     // range but not paleogeography's 0-1) -- see clampToActiveDepthRange().
-    this.field.setDepthKm(this.clampToActiveDepthRange(this.currentMonth));
+    this.field.setDepthKm(this.clampToActiveDepthRange(this.view.month));
     this.applyClip(this.variable.default_clip_min, this.variable.default_clip_max);
     await this.loadFrame(layer, age);
   }
@@ -256,14 +351,32 @@ export class ClimateInstance {
    *  manifest reload, just a different variable id fetched from the same
    *  FrameCache (which already keys frames by variable, see volume.ts). */
   async setVariable(variableId: string): Promise<void> {
-    const src = this.sources[this.activeLayer];
+    const src = this.sources[this.view.layer];
     if (variableId === src.variableId) return;
     src.variableId = variableId;
     const cm = this.deps.colormaps[this.variable.default_colormap];
     src.colormapTexture = makeColormapTexture(cm.colors);
     this.field.material.uniforms.uColormap.value = src.colormapTexture;
     this.applyClip(this.variable.default_clip_min, this.variable.default_clip_max);
-    await this.loadFrame(this.activeLayer, this.currentAge);
+    await this.loadFrame(this.view.layer, this.view.age);
+    this.ui.setVariable(this.variable, this.deps.colormaps[this.variable.default_colormap]);
+  }
+
+  /** Switch which of the paleogeography source's `manifest.resolutions`
+   *  entries is on screen. Guards against redundant work with
+   *  `activeResolution`, not `view.resolution` -- see that field's doc
+   *  comment for why (same lesson as setLayer()'s `activeLayer` guard).
+   *  Re-fetches the primary field only if paleogeography is the active
+   *  layer, but ALWAYS re-fetches the overlay -- it is paleogeography-sourced
+   *  regardless of which layer is primary. */
+  async setResolution(resolutionId: string): Promise<void> {
+    if (resolutionId === this.activeResolution) return;
+    this.activeResolution = resolutionId;
+    this.view.resolution = resolutionId;
+    const work = [this.loadOverlayFrame(this.view.age)];
+    if (this.view.layer === 'paleogeography') work.push(this.loadFrame('paleogeography', this.view.age));
+    await Promise.all(work);
+    this.ui.refreshDisplay();
   }
 
   applyClip(lo: number, hi: number): void {
@@ -279,11 +392,12 @@ export class ClimateInstance {
   }
 
   applyAge(age: number): void {
-    this.currentAge = age;
+    this.view.age = age;
     this.coastlines?.setAge(age);
-    void this.loadFrame(this.activeLayer, age);
+    void this.loadFrame(this.view.layer, age);
     if (this.hasOverlay) void this.loadOverlayFrame(age);
     if (this.hasWind) void this.loadWindFrame(age);
+    this.ui.setTimeInfo(`age ${age.toFixed(0)} Ma`);
   }
 
   setOverlayOpacity(v: number): void {
@@ -291,25 +405,25 @@ export class ClimateInstance {
   }
 
   setWindVisible(v: boolean): void {
-    this.windVisible = v;
+    this.view.showWind = v;
     this.applyWindVisibility();
   }
 
   /** Switch between the two wind display modes -- mutually exclusive, see
    *  the `windStreaks` field's doc comment and ADR-0002. */
   setWindStyle(style: WindStyle): void {
-    this.windStyle = style;
+    this.view.windStyle = style;
     this.applyWindVisibility();
   }
 
-  /** Show whichever mode (`windStyle`) is current and hide the other.
+  /** Show whichever mode (view.windStyle) is current and hide the other.
    *  Wind Streak gets a full resetAll() the moment it TRANSITIONS from
    *  hidden to visible (mode switch, or the "wind" checkbox turning back
    *  on) rather than resuming whatever stale particle state it had -- see
    *  WindStreaks.resetAll()'s own doc comment for why. */
   private applyWindVisibility(): void {
-    const glyphVisible = this.windVisible && this.windStyle === 'glyph';
-    const streakVisible = this.windVisible && this.windStyle === 'streak';
+    const glyphVisible = this.view.showWind && this.view.windStyle === 'glyph';
+    const streakVisible = this.view.showWind && this.view.windStyle === 'streak';
     this.wind.setVisible(glyphVisible);
     if (streakVisible && !this.streakActive) this.windStreaks.resetAll();
     this.streakActive = streakVisible;
@@ -339,32 +453,43 @@ export class ClimateInstance {
    *  see clampToActiveDepthRange() for why it has to go through that rather
    *  than being handed to the shader as-is. */
   applyMonth(month: number): void {
-    this.currentMonth = month;
+    this.view.month = month;
     this.field.setDepthKm(this.clampToActiveDepthRange(month));
     // No fetch needed: the wind textures for the current age already carry
     // all 12 months, so a month change is just a different plane of data
     // already in hand -- see refreshWindGlyphs().
     if (this.hasWind) this.refreshWindGlyphs();
+    this.ui.setMonth(month);
+  }
+
+  /** `layer`'s own default resolution for the climate source (exactly one
+   *  today); `view.resolution` for paleogeography -- the one source with a
+   *  user-facing choice. */
+  private resolutionFor(layer: ClimateLayer): string {
+    return layer === 'paleogeography' ? this.view.resolution : this.sources[layer].manifest.default_resolution;
   }
 
   private async loadFrame(layer: ClimateLayer, age: number): Promise<void> {
     const src = this.sources[layer];
     const variableId = src.variableId; // captured now -- src.variableId may change under us
+    const resolutionId = this.resolutionFor(layer);
     const token = ++this.ageToken;
 
     const frame = nearestFrame(src.manifest, age);
-    src.frames.pin(src.manifest, variableId, frame.id);
-    const tex = await src.frames.get(src.manifest, variableId, frame.id);
-    // A layer/variable switch or a newer age can all land after this fetch started.
-    if (token !== this.ageToken || layer !== this.activeLayer || variableId !== src.variableId) return;
-    this.applyVolume(src.manifest, tex);
-    src.frames.prefetchNeighbours(src.manifest, variableId, frame.id);
+    src.frames.pin(src.manifest, variableId, frame.id, resolutionId);
+    const tex = await src.frames.get(src.manifest, variableId, frame.id, resolutionId);
+    // A layer/variable/resolution switch or a newer age can all land after this fetch started.
+    if (token !== this.ageToken || layer !== this.view.layer || variableId !== src.variableId
+      || resolutionId !== this.resolutionFor(layer)) return;
+    this.applyVolume(src.manifest, tex, resolutionId);
+    src.frames.prefetchNeighbours(src.manifest, variableId, frame.id, resolutionId);
   }
 
   private applyVolume(
-    manifest: Manifest, tex: Data3DTexture, mat: ShaderMaterial = this.field.material,
+    manifest: Manifest, tex: Data3DTexture, resolutionId: string = manifest.default_resolution,
+    mat: ShaderMaterial = this.field.material,
   ): void {
-    const res = manifest.resolutions.find((r) => r.id === manifest.default_resolution)!;
+    const res = manifest.resolutions.find((r) => r.id === resolutionId)!;
     mat.uniforms.uVolume.value = tex;
     (mat.uniforms.uGrid.value as Vector3).set(res.nlon, res.nlat, res.ndepth);
     mat.uniforms.uDepthMin.value = manifest.depth_min_km;
@@ -372,21 +497,23 @@ export class ClimateInstance {
   }
 
   /** Fetch the hillshade frame nearest `age` and apply it to the overlay
-   *  mesh, independent of `activeLayer`/`variableId` -- the overlay always
-   *  tracks the paleogeography source's own 'hillshade' variable. Mirrors
+   *  mesh, independent of `view.layer`/`variableId` -- the overlay always
+   *  tracks the paleogeography source's own 'hillshade' variable, at
+   *  whichever resolution `view.resolution` currently selects. Mirrors
    *  loadFrame()'s stale-fetch guard with its own token. */
   private async loadOverlayFrame(age: number): Promise<void> {
     const src = this.sources.paleogeography;
+    const resolutionId = this.view.resolution;
     const token = ++this.overlayToken;
 
     const frame = nearestFrame(src.manifest, age);
-    const tex = await src.frames.get(src.manifest, HILLSHADE_VARIABLE_ID, frame.id);
-    if (token !== this.overlayToken) return;
-    this.applyVolume(src.manifest, tex, this.overlay.material);
+    const tex = await src.frames.get(src.manifest, HILLSHADE_VARIABLE_ID, frame.id, resolutionId);
+    if (token !== this.overlayToken || resolutionId !== this.view.resolution) return;
+    this.applyVolume(src.manifest, tex, resolutionId, this.overlay.material);
   }
 
   /** Fetch the U/V frames nearest `age` (always from the climate source,
-   *  independent of `activeLayer`) and hand their raw bytes to WindGlyphs.
+   *  independent of `view.layer`) and hand their raw bytes to WindGlyphs.
    *  Mirrors loadFrame()/loadOverlayFrame()'s stale-fetch guard. */
   private async loadWindFrame(age: number): Promise<void> {
     const src = this.sources.climate;
@@ -417,7 +544,7 @@ export class ClimateInstance {
     const manifest = this.sources.climate.manifest;
     const res = manifest.resolutions.find((r) => r.id === manifest.default_resolution)!;
     const plane = res.nlon * res.nlat;
-    const offset = this.currentMonth * plane;
+    const offset = this.view.month * plane;
     const uData = this.windUTex.image.data as Uint8Array;
     const vData = this.windVTex.image.data as Uint8Array;
     return {
@@ -455,5 +582,16 @@ export class ClimateInstance {
 
   render(renderer: WebGLRenderer): void {
     renderer.render(this.scene, this.camera);
+  }
+
+  /** Same level of thoroughness as GlobeInstance.dispose(): the panel and
+   *  coastlines (which own DOM nodes / a texture respectively) are
+   *  disposed; base geometries/materials (field, overlay, wind, windStreaks)
+   *  are not, bounded by however many instances remain rather than worth
+   *  the extra bookkeeping -- matching the precedent this mirrors rather
+   *  than holding climate to a stricter standard. */
+  dispose(): void {
+    this.ui.dispose();
+    this.coastlines?.dispose();
   }
 }

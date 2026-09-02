@@ -1,7 +1,7 @@
 import GUI from 'lil-gui';
 import { MAX_STEPS, type IsosurfaceState } from './isosurface';
 import { SINKING_RATE_PRESETS, CUSTOM_PRESET_ID, type DepthSliceState } from '../core/depthSlice';
-import type { Rect } from './layout';
+import type { Rect } from '../core/layout';
 import type { ArchiveIndex, Manifest, VariableInfo } from '../core/types';
 
 export type ToolMode = 'drag' | 'draw' | 'edit';

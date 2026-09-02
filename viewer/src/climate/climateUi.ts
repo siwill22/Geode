@@ -1,10 +1,17 @@
 import GUI, { type Controller } from 'lil-gui';
 import type { ClimateLayer, WindStyle } from './climateInstance';
-import type { ColormapData, VariableInfo } from '../core/types';
+import type { Rect } from '../core/layout';
+import type { ColormapData, ResolutionInfo, VariableInfo } from '../core/types';
 
 export interface ClimateViewState {
   layer: ClimateLayer;
   variable: string;
+  /** Which of the paleogeography source's `manifest.resolutions` entries is
+   *  active -- see ClimateInstance's `activeResolution`/`setResolution()`.
+   *  Meaningful only for paleogeography-sourced data (the primary field when
+   *  `layer === 'paleogeography'`, and the relief overlay always); the
+   *  climate model has exactly one resolution today. */
+  resolution: string;
   age: number;
   month: number;
   clipMin: number;
@@ -19,6 +26,7 @@ export interface ClimateViewState {
 export interface ClimateUICallbacks {
   onLayer(layer: ClimateLayer): void;
   onVariable(id: string): void;
+  onResolution(id: string): void;
   onAge(age: number): void;
   onMonth(month: number): void;
   onClip(lo: number, hi: number): void;
@@ -56,6 +64,7 @@ const MONTH_NAMES = [
 export class ClimateUI {
   readonly gui: GUI;
   private layerCtrl: Controller;
+  private resolutionCtrl: Controller;
   private variableCtrl: Controller;
   private ageCtrl: Controller;
   private monthCtrl: Controller;
@@ -69,6 +78,13 @@ export class ClimateUI {
   private legendLabel: HTMLDivElement;
   private legendCanvas: HTMLCanvasElement;
   private legendKey: HTMLDivElement;
+  /** Positioned per-instance by setRect(); anchors the panel's top-right
+   *  corner, same trick as tomography/ui.ts's UI class -- lil-gui's own
+   *  auto-placement is a single fixed panel pinned to the window's top-right
+   *  corner, which is right for one globe but would stack every instance's
+   *  panel on top of the others once there is more than one. */
+  private panelAnchor: HTMLDivElement;
+  private rect: Rect = { x: 0, y: 0, width: innerWidth, height: innerHeight };
   /** The variable-name/units portion of the legend text, set by
    *  setVariable(); combined with monthName (below) by updateLegendLabel()
    *  since the two change independently. */
@@ -81,8 +97,12 @@ export class ClimateUI {
     private state: ClimateViewState,
     private cb: ClimateUICallbacks,
     title = 'Geode Paleoclimate',
+    onRemove?: () => void,
   ) {
-    this.gui = new GUI({ title });
+    this.panelAnchor = document.createElement('div');
+    Object.assign(this.panelAnchor.style, { position: 'fixed', zIndex: '10' });
+    document.body.appendChild(this.panelAnchor);
+    this.gui = new GUI({ title, container: this.panelAnchor });
     // 'layer' picks which MODEL is active (the CESM climate simulation vs.
     // the Scotese paleogeography raster) -- labelled "Climate" rather than
     // any one variable's name, since 'variable' below is what actually
@@ -93,6 +113,17 @@ export class ClimateUI {
       .add(this.state, 'layer', { Climate: 'climate', Paleogeography: 'paleogeography' })
       .name('layer')
       .onChange((v: ClimateLayer) => cb.onLayer(v));
+    // Options populated once boot() knows the paleogeography source's own
+    // resolutions -- see setResolutions(). Hidden entirely when there's only
+    // one (a dropdown of one is a dead control, same precedent as the
+    // variable/month group in setLayerVariables()), and NOT tied to layer
+    // switches the way that group is: the relief overlay is always
+    // paleogeography-sourced regardless of which layer is primary, so this
+    // stays relevant even while viewing the climate layer.
+    this.resolutionCtrl = this.gui
+      .add(this.state, 'resolution', {})
+      .name('paleogeography res')
+      .onChange((v: string) => cb.onResolution(v));
     this.variableCtrl = this.gui
       .add(this.state, 'variable', {})
       .name('variable')
@@ -147,6 +178,14 @@ export class ClimateUI {
       .name('clip max')
       .onChange(() => cb.onClip(this.state.clipMin, this.state.clipMax));
 
+    // Always present once multiple globes exist, a no-op at exactly one --
+    // see removeInstance()'s `instances.length <= 1` guard in main.ts --
+    // rather than conditionally shown/hidden, matching tomography/ui.ts's
+    // own "remove this globe" button.
+    if (onRemove) {
+      this.gui.add({ remove: onRemove }, 'remove').name('remove this globe');
+    }
+
     this.status = document.createElement('div');
     this.status.className = 'status';
     document.body.appendChild(this.status);
@@ -169,6 +208,8 @@ export class ClimateUI {
     this.legendKey.className = 'legend-key';
     this.legend.append(this.legendLabel, this.legendCanvas, this.legendKey);
     document.body.appendChild(this.legend);
+
+    this.applyRect();
   }
 
   /** Bound by the manifest's own frame range (0-540 Ma) -- NOT
@@ -205,6 +246,23 @@ export class ClimateUI {
     this.monthCtrl.show();
     this.playCtrl.show();
     this.setMonth(this.state.month);
+  }
+
+  /** Populate the resolution dropdown from the paleogeography source's own
+   *  `manifest.resolutions` -- called once at boot, not on every layer
+   *  switch (see the constructor's comment on `resolutionCtrl`). Labelled by
+   *  grid dimensions (e.g. "1440x721") rather than the resolution `id`
+   *  alone -- self-explanatory, and `ResolutionInfo` carries no separate
+   *  display name to show instead. */
+  setResolutions(resolutions: ResolutionInfo[]): void {
+    if (resolutions.length <= 1) {
+      this.resolutionCtrl.hide();
+      return;
+    }
+    const choices: Record<string, string> = {};
+    for (const r of resolutions) choices[`${r.nlon}x${r.nlat}`] = r.id;
+    this.resolutionCtrl.options(choices);
+    this.resolutionCtrl.show();
   }
 
   private togglePlay(): void {
@@ -336,9 +394,35 @@ export class ClimateUI {
     this.timeInfo.style.display = msg ? 'block' : 'none';
   }
 
+  /** Move this instance's panel, legend, status and time-info onto a new
+   *  tile, in CSS pixels. Called once at boot with the full window and
+   *  again whenever the globe grid is relaid out -- mirrors
+   *  tomography/ui.ts's UI.setRect() exactly, with the addition of the
+   *  legend (climate-only; tomography has no equivalent). */
+  setRect(rect: Rect): void {
+    this.rect = rect;
+    this.applyRect();
+  }
+
+  private applyRect(): void {
+    const { x, y, width, height } = this.rect;
+    // Panel anchored top-right, legend top-left, status/time-info
+    // bottom-left -- the same corners the original single-globe CSS put
+    // them at when the tile was the whole window.
+    this.panelAnchor.style.top = `${y + 8}px`;
+    this.panelAnchor.style.right = `${innerWidth - (x + width) + 8}px`;
+    this.legend.style.top = `${y + 12}px`;
+    this.legend.style.left = `${x + 12}px`;
+    this.status.style.left = `${x + 12}px`;
+    this.status.style.bottom = `${innerHeight - (y + height) + 12}px`;
+    this.timeInfo.style.left = `${x + 12}px`;
+    this.timeInfo.style.bottom = `${innerHeight - (y + height) + 44}px`;
+  }
+
   dispose(): void {
     this.stopPlay();
     this.gui.destroy();
+    this.panelAnchor.remove();
     this.status.remove();
     this.timeInfo.remove();
     this.legend.remove();

@@ -12,7 +12,7 @@ import {
   loadArchive, loadColormaps, nearestFrame,
 } from '../core/volume';
 import { GlobeInstance, type GlobeInstanceDeps } from './instance';
-import { tileGrid, type Rect } from './layout';
+import { tileGrid, type Rect } from '../core/layout';
 import type { IsosurfaceState } from './isosurface';
 import { sinkingDepthKm, type DepthSliceState } from '../core/depthSlice';
 import type { SurfaceMode } from './ui';
