@@ -268,6 +268,14 @@ async function applyPresetConvection(): Promise<void> {
   if (model) await inst.selectModel(model.id);
 
   inst.applySurfaceMode('none');
+  // selectModel()'s own reconcileDepthSliceWithModel() only clears
+  // sinkingEnabled on a non-tomography model, not `enabled` itself -- a
+  // depth slice left on from an earlier preset (e.g. the REVEAL/UU-P07
+  // depth-slice comparison) would otherwise still paint an opaque
+  // constant-depth sphere at R_SURFACE over the isosurfaces this preset
+  // means to show.
+  inst.view.depthSlice.enabled = false;
+  inst.applyDepthSlice();
   inst.view.iso.coldEnabled = true;
   inst.view.iso.hotEnabled = true;
   inst.applyIso();
