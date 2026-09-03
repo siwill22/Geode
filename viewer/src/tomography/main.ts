@@ -16,6 +16,7 @@ import { tileGrid, type Rect } from '../core/layout';
 import type { IsosurfaceState } from './isosurface';
 import { sinkingDepthKm, type DepthSliceState } from '../core/depthSlice';
 import type { SurfaceMode } from './ui';
+import type { ArchiveIndex } from '../core/types';
 
 // Where the data lives. Defaults to the archive shipped beside the app, under
 // whatever base path the build was given ('/' in dev, '/Geode/' on Pages).
@@ -209,6 +210,159 @@ document.getElementById('add-globe')?.addEventListener('click', () => {
 document.getElementById('hint-toggle')?.addEventListener('click', () => {
   const hint = document.getElementById('hint');
   if (hint) hint.hidden = !hint.hidden;
+});
+
+// --- presets -------------------------------------------------------------
+//
+// "Start Here" menu: canned starting points for someone who has never opened
+// the viewer before. Each one drives the same public instance API a user
+// action would (selectModel/applySurfaceMode/applyIso/closePolygon), so a
+// preset can never leave state a manual click couldn't also produce.
+
+document.getElementById('preset-toggle')?.addEventListener('click', () => {
+  const menu = document.getElementById('presets');
+  if (menu) menu.hidden = !menu.hidden;
+});
+
+function hidePresetsMenu(): void {
+  const menu = document.getElementById('presets');
+  if (menu) menu.hidden = true;
+}
+
+/** A single square cut, in lon/lat degrees, sized to the ocean gap between
+ *  South America's east coast (to about -35 lon) and Africa's west coast
+ *  (from about -15 lon) -- deliberately smaller than the visible hemisphere,
+ *  so both coastlines stay on screen as a frame around the cut rather than
+ *  the cut consuming the whole view. Reused identically across all three
+ *  globes so the models line up for comparison. */
+const ATLANTIC_CUT_POLYGON: [number, number][] = [
+  [-55, 35], [-5, 35], [-5, -35], [-55, -35],
+];
+/** All the way to the base of the volume, so the cut reveals the full column
+ *  rather than just the shallow mantle. */
+const ATLANTIC_CUT_DEPTH_KM = 2890;
+
+function applyCutawayPolygon(inst: GlobeInstance, verts: [number, number][], depthKm: number): void {
+  inst.cut.vertices = verts.map(([lon, lat]) => ({ lon, lat }));
+  inst.view.cutDepthKm = depthKm;
+  inst.closePolygon();
+  refreshGUI(inst);
+}
+
+/** Matched by name fragment rather than the 'opt1' id, since the id is an
+ *  internal dataset label while "Muller" is the thing every preset actually
+ *  means to pick. */
+function findMullerModel(): ArchiveIndex['models'][number] | undefined {
+  return deps.archive.models.find((m) => m.name.toLowerCase().includes('muller'));
+}
+
+/** Preset 1: a single globe on the Muller et al. 2022 convection model, with
+ *  the outer surface hidden and both isosurfaces on, so the mantle structure
+ *  is the very first thing visible. */
+async function applyPresetConvection(): Promise<void> {
+  while (instances.length > 1) removeInstance(instances[instances.length - 1]);
+  const inst = instances[0];
+  focusedInstance = inst;
+
+  const model = findMullerModel();
+  if (model) await inst.selectModel(model.id);
+
+  inst.applySurfaceMode('none');
+  inst.view.iso.coldEnabled = true;
+  inst.view.iso.hotEnabled = true;
+  inst.applyIso();
+  refreshGUI(inst);
+}
+
+/** Preset 2: one globe per real tomography model (skipping the dev fixtures),
+ *  each cut open over the same Atlantic square so REVEAL/SEMUCB-WM1/UU-P07
+ *  can be compared side by side in the same region. */
+async function applyPresetAtlanticComparison(): Promise<void> {
+  const models = deps.archive.models.filter(
+    (m) => m.type === 'tomography' && !m.id.startsWith('fixture-'),
+  );
+  if (models.length === 0) return;
+
+  while (instances.length > models.length) removeInstance(instances[instances.length - 1]);
+  while (instances.length < models.length) await addInstance();
+  relayout();
+
+  for (let i = 0; i < models.length; i++) {
+    const inst = instances[i];
+    await inst.selectModel(models[i].id);
+    // A consistent surface across all three, regardless of what each
+    // instance's surface happened to be left at by earlier interaction (e.g.
+    // the convection preset's "none") -- the point of this preset is a
+    // like-for-like comparison.
+    inst.applySurfaceMode('topography');
+    applyCutawayPolygon(inst, ATLANTIC_CUT_POLYGON, ATLANTIC_CUT_DEPTH_KM);
+  }
+  focusedInstance = instances[0];
+  // One shared camera for every tile: point it at the Atlantic so the cut
+  // this preset just made is actually the thing on screen, not a coincidence
+  // of wherever the camera happened to be left.
+  setCamera({ lon: -30, lat: 0, dist: 3.0 });
+}
+
+/** Preset 3: REVEAL next to UU-P07 -- two present-day tomography inversions,
+ *  each showing a coloured depth slice instead of the outer surface, with
+ *  both locked to age via the same published sinking rate and with time and
+ *  depth slice synced across the two. Scrubbing either slider on either
+ *  globe moves both together, so the same reconstructed depth is always
+ *  being compared between the two models. */
+async function applyPresetDepthSliceComparison(): Promise<void> {
+  const reveal = deps.archive.models.find((m) => m.id === 'reveal');
+  const uup07 = deps.archive.models.find((m) => m.id === 'uup07');
+  const wanted = [reveal, uup07].filter((m): m is ArchiveIndex['models'][number] => !!m);
+  if (wanted.length === 0) return;
+
+  while (instances.length > wanted.length) removeInstance(instances[instances.length - 1]);
+  while (instances.length < wanted.length) await addInstance();
+  relayout();
+
+  for (let i = 0; i < wanted.length; i++) {
+    const inst = instances[i];
+    await inst.selectModel(wanted[i].id);
+    inst.view.depthSlice.enabled = true;
+    // Both are tomography, so sinking mode (see canUseSinkingMode) applies to
+    // either -- ties each one's own slice depth to the shared age via the
+    // same published rate, rather than leaving one a fixed manual depth.
+    inst.view.depthSlice.sinkingEnabled = true;
+    inst.applyDepthSlice();
+    refreshGUI(inst);
+  }
+  focusedInstance = instances[0];
+  // At age 0 the sinking rate places the slice at 0 km -- inside UU-P07's own
+  // near-surface cutoff (5 km), which reads as "broken" (flat no-data grey)
+  // rather than "not sunk yet". 50 Ma puts the slice in the upper mantle,
+  // comfortably inside both models' valid depth range, so the very first
+  // thing shown actually demonstrates the feature.
+  instances[0].applyAge(50);
+  refreshGUI(instances[0]);
+  // Synced AFTER both globes already have depth slice (and REVEAL's age) set:
+  // setSyncAge/setSyncDepthSlice immediately broadcast the focused instance's
+  // current values, so turning them on first would push a still-default
+  // depth/age from a half-configured globe onto the other.
+  setSyncAge(true);
+  setSyncDepthSlice(true);
+}
+
+document.getElementById('preset-convection')?.addEventListener('click', () => {
+  if (!deps) return; // still booting; the first globe isn't up yet
+  hidePresetsMenu();
+  void applyPresetConvection();
+});
+
+document.getElementById('preset-atlantic')?.addEventListener('click', () => {
+  if (!deps) return;
+  hidePresetsMenu();
+  void applyPresetAtlanticComparison();
+});
+
+document.getElementById('preset-depthslice')?.addEventListener('click', () => {
+  if (!deps) return;
+  hidePresetsMenu();
+  void applyPresetDepthSliceComparison();
 });
 
 // --- interaction -------------------------------------------------------
