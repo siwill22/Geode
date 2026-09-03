@@ -203,7 +203,20 @@ async function addInstance(): Promise<void> {
   const inst = createInstance(`Globe ${instances.length + 1}`);
   instances.push(inst);
   relayout();
-  await inst.boot(climateModelIds, paleogeographyModelId);
+  try {
+    await inst.boot(climateModelIds, paleogeographyModelId);
+  } catch (e) {
+    // Unlike the FIRST globe's boot() (main.ts's own top-level boot(),
+    // caught below with a page-wide #error -- appropriate there, since
+    // nothing else works either if that one fails), a later globe failing
+    // shouldn't take the whole page down: every other instance is fine, and
+    // this one's own panel is right there to say so. Left in place (not
+    // auto-removed) so "remove this globe" still works and the failure
+    // stays visible rather than silently vanishing.
+    console.error(e);
+    inst.ui.setStatus(`failed to load: ${e instanceof Error ? e.message : String(e)}`, true);
+    return;
+  }
   // A globe added while a sync is active joins the synced group immediately,
   // rather than booting at age 0 / month 0 and waiting for the next drag
   // elsewhere to catch it up.

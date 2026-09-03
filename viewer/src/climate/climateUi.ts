@@ -492,9 +492,15 @@ export class ClimateUI {
     this.gui.controllersRecursive().forEach((c) => c.updateDisplay());
   }
 
-  setStatus(msg: string): void {
+  /** `isError` swaps in the same red styling as the page-level #error box
+   *  (see climate.html's boot() failure handler) -- without it, a failed
+   *  fetch reusing the plain "loading..." look would just look like this
+   *  globe was stuck loading forever, not like something that needs the
+   *  user's attention. See main.ts's addInstance() for the failure path. */
+  setStatus(msg: string, isError = false): void {
     this.status.textContent = msg;
     this.status.style.display = msg ? 'block' : 'none';
+    this.status.classList.toggle('status--error', isError);
   }
 
   setTimeInfo(msg: string): void {

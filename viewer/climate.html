@@ -35,6 +35,11 @@
         padding: 6px 10px; border-radius: 4px;
         background: rgba(0, 0, 0, 0.6); color: #cfd6dd;
       }
+      /* Same red as the page-level #error box below -- a failed boot() on a
+         globe added after the first shouldn't read as "still loading". */
+      .status.status--error {
+        background: #3a1416; color: #ffb4b4;
+      }
       .timeinfo {
         position: fixed;
         padding: 6px 10px; border-radius: 4px;
