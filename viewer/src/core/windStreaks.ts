@@ -185,9 +185,29 @@ export class WindStreaks {
    *  the mode becomes visible again after being hidden, so stale state (and
    *  the large dt that hiding accumulates) never produces a single huge,
    *  wrong-looking jump on the next update(). bulk=true, same reasoning as
-   *  the constructor's cold-start seeding -- see respawn()'s doc comment. */
+   *  the constructor's cold-start seeding -- see respawn()'s doc comment.
+   *
+   *  Follows every respawn with an immediate FULL writeRibbon() -- respawn()
+   *  resets the logical trail buffer, but the actual GPU-visible ribbon
+   *  vertices only get rebuilt inside update()'s per-particle loop, and only
+   *  in full mode when `commit || justRespawned`. Called from outside that
+   *  loop, resetAll() is invisible to both flags: the NEXT ordinary
+   *  update() tick sees an unremarkable in-progress particle (age just set
+   *  to a fresh positive value, so it won't hit the age<=0 branch) and, most
+   *  frames, does a PARTIAL rebuild -- only the head vertex, leaving the
+   *  other 11 trail points holding stale pre-reset positions. A ribbon
+   *  connecting a fresh head to a stale tail is a real glitch, not a cosmetic
+   *  one: it's most dramatic exactly when this resets into a different
+   *  Projection (setProjection(), above), where "stale" means a wildly
+   *  different coordinate space, not just a different point on the same
+   *  sphere -- every streak flashes the full width of the screen for the
+   *  ~1.5s (TRAIL_LEN * RECORD_INTERVAL_S) it takes commit cycles to walk
+   *  the ring buffer back to consistency on their own. */
   resetAll(): void {
-    for (let p = 0; p < this.activeCount; p++) this.respawn(p, true);
+    for (let p = 0; p < this.activeCount; p++) {
+      this.respawn(p, true);
+      this.writeRibbon(p, true);
+    }
   }
 
   /** Uniform-area random respawn: `lat` must be drawn via asin(uniform(-1,1)),
