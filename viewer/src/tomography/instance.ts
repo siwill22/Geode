@@ -290,6 +290,11 @@ export class GlobeInstance {
     const want = (v.high_means ?? 'fast') === 'hot' ? 'warm' : 'cool';
     return Object.keys(this.deps.colormaps).filter((n) => {
       const c = this.deps.colormaps[n];
+      // A colormap flagged general: false (koppen's fixed class palette,
+      // geo's sea-level hinge) is calibrated to one specific variable and
+      // means nothing applied to another -- never a generic option here,
+      // regardless of polarity.
+      if (c.general === false) return false;
       return c.diverging ? c.high_end === want : true;
     });
   }

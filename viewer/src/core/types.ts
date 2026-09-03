@@ -142,6 +142,16 @@ export interface ColormapData {
     diverging: boolean;
     /** Which end of the ramp is warm; null for sequential maps. */
     high_end?: 'warm' | 'cool' | null;
+    /**
+     * False for a ramp calibrated to one specific variable's own meaning --
+     * a fixed class palette (koppen) or a ramp hinged at that variable's own
+     * zero point (geo, hinged at sea level) -- rather than a general-purpose
+     * scale. Absent/true for anything safe to offer as a generic option for
+     * any variable. Only excludes a colormap from generic pickers (see
+     * colormapOptions() in tomography/instance.ts); a manifest can still name
+     * it directly as a variable's own default_colormap.
+     */
+    general?: boolean;
     colors: [number, number, number][];
   };
 }

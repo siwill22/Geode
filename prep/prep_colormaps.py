@@ -154,7 +154,14 @@ def main():
               f"low={tuple(colors[0])} high={tuple(colors[-1])}")
 
     koppen_colors = build_categorical_colormap(KOPPEN_COLORS)
-    out["koppen"] = {"diverging": False, "high_end": None, "colors": koppen_colors}
+    # general=False: a fixed 14-class palette keyed to the Koppen class codes
+    # (see KOPPEN_COLORS above), meaningless applied to any other variable --
+    # excluded from the tomography viewer's generic colormap picker (see
+    # colormapOptions() in viewer/src/tomography/instance.ts) even though it
+    # is, mechanically, just another non-diverging 256-entry ramp.
+    out["koppen"] = {
+        "diverging": False, "high_end": None, "general": False, "colors": koppen_colors,
+    }
     print(f"  {'koppen':14s} categorical ({len(KOPPEN_COLORS)} classes)")
 
     if failures:

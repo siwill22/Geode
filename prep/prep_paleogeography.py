@@ -143,7 +143,13 @@ def make_geo_colormap(encode_min, encode_max, master_half_range_m=8000.0):
         z_norm = float(np.clip(elev / master_half_range_m, -1.0, 1.0))
         rgb = [float(np.interp(z_norm, zs, rgbs[:, c])) for c in range(3)]
         colors.append([int(round(c)) for c in rgb])
-    return {'diverging': False, 'high_end': None, 'colors': colors}
+    # general=False: this ramp's ocean/land hinge is baked in at THIS
+    # variable's own encode range (see docstring above) -- reused for another
+    # variable, the hinge would land at whatever arbitrary value happens to
+    # map to elevation=0 here, not that variable's own zero. Excluded from
+    # the tomography viewer's generic colormap picker (colormapOptions() in
+    # viewer/src/tomography/instance.ts) for that reason.
+    return {'diverging': False, 'high_end': None, 'general': False, 'colors': colors}
 
 
 def compute_hillshade(data, lon, lat, azimuth=315.0):
