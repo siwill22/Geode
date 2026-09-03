@@ -1,6 +1,7 @@
 import GUI, { type Controller } from 'lil-gui';
 import type { ClimateLayer, WindStyle } from './climateInstance';
 import type { Rect } from '../core/layout';
+import type { TimeSeriesPoint } from '../core/timeSeries';
 import type { ColormapData, ResolutionInfo, VariableInfo } from '../core/types';
 
 export interface ClimateViewState {
@@ -41,6 +42,10 @@ export interface ClimateUICallbacks {
   onWindStyle(style: WindStyle): void;
   onWindScale(v: number): void;
   onWindDensity(v: number): void;
+  /** The time-series panel was just opened -- see setTimeSeriesVariables()'s
+   *  own doc comment for why every open fires this rather than ClimateUI
+   *  tracking "already requested" itself. */
+  onExpandTimeSeries(): void;
 }
 
 const N_REAL_MONTHS = 12; // the calendar months -- must match prep_climate.py's N_MONTHS
@@ -97,6 +102,28 @@ export class ClimateUI {
   private legendTickMin: HTMLSpanElement;
   private legendTickMax: HTMLSpanElement;
   private legendKey: HTMLDivElement;
+  /** Collapsed by default (see the constructor) -- a chart per pickable
+   *  variable of the ACTIVE layer, one area-weighted global-mean point per
+   *  Frame, computed lazily on first expand (see setTimeSeriesVariables()'s
+   *  own doc comment) rather than at boot, so a user who never opens this
+   *  never pays for it. */
+  private timeSeriesToggle: HTMLButtonElement;
+  private timeSeriesBody: HTMLDivElement;
+  private timeSeriesExpanded = false;
+  /** One row per pickable variable, keyed by variable id -- rebuilt whole by
+   *  setTimeSeriesVariables() whenever the variable SET changes (layer or
+   *  climate-model switch), since a stale row for a variable that no longer
+   *  applies would be worse than an empty panel. */
+  private timeSeriesRows = new Map<string, {
+    row: HTMLDivElement; canvas: HTMLCanvasElement; statusEl: HTMLDivElement; points: TimeSeriesPoint[] | null;
+  }>();
+  /** The Frame age range to plot the X axis over -- the manifest's own full
+   *  range (see setAgeRange()), NOT the span of whichever points happen to
+   *  be computed so far, so the marker line and axis stay stable as rows
+   *  populate progressively at different speeds. */
+  private timeSeriesAgeMin = 0;
+  private timeSeriesAgeMax = 540;
+  private timeSeriesCurrentAge = 0;
   /** Data-source attribution, bottom-right of this instance's own tile --
    *  see setCredit(), driven by ClimateInstance.updateCredit() from the
    *  ACTIVE model(s)' own manifest.source, not a fixed string. Used to be
@@ -260,7 +287,30 @@ export class ClimateUI {
     this.credit.className = 'credit';
     document.body.appendChild(this.credit);
 
+    // Lives inside panelAnchor, right below the lil-gui panel itself -- rides
+    // the SAME top-right positioning applyRect() already gives panelAnchor,
+    // no separate corner to manage.
+    this.timeSeriesToggle = document.createElement('button');
+    this.timeSeriesToggle.className = 'timeseries-toggle';
+    this.timeSeriesToggle.textContent = '▸ time series';
+    this.timeSeriesBody = document.createElement('div');
+    this.timeSeriesBody.className = 'timeseries-body';
+    this.timeSeriesToggle.addEventListener('click', () => this.toggleTimeSeries());
+    this.panelAnchor.append(this.timeSeriesToggle, this.timeSeriesBody);
+
     this.applyRect();
+  }
+
+  private toggleTimeSeries(): void {
+    this.timeSeriesExpanded = !this.timeSeriesExpanded;
+    this.timeSeriesBody.style.display = this.timeSeriesExpanded ? 'flex' : 'none';
+    this.timeSeriesToggle.textContent = this.timeSeriesExpanded ? '▾ time series' : '▸ time series';
+    // Every open re-fires the request rather than ClimateUI tracking
+    // "already asked" -- ClimateInstance owns the actual cache (keyed by
+    // model/resolution) and no-ops a redundant request itself, which is one
+    // fewer piece of "has this already happened" state to keep in sync
+    // between the two classes for the same underlying fact.
+    if (this.timeSeriesExpanded) this.cb.onExpandTimeSeries();
   }
 
   /** Bound by the manifest's own frame range (0-540 Ma) -- NOT
@@ -268,6 +318,8 @@ export class ClimateUI {
    *  overlay, a narrower thing. See ClimateInstance's class doc. */
   setAgeRange(min: number, max: number, step = 1): void {
     this.ageCtrl.min(min).max(max).step(step);
+    this.timeSeriesAgeMin = min;
+    this.timeSeriesAgeMax = max;
   }
 
   /** Rebuild the variable dropdown for whichever layer just became active,
@@ -283,6 +335,14 @@ export class ClimateUI {
    *  see updateClimateModelVisibility() -- since that's layer-gated too. */
   setLayerVariables(variables: VariableInfo[], layer: ClimateLayer): void {
     const pickable = variables.filter((v) => !v.overlay_only && !v.vector_only && !v.mask_only);
+    // A time series is meaningful to look at (Koppen's class index stays a
+    // dropdown choice below) but not to average -- "mean of class 3 and
+    // class 7" isn't class 5 or anything else meaningful, unlike averaging a
+    // continuous physical quantity. Must match
+    // ClimateInstance.pickableTimeSeriesVariables()'s own filter, or a
+    // categorical row would be built here with nothing ever arriving to
+    // fill it -- ClimateInstance excludes it from what it computes.
+    this.setTimeSeriesVariables(pickable.filter((v) => !v.categorical));
     if (pickable.length <= 1) {
       this.variableCtrl.hide();
       this.monthCtrl.hide();
@@ -348,6 +408,120 @@ export class ClimateUI {
     for (const r of resolutions) choices[`${r.nlon}x${r.nlat}`] = r.id;
     this.resolutionCtrl.options(choices);
     this.resolutionCtrl.show();
+  }
+
+  /** Rebuild the time-series rows for whichever variables are pickable on
+   *  the NOW-active layer/model -- called from setLayerVariables() with the
+   *  same `pickable` list it already computed, so a layer or climate-model
+   *  switch (a different manifest, different Frames) always shows fresh
+   *  rows rather than a stale set left over from before. Discards any
+   *  already-computed points for the OLD variable set; if the panel is
+   *  currently expanded, immediately re-requests data for the new one --
+   *  "the panel is open" means "keep it live", the same reasoning
+   *  ClimateInstance.setProjection() already applies to wind. Builds empty
+   *  placeholder rows regardless of whether the panel is expanded (cheap:
+   *  no fetch happens until onExpandTimeSeries() actually fires), so
+   *  opening it later needs no separate "first paint" case. */
+  private setTimeSeriesVariables(pickable: VariableInfo[]): void {
+    this.timeSeriesBody.replaceChildren();
+    this.timeSeriesRows.clear();
+    for (const v of pickable) {
+      const row = document.createElement('div');
+      row.className = 'timeseries-row';
+      const label = document.createElement('div');
+      label.className = 'timeseries-label';
+      label.textContent = v.name;
+      const canvas = document.createElement('canvas');
+      canvas.className = 'timeseries-canvas';
+      canvas.width = 220;
+      canvas.height = 40;
+      const statusEl = document.createElement('div');
+      statusEl.className = 'timeseries-status';
+      row.append(label, canvas, statusEl);
+      this.timeSeriesBody.appendChild(row);
+      this.timeSeriesRows.set(v.id, {
+        row, canvas, statusEl, points: null,
+      });
+    }
+    if (this.timeSeriesExpanded) this.cb.onExpandTimeSeries();
+  }
+
+  setTimeSeriesLoading(variableId: string): void {
+    const entry = this.timeSeriesRows.get(variableId);
+    if (!entry) return;
+    entry.statusEl.textContent = 'computing…';
+  }
+
+  setTimeSeriesData(variableId: string, points: TimeSeriesPoint[]): void {
+    const entry = this.timeSeriesRows.get(variableId);
+    if (!entry) return; // a stale response landing after setTimeSeriesVariables() rebuilt the rows
+    entry.points = points;
+    entry.statusEl.textContent = '';
+    this.drawTimeSeriesRow(entry.canvas, points);
+  }
+
+  /** Redraw every row's marker (and, incidentally, the whole chart -- see
+   *  drawTimeSeriesRow()'s own doc comment for why redrawing the line too is
+   *  cheap enough not to bother splitting out) at the CURRENT age. Called
+   *  from ClimateInstance.applyAge() regardless of whether the panel is
+   *  expanded or any row has data yet -- drawTimeSeriesRow() on a null-points
+   *  row is a no-op, and an expand later just paints from whatever's already
+   *  stored. */
+  setTimeSeriesAge(age: number): void {
+    this.timeSeriesCurrentAge = age;
+    for (const entry of this.timeSeriesRows.values()) {
+      if (entry.points) this.drawTimeSeriesRow(entry.canvas, entry.points);
+    }
+  }
+
+  /** A small line chart: per-Frame points (NOT evenly spaced in age -- see
+   *  computeTimeSeries()) connected in Frame-age order, auto-scaled to
+   *  whichever points exist so far (so a row redraws sensibly mid-progressive
+   *  -load, before every Frame has resolved), plus a vertical marker at the
+   *  CURRENT age. Redrawn from scratch on every call rather than incrementally
+   *  patched -- at most a few hundred points on a ~220px canvas, cheap enough
+   *  that a separate "just move the marker" fast path would be premature. */
+  private drawTimeSeriesRow(canvas: HTMLCanvasElement, points: TimeSeriesPoint[]): void {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    const values = points.map((p) => p.mean).filter((v) => !Number.isNaN(v));
+    if (values.length === 0) return;
+    let vMin = Math.min(...values);
+    let vMax = Math.max(...values);
+    if (vMin === vMax) { vMin -= 1; vMax += 1; } // a perfectly flat series would otherwise divide by zero below
+
+    const padX = 2;
+    const padY = 3;
+    const ageSpan = this.timeSeriesAgeMax - this.timeSeriesAgeMin || 1;
+    const toX = (age: number) => padX + ((age - this.timeSeriesAgeMin) / ageSpan) * (w - 2 * padX);
+    const toY = (v: number) => h - padY - ((v - vMin) / (vMax - vMin)) * (h - 2 * padY);
+
+    ctx.strokeStyle = '#7fd0ff';
+    ctx.lineWidth = 1.25;
+    ctx.beginPath();
+    let penDown = false;
+    for (const p of points) {
+      // A gap (mask/no-data covered every texel at this Frame, see
+      // computeTimeSeries()) breaks the line rather than interpolating
+      // across missing data -- "say so, don't fabricate" again.
+      if (Number.isNaN(p.mean)) { penDown = false; continue; }
+      const x = toX(p.age);
+      const y = toY(p.mean);
+      if (!penDown) { ctx.moveTo(x, y); penDown = true; } else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    const markerX = toX(this.timeSeriesCurrentAge);
+    ctx.strokeStyle = '#ffb454';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(markerX, 0);
+    ctx.lineTo(markerX, h);
+    ctx.stroke();
   }
 
   private togglePlay(): void {

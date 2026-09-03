@@ -74,7 +74,7 @@ export function resolvePath(
  * actually got. That is correct under either transport, which is what lets the
  * dev server and GitHub Pages disagree about this without anyone noticing.
  */
-async function fetchVolumeBytes(path: string): Promise<Uint8Array> {
+export async function fetchVolumeBytes(path: string): Promise<Uint8Array> {
   const r = await fetch(path);
   if (!r.ok) throw new Error(`${path}: ${r.status}`);
   const raw = new Uint8Array(await r.arrayBuffer());
@@ -131,6 +131,24 @@ export async function loadVolume(
   tex.unpackAlignment = 1;
   tex.needsUpdate = true;
   return tex;
+}
+
+/**
+ * Fetch one variable's raw undecoded bytes for one frame, without creating a
+ * GPU texture -- the CPU-only twin of loadVolume(), for a consumer that only
+ * ever reduces the bytes itself (see core/timeSeries.ts) and would otherwise
+ * pay for a texture upload (and, at FrameCache's FRAME_LIMIT, an immediate
+ * eviction/disposal) it has no use for. Same path-resolution and
+ * gzip-transparency as loadVolume(); no shape validation here, since a CPU
+ * reducer indexes the buffer directly against its own (nlon, nlat, ndepth)
+ * rather than through a texture that would fail to construct on a mismatch.
+ */
+export async function fetchVariableBytes(
+  base: string, modelId: string, manifest: Manifest, variableId: string, frameId: string,
+  resolutionId: string = manifest.default_resolution,
+): Promise<Uint8Array> {
+  const path = `${base}/models/${modelId}/${resolvePath(manifest, variableId, frameId, resolutionId)}`;
+  return fetchVolumeBytes(path);
 }
 
 /**

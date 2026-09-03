@@ -12,6 +12,7 @@ import type { ProjectionMode } from '../core/projection';
 import type { Rect } from '../core/layout';
 import { WindGlyphs } from '../core/windGlyphs';
 import { WindStreaks } from '../core/windStreaks';
+import { computeTimeSeries, type TimeSeriesPoint } from '../core/timeSeries';
 import {
   FrameCache, loadManifest, loadMask2D, makeColormapTexture, nearestFrame, physicalToEncoded,
 } from '../core/volume';
@@ -193,6 +194,15 @@ export class ClimateInstance {
    *  boot() once coastlines/wind actually exist, to re-apply whichever
    *  Projection was already active before they did. */
   private projectionMode: ProjectionMode = 'globe';
+  /** Keyed by `${manifest.id}/${resolutionId}/${variable.id}`, caching the
+   *  PROMISE (not just the resolved points) so two expands racing (or one
+   *  expand of a layer/model already computed earlier in the session) share
+   *  the same in-flight fetch instead of duplicating it -- see
+   *  onExpandTimeSeries(). Never invalidated: a model's own Frame data
+   *  doesn't change under a live session, so once computed it's good for as
+   *  long as this instance lives. Cleared per-key on failure, so a transient
+   *  fetch error doesn't permanently wedge that one row. */
+  private timeSeriesCache = new Map<string, Promise<TimeSeriesPoint[]>>();
 
   constructor(
     private camera: Camera,
@@ -239,6 +249,7 @@ export class ClimateInstance {
       onWindStyle: (v) => this.setWindStyle(v),
       onWindScale: (v) => this.setWindScale(v),
       onWindDensity: (v) => this.setWindDensity(v),
+      onExpandTimeSeries: () => this.onExpandTimeSeries(),
     }, label, () => this.hooks.onRemove(this));
   }
 
@@ -356,6 +367,53 @@ export class ClimateInstance {
 
   applyLayout(rect: Rect): void {
     this.ui.setRect(rect);
+  }
+
+  /** The variables a TIME SERIES can meaningfully be computed for: same base
+   *  filter ClimateUI.setLayerVariables() applies for its dropdown (kept as
+   *  an independent one-liner rather than a shared helper -- the two live in
+   *  different classes for different reasons, and the predicate is small
+   *  enough that threading a shared function through both would cost more
+   *  indirection than it saves), PLUS excluding `categorical` -- a variable
+   *  like Koppen's class index is meaningful to LOOK at (the dropdown still
+   *  offers it) but not to average: "mean of class 3 and class 7" isn't
+   *  class 5 or anything else meaningful, unlike averaging a continuous
+   *  physical quantity. computeTimeSeries() has no way to catch this itself
+   *  (a class index decodes through texelToPhysical() same as any other
+   *  byte, so the arithmetic "succeeds" and just produces a number that
+   *  means nothing), so the exclusion has to happen here, before it's asked
+   *  to compute anything for one. */
+  private pickableTimeSeriesVariables(): VariableInfo[] {
+    return this.manifest.variables.filter(
+      (v) => !v.overlay_only && !v.vector_only && !v.mask_only && !v.categorical,
+    );
+  }
+
+  /** Compute (or resolve from cache) the time series for every pickable
+   *  variable of the CURRENTLY active layer/model, feeding each into its own
+   *  row as it resolves -- fired by ClimateUI on every panel-open AND every
+   *  time the variable set is rebuilt while already open (see
+   *  ClimateUI.setTimeSeriesVariables()'s doc comment), so this always
+   *  reflects whichever layer/model is active NOW, not whichever was active
+   *  the first time the panel was opened. */
+  private onExpandTimeSeries(): void {
+    const manifest = this.manifest;
+    const resolutionId = this.resolutionFor(this.view.layer);
+    for (const v of this.pickableTimeSeriesVariables()) {
+      const key = `${manifest.id}/${resolutionId}/${v.id}`;
+      const cached = this.timeSeriesCache.get(key);
+      if (cached) {
+        void cached.then((points) => this.ui.setTimeSeriesData(v.id, points));
+        continue;
+      }
+      this.ui.setTimeSeriesLoading(v.id);
+      const promise = computeTimeSeries(this.deps.archiveBase, manifest.id, manifest, v, resolutionId);
+      this.timeSeriesCache.set(key, promise);
+      void promise.then((points) => this.ui.setTimeSeriesData(v.id, points)).catch((e: unknown) => {
+        console.error(e);
+        this.timeSeriesCache.delete(key); // let the next expand retry rather than caching a permanent failure
+      });
+    }
   }
 
   /** Switch this globe's Projection -- always called from main.ts for every
@@ -548,6 +606,7 @@ export class ClimateInstance {
     if (this.hasOverlay) void this.loadOverlayFrame(age);
     if (this.hasWind) void this.loadWindFrame(age);
     this.ui.setTimeInfo(`age ${age.toFixed(0)} Ma`);
+    this.ui.setTimeSeriesAge(age);
   }
 
   setOverlayOpacity(v: number): void {

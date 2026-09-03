@@ -183,3 +183,17 @@ simulation. A particle has a finite lifetime and respawns at a new random
 position on expiry — without this, particles drift into convergence zones
 (e.g. the ITCZ) and pile up there while divergent regions empty out, so
 coverage would visibly degrade the longer the animation runs.
+
+## Time Series (climate)
+
+One area-weighted global-mean point per Frame, for a single Variable of the
+active layer/model — a different axis from Reconstruction Age's "what does
+the surface look like at this one age": this is "how does the whole-globe
+mean of this Variable move across every age at once." Read from the Annual
+layer (or the only layer, for a Variable with no month axis), never
+whichever month the Reconstruction Age view currently shows — a long-term
+overview is a different question from an instantaneous snapshot, and tying
+it to the scrubbable month would mean recomputing on every drag for a chart
+meant to be computed once and left alone. Undefined (not zero) for a Frame
+where the model's own validity mask covers every texel; never computed for a
+categorical Variable (Koppen), whose class indices have no meaningful mean.
