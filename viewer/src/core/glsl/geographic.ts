@@ -40,6 +40,20 @@ vec2 geographicToUV(vec2 ll) {
   return vec2((ll.x + PI) / (2.0 * PI), (ll.y + PI * 0.5) / PI);
 }
 
+/**
+ * World position -> (lon, lat) in radians, for the flat Plate Carrée plane
+ * (see core/projection.ts) rather than the sphere. The plane's x/y ARE the
+ * equirectangular layout, scaled linearly by R_SURFACE -- no trig, and exact
+ * under interpolation everywhere on the plane, unlike worldToGeographic's
+ * sphere inverse. West is negative x (left edge, lon -180) and north is
+ * positive y (top edge, lat +90), the reading direction any flat map is
+ * expected to have -- a convention specific to this plane, independent of
+ * worldToGeographic's sphere-embedding handedness above.
+ */
+vec2 worldToGeographicFlat(vec3 p) {
+  return vec2(p.x / R_SURFACE, p.y / R_SURFACE);
+}
+
 /** World position -> depth below the surface, in km. No vertical exaggeration. */
 float worldDepthKm(vec3 p) {
   return (R_SURFACE - length(p)) * EARTH_RADIUS_KM;

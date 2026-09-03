@@ -1,6 +1,7 @@
-import { Mesh, SphereGeometry, ShaderMaterial, FrontSide } from 'three';
-import { createVolumeSurfaceMaterial, setMaskMode } from './material';
+import { Mesh, ShaderMaterial, FrontSide } from 'three';
+import { createVolumeSurfaceMaterial, setMaskMode, setProjectionMode } from './material';
 import { R_SURFACE } from './constants';
+import { createSurfaceGeometry, type ProjectionMode } from './projection';
 import type { Manifest } from './types';
 
 export interface DepthSliceState {
@@ -136,6 +137,7 @@ export function canUseSinkingMode(manifest: Manifest | undefined): boolean {
 export class DepthSlice {
   readonly mesh: Mesh;
   private readonly mat: ShaderMaterial;
+  private readonly radius: number;
 
   /** `radius` defaults to R_SURFACE (every existing caller); a second
    *  DepthSlice at a slightly larger radius is how the paleoclimate
@@ -143,12 +145,13 @@ export class DepthSlice {
    *  without z-fighting it -- see climateInstance.ts and the LAND_R
    *  precedent in coastlines.ts. */
   constructor(radius: number = R_SURFACE) {
+    this.radius = radius;
     this.mat = createVolumeSurfaceMaterial();
-    this.mat.side = FrontSide; // a whole sphere: only the outward face is ever seen
-    setMaskMode(this.mat, 'none'); // paints the WHOLE globe, ignoring any cutaway polygon
+    this.mat.side = FrontSide; // a whole sphere/plane: only the outward face is ever seen
+    setMaskMode(this.mat, 'none'); // paints the WHOLE surface, ignoring any cutaway polygon
     this.mat.uniforms.uUseSliceDepth.value = 1;
 
-    this.mesh = new Mesh(new SphereGeometry(radius, 256, 128), this.mat);
+    this.mesh = new Mesh(createSurfaceGeometry('globe', radius), this.mat);
     this.mesh.renderOrder = 1;
     this.mesh.visible = false;
   }
@@ -157,5 +160,16 @@ export class DepthSlice {
 
   setDepthKm(km: number): void {
     this.mat.uniforms.uSliceDepthKm.value = km;
+  }
+
+  /** Rebuild this surface's geometry for `mode` and flip the shader's
+   *  worldToGeographic branch to match (see core/projection.ts). Cheap
+   *  enough to rebuild on every switch rather than keep both geometries
+   *  live -- see docs/adr/0003-plate-carree-as-first-alternate-projection.md. */
+  setProjection(mode: ProjectionMode): void {
+    const old = this.mesh.geometry;
+    this.mesh.geometry = createSurfaceGeometry(mode, this.radius);
+    old.dispose();
+    setProjectionMode(this.mat, mode);
   }
 }

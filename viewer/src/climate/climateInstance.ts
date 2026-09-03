@@ -1,5 +1,5 @@
 import {
-  Scene, Vector3, type Data3DTexture, type PerspectiveCamera, type ShaderMaterial,
+  Scene, Vector3, type Camera, type Data3DTexture, type ShaderMaterial,
   type Texture, type WebGLRenderer,
 } from 'three';
 
@@ -8,6 +8,7 @@ import { setMaskMode, setValidMask } from '../core/material';
 import { createMaskTexture } from '../core/mask';
 import { Coastlines, type CoastlineData } from '../core/coastlines';
 import { R_SURFACE } from '../core/constants';
+import type { ProjectionMode } from '../core/projection';
 import type { Rect } from '../core/layout';
 import { WindGlyphs } from '../core/windGlyphs';
 import { WindStreaks } from '../core/windStreaks';
@@ -188,9 +189,13 @@ export class ClimateInstance {
    *  from view.showWind/view.windStyle so applyWindVisibility() can tell a
    *  transition INTO visible (needs resetAll()) from staying visible. */
   private streakActive = false;
+  /** Set only by setProjection() -- see its own doc comment. Read by
+   *  applyWindVisibility() to hide wind (CPU-positioned, not shader-
+   *  reprojected) while Plate Carrée is active. */
+  private projectionMode: ProjectionMode = 'globe';
 
   constructor(
-    private readonly camera: PerspectiveCamera,
+    private camera: Camera,
     private readonly deps: ClimateInstanceDeps,
     private readonly hooks: ClimateInstanceHooks,
     label: string,
@@ -339,11 +344,34 @@ export class ClimateInstance {
     this.ui.setTimeInfo(`age ${this.view.age.toFixed(0)} Ma`);
     this.ui.setStatus('');
     this.updateCredit();
+    // Re-apply whichever Projection was already active (set by main.ts's
+    // createInstance() before boot() ever ran, so field/overlay/camera are
+    // already correct) now that coastlines/wind actually exist -- both are
+    // built during boot(), above, so the EARLIER setProjection() call had
+    // nothing to hide yet. Without this a globe added while Plate Carrée is
+    // active would boot with its coastline outline left showing.
+    this.setProjection(this.projectionMode, this.camera);
     this.hooks.onDisplayChange?.(this);
   }
 
   applyLayout(rect: Rect): void {
     this.ui.setRect(rect);
+  }
+
+  /** Switch this globe's Projection -- always called from main.ts for every
+   *  instance at once, alongside the shared camera it just built for `mode`
+   *  (see docs/adr/0003): Globe and Plate Carrée need different camera
+   *  types, so main.ts always replaces the camera object wholesale rather
+   *  than reconfiguring this instance's existing one in place. Rebuilds the
+   *  field/overlay geometry for `mode`; coastlines and wind hide instead of
+   *  reprojecting -- see applyWindVisibility()'s own doc comment. */
+  setProjection(mode: ProjectionMode, camera: Camera): void {
+    this.camera = camera;
+    this.projectionMode = mode;
+    this.field.setProjection(mode);
+    this.overlay.setProjection(mode);
+    if (this.coastlines) this.coastlines.lines.visible = mode === 'globe';
+    this.applyWindVisibility();
   }
 
   private async loadSource(modelId: string): Promise<LayerSource> {
@@ -536,8 +564,13 @@ export class ClimateInstance {
    *  checkbox turning back on) rather than resuming whatever stale particle
    *  state it had -- see WindStreaks.resetAll()'s own doc comment for why. */
   private applyWindVisibility(): void {
-    const glyphVisible = this.hasWind && this.view.showWind && this.view.windStyle === 'glyph';
-    const streakVisible = this.hasWind && this.view.showWind && this.view.windStyle === 'streak';
+    // Wind glyphs/streaks are CPU-positioned on the sphere (lonLatToVec3),
+    // like coastlines -- not shader-reprojected, so they hide rather than
+    // reproject while Plate Carrée is active. See setProjection()'s doc
+    // comment and docs/adr/0003.
+    const flat = this.projectionMode === 'plateCarree';
+    const glyphVisible = !flat && this.hasWind && this.view.showWind && this.view.windStyle === 'glyph';
+    const streakVisible = !flat && this.hasWind && this.view.showWind && this.view.windStyle === 'streak';
     this.wind.setVisible(glyphVisible);
     if (streakVisible && !this.streakActive) this.windStreaks.resetAll();
     this.streakActive = streakVisible;

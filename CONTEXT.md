@@ -145,6 +145,20 @@ The rasterised footprint of the Cutaway polygon, used to hide the parts of the
 surface and coastlines that fall inside it. An implementation of the Cutaway's
 effect on the surface, not a separate concept from it.
 
+## Projection
+
+How the globe's surface is mapped onto the screen: **Globe** (a sphere, viewed
+with a perspective camera and free orbit) or **Plate Carrée** (a flat
+equirectangular plane, viewed with an orthographic camera and pan/zoom, no
+rotation). Applies globally — every tiled instance on screen shares one
+Projection, the same way they already share one camera. Independent of Model,
+Frame, or Reconstruction Age: switching Projection changes how something is
+viewed, not what is being viewed.
+
+Coastlines and land fill do not reproject with it yet — the first cut only
+reprojects the Volume-derived surface. More Projections (Robinson, Mollweide,
+Spilhaus) are expected later; Plate Carrée is the first.
+
 ## Wind Glyph
 
 One arrow instance in the paleoclimate viewer's wind vector-field overlay: a

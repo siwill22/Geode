@@ -3,6 +3,7 @@ import {
   type Texture, type Data3DTexture,
 } from 'three';
 import { GEOGRAPHIC_GLSL } from './glsl/geographic';
+import { PROJECTION_UNIFORM, type ProjectionMode } from './projection';
 
 /**
  * Specify a colour that lands on screen as the literal hex given.
@@ -57,11 +58,12 @@ uniform float uUseValidMask; // 0 = ignore, 1 = discard where uValidMask < 0.5
 uniform float uOpacity;
 uniform float uSteps;   // 0 = continuous ramp, else this many discrete bands
 uniform float uDebug;   // 0 off, 1 pDep, 2 lat, 3 raw sample
+uniform float uProjectionMode; // 0 = globe (sphere), 1 = plate carree (flat plane) -- see core/projection.ts
 
 varying vec3 vWorldPos;
 
 void main() {
-  vec2 ll = worldToGeographic(vWorldPos);
+  vec2 ll = uProjectionMode > 0.5 ? worldToGeographicFlat(vWorldPos) : worldToGeographic(vWorldPos);
 
   if (uUseMask != 0.0) {
     float m = texture(uMask, geographicToUV(ll)).r;
@@ -154,8 +156,17 @@ export function createVolumeSurfaceMaterial(): ShaderMaterial {
       uOpacity: { value: 1 },
       uSteps: { value: 0 },
       uDebug: { value: 0 },
+      uProjectionMode: { value: 0 },
     },
   });
+}
+
+/** Switch this material's worldToGeographic branch -- see core/projection.ts.
+ *  Geometry is a separate concern (see DepthSlice.setProjection()); this only
+ *  flips which inverse the fragment shader uses to turn a fragment's world
+ *  position back into (lon, lat). */
+export function setProjectionMode(mat: ShaderMaterial, mode: ProjectionMode): void {
+  mat.uniforms.uProjectionMode.value = PROJECTION_UNIFORM[mode];
 }
 
 export function setMaskMode(mat: ShaderMaterial, mode: MaskMode): void {

@@ -93,6 +93,9 @@ export class ClimateUI {
   private legend: HTMLDivElement;
   private legendLabel: HTMLDivElement;
   private legendCanvas: HTMLCanvasElement;
+  private legendTicks: HTMLDivElement;
+  private legendTickMin: HTMLSpanElement;
+  private legendTickMax: HTMLSpanElement;
   private legendKey: HTMLDivElement;
   /** Data-source attribution, bottom-right of this instance's own tile --
    *  see setCredit(), driven by ClimateInstance.updateCredit() from the
@@ -206,10 +209,16 @@ export class ClimateUI {
       .onChange((v: number) => cb.onWindDensity(v));
     this.clipMinCtrl = this.gui.add(this.state, 'clipMin', -60, 50, 0.1)
       .name('clip min')
-      .onChange(() => cb.onClip(this.state.clipMin, this.state.clipMax));
+      .onChange(() => {
+        cb.onClip(this.state.clipMin, this.state.clipMax);
+        this.updateLegendTicks(this.state.clipMin, this.state.clipMax);
+      });
     this.clipMaxCtrl = this.gui.add(this.state, 'clipMax', -60, 50, 0.1)
       .name('clip max')
-      .onChange(() => cb.onClip(this.state.clipMin, this.state.clipMax));
+      .onChange(() => {
+        cb.onClip(this.state.clipMin, this.state.clipMax);
+        this.updateLegendTicks(this.state.clipMin, this.state.clipMax);
+      });
 
     // Always present once multiple globes exist, a no-op at exactly one --
     // see removeInstance()'s `instances.length <= 1` guard in main.ts --
@@ -237,9 +246,14 @@ export class ClimateUI {
     this.legendCanvas.className = 'legend-ramp';
     this.legendCanvas.width = 256;
     this.legendCanvas.height = 12;
+    this.legendTicks = document.createElement('div');
+    this.legendTicks.className = 'legend-ticks';
+    this.legendTickMin = document.createElement('span');
+    this.legendTickMax = document.createElement('span');
+    this.legendTicks.append(this.legendTickMin, this.legendTickMax);
     this.legendKey = document.createElement('div');
     this.legendKey.className = 'legend-key';
-    this.legend.append(this.legendLabel, this.legendCanvas, this.legendKey);
+    this.legend.append(this.legendLabel, this.legendCanvas, this.legendTicks, this.legendKey);
     document.body.appendChild(this.legend);
 
     this.credit = document.createElement('div');
@@ -359,6 +373,7 @@ export class ClimateUI {
     if (v.categorical) {
       this.clipMinCtrl.hide();
       this.clipMaxCtrl.hide();
+      this.hideLegendTicks();
     } else {
       // setValue() only repaints the DOM when it differs from the bound
       // state's CURRENT value (lil-gui's own dirty check) -- assigning
@@ -372,6 +387,7 @@ export class ClimateUI {
       this.clipMaxCtrl.name(`clip max (${v.units})`);
       this.clipMinCtrl.show();
       this.clipMaxCtrl.show();
+      this.updateLegendTicks(v.default_clip_min, v.default_clip_max);
     }
     this.variableLabel = v.categorical ? v.name : `${v.name} (${v.units})`;
     this.updateLegendLabel();
@@ -429,6 +445,27 @@ export class ClimateUI {
 
   private hideLegendKey(): void {
     this.legendKey.style.display = 'none';
+  }
+
+  /** Three significant figures -- enough to distinguish e.g. -70/65 (deg C)
+   *  from a precipitation range under 10 without a long decimal tail. */
+  private formatTick(v: number): string {
+    return Number(v.toPrecision(3)).toString();
+  }
+
+  /** Label the ramp's two ends with the CURRENT clip range in physical
+   *  units -- the ramp canvas always spans exactly [lo, hi] by construction
+   *  (see material.ts's uClipLo/uClipHi), so this must be re-called
+   *  whenever the clip sliders move, not just when the variable changes,
+   *  or the numbers would silently go stale under the still-correct ramp. */
+  private updateLegendTicks(lo: number, hi: number): void {
+    this.legendTickMin.textContent = this.formatTick(lo);
+    this.legendTickMax.textContent = this.formatTick(hi);
+    this.legendTicks.style.display = 'flex';
+  }
+
+  private hideLegendTicks(): void {
+    this.legendTicks.style.display = 'none';
   }
 
   private paintLegend(cm: ColormapData[string]): void {
@@ -489,19 +526,28 @@ export class ClimateUI {
     this.applyRect();
   }
 
+  // climate.html's #projection-toggle is a single page-fixed icon button at
+  // (12, 12)-(36, 36) -- only ever overlaps whichever tile's own top-left
+  // corner sits at the screen's top-left, but every tile's time-info is
+  // pushed clear of it unconditionally rather than special-cased by rect
+  // position: simpler, and the wasted margin on tiles that never needed it
+  // is invisible.
+  private static readonly PROJECTION_BUTTON_CLEARANCE = 46;
+
   private applyRect(): void {
     const { x, y, width, height } = this.rect;
-    // Panel anchored top-right, legend top-left, status/time-info
-    // bottom-left -- the same corners the original single-globe CSS put
-    // them at when the tile was the whole window.
+    // Panel anchored top-right; time-info/status top-left (time-info first,
+    // clear of #projection-toggle, status just below it); legend bottom-left
+    // -- the ramp can grow tall with a categorical key, which read better
+    // anchored at the bottom than pushing other top-left content around.
     this.panelAnchor.style.top = `${y + 8}px`;
     this.panelAnchor.style.right = `${innerWidth - (x + width) + 8}px`;
-    this.legend.style.top = `${y + 12}px`;
+    this.timeInfo.style.top = `${y + 12}px`;
+    this.timeInfo.style.left = `${x + ClimateUI.PROJECTION_BUTTON_CLEARANCE}px`;
+    this.status.style.top = `${y + 44}px`;
+    this.status.style.left = `${x + ClimateUI.PROJECTION_BUTTON_CLEARANCE}px`;
+    this.legend.style.bottom = `${innerHeight - (y + height) + 12}px`;
     this.legend.style.left = `${x + 12}px`;
-    this.status.style.left = `${x + 12}px`;
-    this.status.style.bottom = `${innerHeight - (y + height) + 12}px`;
-    this.timeInfo.style.left = `${x + 12}px`;
-    this.timeInfo.style.bottom = `${innerHeight - (y + height) + 44}px`;
     // Bottom-right -- the same corner the original static #credit div in
     // climate.html used, back when there was only ever one thing to credit.
     this.credit.style.right = `${innerWidth - (x + width) + 12}px`;

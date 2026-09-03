@@ -1,11 +1,15 @@
-import { Clock, Color, PerspectiveCamera, WebGLRenderer } from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { Clock, Color, WebGLRenderer, type Camera } from 'three';
+import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-import { R_SURFACE, lonLatToVec3 } from '../core/constants';
+import { lonLatToVec3 } from '../core/constants';
 import { PALETTE } from '../core/palette';
 import { fetchCoastlineData } from '../core/coastlines';
 import { loadArchive, loadColormaps } from '../core/volume';
 import { tileGrid, type Rect } from '../core/layout';
+import {
+  createProjectionCamera, createProjectionControls, updateProjectionCameraAspect,
+  type ProjectionMode,
+} from '../core/projection';
 import {
   ClimateInstance, type ClimateInstanceDeps, type ClimateLayer, type WindStyle,
 } from './climateInstance';
@@ -24,9 +28,14 @@ const ARCHIVE = import.meta.env.VITE_ARCHIVE_BASE ?? `${import.meta.env.BASE_URL
 // of this canvas every frame (see animate()). No log depth buffer, unlike
 // tomography: there's no core to z-fight against here -- the field IS the
 // surface.
+//
+// `camera`/`controls` are reassigned wholesale by setProjection() below, not
+// reconfigured in place -- Globe and Plate Carrée need different camera
+// types (perspective/orbit vs. orthographic/pan), see core/projection.ts and
+// docs/adr/0003-plate-carree-as-first-alternate-projection.md.
 
-const camera = new PerspectiveCamera(45, innerWidth / innerHeight, 0.01, 50);
-camera.position.set(2.6, 1.4, 2.2);
+let projectionMode: ProjectionMode = 'globe';
+let camera: Camera = createProjectionCamera(projectionMode, innerWidth / innerHeight);
 
 const renderer = new WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -34,12 +43,22 @@ renderer.setSize(innerWidth, innerHeight);
 renderer.setClearColor(new Color(PALETTE.background));
 document.body.appendChild(renderer.domElement);
 
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.dampingFactor = 0.08;
-controls.minDistance = R_SURFACE + 0.1;
-controls.maxDistance = 12;
-controls.enablePan = false;
+let controls: OrbitControls = createProjectionControls(projectionMode, camera, renderer.domElement);
+
+/** Switch every globe on screen to `mode` at once -- Projection is global,
+ *  never per-instance (see docs/adr/0003). Rebuilds the shared camera and
+ *  controls, then hands the new camera to each live instance alongside its
+ *  own geometry rebuild. */
+function setProjection(mode: ProjectionMode): void {
+  if (mode === projectionMode) return;
+  projectionMode = mode;
+
+  controls.dispose();
+  camera = createProjectionCamera(mode, innerWidth / innerHeight);
+  controls = createProjectionControls(mode, camera, renderer.domElement);
+
+  for (const inst of instances) inst.setProjection(mode, camera);
+}
 
 // --- globe instances ---------------------------------------------------
 
@@ -143,12 +162,18 @@ function refreshLegendVisibility(): void {
 }
 
 function createInstance(label: string): ClimateInstance {
-  return new ClimateInstance(camera, deps, {
+  const inst = new ClimateInstance(camera, deps, {
     onRemove: (self) => removeInstance(self),
     onAgeChange: (self) => broadcastAge(self),
     onMonthChange: (self) => broadcastMonth(self),
     onDisplayChange: () => refreshLegendVisibility(),
   }, label);
+  // A new instance always starts in ClimateInstance's own default (Globe) --
+  // sync it to whichever Projection is currently active so a globe added
+  // mid-Plate-Carrée-session doesn't boot as a mismatched sphere under the
+  // shared orthographic camera.
+  inst.setProjection(projectionMode, camera);
+  return inst;
 }
 
 /** Used by both the toolbar checkbox and the test hook, so "snap every other
@@ -209,6 +234,30 @@ addEventListener('resize', () => {
 
 document.getElementById('add-globe')?.addEventListener('click', () => {
   void addInstance();
+});
+
+// --- projection toggle -----------------------------------------------------
+//
+// One global control (see docs/adr/0003), not part of any instance's own
+// ClimateUI panel -- ClimateUI is per-instance, but Projection applies to
+// every globe on screen at once, like the shared camera it rides on.
+
+const projectionToggle = document.getElementById('projection-toggle');
+
+function updateProjectionToggle(): void {
+  if (!projectionToggle) return;
+  const flat = projectionMode === 'plateCarree';
+  // The glyph shows what clicking switches TO, not the current shape --
+  // flat now means the click target is Globe, so the icon is a circle.
+  projectionToggle.textContent = flat ? '◯' : '▭'; // circle : rectangle
+  const label = flat ? 'Switch to Globe projection' : 'Switch to Plate Carrée projection';
+  projectionToggle.setAttribute('aria-label', label);
+  projectionToggle.setAttribute('title', label);
+}
+
+projectionToggle?.addEventListener('click', () => {
+  setProjection(projectionMode === 'globe' ? 'plateCarree' : 'globe');
+  updateProjectionToggle();
 });
 
 // --- interaction ---------------------------------------------------------
@@ -436,8 +485,7 @@ function animate(): void {
   for (let i = 0; i < instances.length; i++) {
     const rect = layoutRects[i];
     if (!rect) continue;
-    camera.aspect = rect.width / rect.height;
-    camera.updateProjectionMatrix();
+    updateProjectionCameraAspect(camera, rect.width / rect.height);
     // three.js scales viewport/scissor by devicePixelRatio itself, the same
     // way it treats setSize -- these are CSS pixels, like the rect.
     const glY = innerHeight - rect.y - rect.height;
