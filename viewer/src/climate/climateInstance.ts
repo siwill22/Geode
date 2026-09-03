@@ -189,9 +189,9 @@ export class ClimateInstance {
    *  from view.showWind/view.windStyle so applyWindVisibility() can tell a
    *  transition INTO visible (needs resetAll()) from staying visible. */
   private streakActive = false;
-  /** Set only by setProjection() -- see its own doc comment. Read by
-   *  applyWindVisibility() to hide wind (CPU-positioned, not shader-
-   *  reprojected) while Plate Carrée is active. */
+  /** Set only by setProjection() -- see its own doc comment. Re-read by
+   *  boot() once coastlines/wind actually exist, to re-apply whichever
+   *  Projection was already active before they did. */
   private projectionMode: ProjectionMode = 'globe';
 
   constructor(
@@ -363,14 +363,23 @@ export class ClimateInstance {
    *  (see docs/adr/0003): Globe and Plate Carrée need different camera
    *  types, so main.ts always replaces the camera object wholesale rather
    *  than reconfiguring this instance's existing one in place. Rebuilds the
-   *  field/overlay geometry for `mode`; coastlines and wind hide instead of
-   *  reprojecting -- see applyWindVisibility()'s own doc comment. */
+   *  field/overlay geometry for `mode` and reprojects wind; coastlines still
+   *  hide rather than reproject -- their CPU build pipeline (plate-rotation
+   *  slerp) is a separate, unrelated piece of work, see docs/adr/0003. */
   setProjection(mode: ProjectionMode, camera: Camera): void {
     this.camera = camera;
     this.projectionMode = mode;
     this.field.setProjection(mode);
     this.overlay.setProjection(mode);
     if (this.coastlines) this.coastlines.lines.visible = mode === 'globe';
+    this.wind.setProjection(mode);
+    this.windStreaks.setProjection(mode);
+    // WindGlyphs only reposes on an explicit update() call (unlike
+    // WindStreaks, which reposes every frame via tick()) -- without this,
+    // arrows would keep showing whatever matrices they last had under the
+    // OLD Projection until some unrelated data change (age, month, ...)
+    // happened to trigger the next refreshWindGlyphs().
+    if (this.hasWind) this.refreshWindGlyphs();
     this.applyWindVisibility();
   }
 
@@ -564,13 +573,8 @@ export class ClimateInstance {
    *  checkbox turning back on) rather than resuming whatever stale particle
    *  state it had -- see WindStreaks.resetAll()'s own doc comment for why. */
   private applyWindVisibility(): void {
-    // Wind glyphs/streaks are CPU-positioned on the sphere (lonLatToVec3),
-    // like coastlines -- not shader-reprojected, so they hide rather than
-    // reproject while Plate Carrée is active. See setProjection()'s doc
-    // comment and docs/adr/0003.
-    const flat = this.projectionMode === 'plateCarree';
-    const glyphVisible = !flat && this.hasWind && this.view.showWind && this.view.windStyle === 'glyph';
-    const streakVisible = !flat && this.hasWind && this.view.showWind && this.view.windStyle === 'streak';
+    const glyphVisible = this.hasWind && this.view.showWind && this.view.windStyle === 'glyph';
+    const streakVisible = this.hasWind && this.view.showWind && this.view.windStyle === 'streak';
     this.wind.setVisible(glyphVisible);
     if (streakVisible && !this.streakActive) this.windStreaks.resetAll();
     this.streakActive = streakVisible;

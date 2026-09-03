@@ -2,14 +2,17 @@ import {
   BufferAttribute, BufferGeometry, Color, DoubleSide, Mesh, MeshBasicMaterial,
 } from 'three';
 import {
-  DEG, EARTH_RADIUS_KM, R_SURFACE, eastNorthAt, lonLatToVec3, vec3ToLonLat,
+  DEG, EARTH_RADIUS_KM, R_SURFACE, eastNorthAt, lonLatToVec3, vec3ToLonLat, wrapLon,
 } from './constants';
+import { FLAT_EAST, lonLatToFlatVec3, type ProjectionMode } from './projection';
 import { texelIndex, texelToPhysical } from './volume';
 import type { VariableInfo } from './types';
 
 // Same clearance reasoning as windGlyphs.ts's GLYPH_R -- just clear of the
 // overlay sphere so there is no z-fighting concern.
 const RIBBON_R = R_SURFACE * 1.001;
+// The Plate Carrée equivalent, same derivation as windGlyphs.ts's FLAT_GLYPH_Z.
+const FLAT_RIBBON_Z = RIBBON_R - R_SURFACE;
 
 // Trail points per particle -- the ring buffer DEPTH, not a time duration by
 // itself. How much real time a trail visually spans is TRAIL_LEN *
@@ -111,6 +114,7 @@ export class WindStreaks {
 
   private activeCount = BASE_PARTICLES;
   private sizeScale = 1;
+  private mode: ProjectionMode = 'globe';
   /** Seconds accumulated since the trail ring buffers last advanced to a
    *  fresh slot -- see update()'s `commit` flag and advect()'s doc comment
    *  for why this is decoupled from the per-frame advection step. */
@@ -166,6 +170,17 @@ export class WindStreaks {
     this.geometry.setDrawRange(0, this.activeCount * INDICES_PER_PARTICLE);
   }
 
+  /** Switch which advection/ribbon math update() uses -- see advect() and
+   *  writeRibbon()'s own mode branches. Every particle's trail is world
+   *  positions baked under the OLD Projection's embedding, meaningless once
+   *  the embedding changes, so this forces a full resetAll() rather than
+   *  letting stale trails draw one wrong-looking frame before self-healing. */
+  setProjection(mode: ProjectionMode): void {
+    if (mode === this.mode) return;
+    this.mode = mode;
+    this.resetAll();
+  }
+
   /** Respawn every active particle at a fresh random position -- used when
    *  the mode becomes visible again after being hidden, so stale state (and
    *  the large dt that hiding accumulates) never produces a single huge,
@@ -215,7 +230,9 @@ export class WindStreaks {
       : PARTICLE_LIFETIME_S * (0.7 + 0.6 * Math.random());
     this.speed[p] = 0;
 
-    const [x, y, z] = lonLatToVec3(lon, lat, RIBBON_R);
+    const [x, y, z] = this.mode === 'globe'
+      ? lonLatToVec3(lon, lat, RIBBON_R)
+      : lonLatToFlatVec3(lon, lat, FLAT_RIBBON_Z);
     for (let k = 0; k < TRAIL_LEN; k++) {
       const base = (p * TRAIL_LEN + k) * 3;
       this.trail[base] = x; this.trail[base + 1] = y; this.trail[base + 2] = z;
@@ -245,7 +262,9 @@ export class WindStreaks {
         this.respawn(p, false);
         justRespawned = true;
       } else {
-        this.advect(p, dt, uData, vData, nlon, nlat, uVar, vVar, commit);
+        // Plate Carrée: advect() can ALSO trigger a mid-step respawn, when a
+        // particle crosses the antimeridian seam -- see its own doc comment.
+        justRespawned = this.advect(p, dt, uData, vData, nlon, nlat, uVar, vVar, commit);
       }
       // A respawn touches every trail slot (see respawn()'s doc comment),
       // so it needs the full rebuild below regardless of `commit`.
@@ -273,38 +292,67 @@ export class WindStreaks {
 
   /** The advection step, isolated from ribbon-building on either side of it
    *  (see the class doc comment): sample (u, v) at the particle's current
-   *  position, take one small spherical-Euler step along the local tangent
-   *  plane, and re-derive lon/lat for the next tick's lookup. Steps stay
-   *  small (dt is one animation frame), which is what makes "step then
-   *  renormalise onto the sphere" a valid substitute for exact geodesic
-   *  integration here -- the flat Godot prototype's plain
+   *  position, take one small step along the local tangent plane, and
+   *  re-derive lon/lat for the next tick's lookup.
+   *
+   *  On the globe, steps stay small (dt is one animation frame), which is
+   *  what makes "step then renormalise onto the sphere" a valid substitute
+   *  for exact geodesic integration -- the flat Godot prototype's plain
    *  `position += velocity * dt` has no sphere to renormalise onto and
-   *  cannot be reused as-is. */
+   *  cannot be reused as-is.
+   *
+   *  On Plate Carrée, a step needs no such approximation -- a flat plane has
+   *  no curvature to renormalise onto, so `position += velocity * dt` IS
+   *  exact there. But the map has a real seam at the antimeridian the
+   *  sphere doesn't: wrapping longitude across it would draw one ribbon
+   *  segment stretching across the whole map width, since the trail's
+   *  previous and new points would be geometrically far apart in world
+   *  space despite being physically adjacent on the map. Respawning
+   *  immediately on a crossing avoids that glitch rather than trying to
+   *  split the ribbon; returns whether that happened, so update() can
+   *  extend the same `justRespawned` full-rebuild treatment to it.
+   *  Latitude has no such seam (it's a real edge, not a wraparound), so it's
+   *  simply clamped -- a particle can't walk off the top/bottom of the map,
+   *  and finite particle lifetime recycles it elsewhere within seconds
+   *  regardless. */
   private advect(
     p: number, dt: number,
     uData: Uint8Array, vData: Uint8Array, nlon: number, nlat: number,
     uVar: VariableInfo, vVar: VariableInfo,
     commit: boolean,
-  ): void {
+  ): boolean {
     const lon = this.lon[p];
     const lat = this.lat[p];
     const texel = texelIndex(nlon, nlat, lon, lat);
     const u = texelToPhysical(uVar, uData[texel]);
     const v = texelToPhysical(vVar, vData[texel]);
     this.speed[p] = Math.hypot(u, v);
-
-    const { east, north } = eastNorthAt(lon, lat);
-    const [px, py, pz] = lonLatToVec3(lon, lat, RIBBON_R);
     const step = (dt * STREAK_SPEED_SCALE) / EARTH_RADIUS_M;
-    let nx = px + (u * east[0] + v * north[0]) * step;
-    let ny = py + (u * east[1] + v * north[1]) * step;
-    let nz = pz + (u * east[2] + v * north[2]) * step;
-    const len = Math.hypot(nx, ny, nz) || 1;
-    nx = (nx / len) * RIBBON_R; ny = (ny / len) * RIBBON_R; nz = (nz / len) * RIBBON_R;
 
-    const next = vec3ToLonLat(nx, ny, nz);
-    this.lon[p] = next.lon;
-    this.lat[p] = next.lat;
+    let nx: number; let ny: number; let nz: number;
+    if (this.mode === 'globe') {
+      const { east, north } = eastNorthAt(lon, lat);
+      const [px, py, pz] = lonLatToVec3(lon, lat, RIBBON_R);
+      nx = px + (u * east[0] + v * north[0]) * step;
+      ny = py + (u * east[1] + v * north[1]) * step;
+      nz = pz + (u * east[2] + v * north[2]) * step;
+      const len = Math.hypot(nx, ny, nz) || 1;
+      nx = (nx / len) * RIBBON_R; ny = (ny / len) * RIBBON_R; nz = (nz / len) * RIBBON_R;
+      const next = vec3ToLonLat(nx, ny, nz);
+      this.lon[p] = next.lon;
+      this.lat[p] = next.lat;
+    } else {
+      const [px, py] = lonLatToFlatVec3(lon, lat);
+      const nextLon = wrapLon((px + u * step) / (DEG * R_SURFACE));
+      if (Math.abs(nextLon - lon) > 180) {
+        this.respawn(p, false);
+        return true;
+      }
+      const nextLat = Math.max(-90, Math.min(90, (py + v * step) / (DEG * R_SURFACE)));
+      this.lon[p] = nextLon;
+      this.lat[p] = nextLat;
+      [nx, ny, nz] = lonLatToFlatVec3(nextLon, nextLat, FLAT_RIBBON_Z);
+    }
 
     // Advection runs every frame so the HEAD moves smoothly, but committing
     // a new ring-buffer slot every frame would make the trail span only
@@ -317,6 +365,7 @@ export class WindStreaks {
     this.cursor[p] = c;
     const base = (p * TRAIL_LEN + c) * 3;
     this.trail[base] = nx; this.trail[base + 1] = ny; this.trail[base + 2] = nz;
+    return false;
   }
 
   /** Walk one particle's trail ring in chronological order (oldest to
@@ -364,19 +413,27 @@ export class WindStreaks {
       // a zero vector -- it self-corrects within a few ticks as the
       // particle actually moves.
       if (dirLen < 1e-9) {
-        const { east } = eastNorthAt(this.lon[p], this.lat[p]);
+        const east = this.mode === 'globe' ? eastNorthAt(this.lon[p], this.lat[p]).east : FLAT_EAST;
         [dx, dy, dz] = east;
       } else {
         dx /= dirLen; dy /= dirLen; dz /= dirLen;
       }
 
-      // Perpendicular to travel direction, in the local tangent plane
-      // (radial = the position itself, since the sphere is centred on the
-      // origin) -- this is what keeps the ribbon lying flush against the
-      // globe's surface regardless of camera angle, the same tangent-frame
-      // reasoning WindGlyphs uses for arrow orientation.
-      const rl = Math.hypot(x, y, z) || 1;
-      const rx = x / rl; const ry = y / rl; const rz = z / rl;
+      // Perpendicular to travel direction, in the local tangent plane. On
+      // the globe that plane's normal is the position itself (radial =
+      // outward from a sphere centred on the origin), which is what keeps
+      // the ribbon lying flush against the surface regardless of camera
+      // angle -- the same tangent-frame reasoning WindGlyphs uses for arrow
+      // orientation. Plate Carrée's tangent plane is the SAME everywhere
+      // (the flat plane itself), so its normal is the constant +Z rather
+      // than a position-dependent radial direction.
+      let rx: number; let ry: number; let rz: number;
+      if (this.mode === 'globe') {
+        const rl = Math.hypot(x, y, z) || 1;
+        rx = x / rl; ry = y / rl; rz = z / rl;
+      } else {
+        rx = 0; ry = 0; rz = 1;
+      }
       let sx = dy * rz - dz * ry;
       let sy = dz * rx - dx * rz;
       let sz = dx * ry - dy * rx;

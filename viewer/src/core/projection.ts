@@ -3,7 +3,7 @@ import {
   type BufferGeometry, type Camera,
 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { R_SURFACE } from './constants';
+import { DEG, R_SURFACE } from './constants';
 
 /**
  * How a volume-draped surface is mapped onto the screen -- see CONTEXT.md's
@@ -20,22 +20,54 @@ export const PROJECTION_UNIFORM: Record<ProjectionMode, number> = {
   plateCarree: 1,
 };
 
+const PLATE_CARREE_MAP_WIDTH = 2 * Math.PI * R_SURFACE;
+const PLATE_CARREE_MAP_HEIGHT = Math.PI * R_SURFACE;
+const PLATE_CARREE_MARGIN = 1.15;
+
 /**
  * Geometry for a volume-draped surface at `radius` in the given Projection.
  * A sphere needs many segments to read as smoothly curved; a flat plane's
  * fragment shader is exact under linear interpolation regardless of vertex
  * density (see worldToGeographicFlat), so 1x1 is enough -- there is no
  * curvature to approximate.
+ *
+ * `radius` bigger than R_SURFACE pushes a sphere surface radially outward to
+ * avoid z-fighting between coincident layers (see climateInstance.ts's
+ * OVERLAY_R). A flat plane has no radial direction, so the same intent is
+ * expressed as a Z offset instead, at the map's fixed canonical width/height
+ * -- scaling the plane's extent by `radius`, as an earlier version of this
+ * did, changes its SIZE, not its depth, and does nothing to separate
+ * coincident layers.
  */
 export function createSurfaceGeometry(mode: ProjectionMode, radius: number = R_SURFACE): BufferGeometry {
-  return mode === 'globe'
-    ? new SphereGeometry(radius, 256, 128)
-    : new PlaneGeometry(2 * Math.PI * radius, Math.PI * radius, 1, 1);
+  if (mode === 'globe') return new SphereGeometry(radius, 256, 128);
+  const geo = new PlaneGeometry(PLATE_CARREE_MAP_WIDTH, PLATE_CARREE_MAP_HEIGHT, 1, 1);
+  geo.translate(0, 0, radius - R_SURFACE);
+  return geo;
 }
 
-const PLATE_CARREE_MAP_WIDTH = 2 * Math.PI * R_SURFACE;
-const PLATE_CARREE_MAP_HEIGHT = Math.PI * R_SURFACE;
-const PLATE_CARREE_MARGIN = 1.15;
+/**
+ * (lon, lat) degrees -> world position on the flat Plate Carrée plane, the
+ * exact inverse of GEOGRAPHIC_GLSL's worldToGeographicFlat -- the CPU-side
+ * counterpart for anything positioned per-vertex/per-instance rather than
+ * per-fragment (wind glyphs/streaks; see core/windGlyphs.ts,
+ * core/windStreaks.ts). `z` is the Plate Carrée equivalent of lonLatToVec3's
+ * radius: a small constant offset, not a scale, keeps coincident layers
+ * apart the same way createSurfaceGeometry's does.
+ */
+export function lonLatToFlatVec3(lon: number, lat: number, z = 0): [number, number, number] {
+  return [lon * DEG * R_SURFACE, lat * DEG * R_SURFACE, z];
+}
+
+/**
+ * The flat plane's east/north tangent directions -- unlike eastNorthAt's
+ * sphere version, these are the SAME everywhere (no meridian convergence, no
+ * pole degeneracy), which is the one respect in which reprojecting
+ * position-per-sample onto Plate Carrée is simpler than the sphere, not just
+ * different.
+ */
+export const FLAT_EAST: readonly [number, number, number] = [1, 0, 0];
+export const FLAT_NORTH: readonly [number, number, number] = [0, 1, 0];
 
 /** World-unit height of the orthographic frustum that contains the whole
  *  2:1 Plate Carrée map at `aspect`, plus a little headroom -- a "fit by

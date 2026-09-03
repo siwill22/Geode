@@ -155,9 +155,12 @@ Projection, the same way they already share one camera. Independent of Model,
 Frame, or Reconstruction Age: switching Projection changes how something is
 viewed, not what is being viewed.
 
-Coastlines and land fill do not reproject with it yet — the first cut only
-reprojects the Volume-derived surface. More Projections (Robinson, Mollweide,
-Spilhaus) are expected later; Plate Carrée is the first.
+Coastlines and land fill do not reproject with it yet — their CPU build
+pipeline (plate-rotation slerp) is a separate, unrelated piece of work.
+Wind (glyphs and streaks) does reproject, including its own Plate-Carrée-only
+concern of a real antimeridian seam a sphere doesn't have. More Projections
+(Robinson, Mollweide, Spilhaus) are expected later; Plate Carrée is the
+first.
 
 ## Wind Glyph
 

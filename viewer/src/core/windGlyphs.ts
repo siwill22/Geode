@@ -4,6 +4,7 @@ import {
 } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { DEG, R_SURFACE, eastNorthAt, lonLatToVec3 } from './constants';
+import { FLAT_EAST, FLAT_NORTH, lonLatToFlatVec3, type ProjectionMode } from './projection';
 import { texelIndex, texelToPhysical } from './volume';
 import type { VariableInfo } from './types';
 
@@ -12,6 +13,9 @@ import type { VariableInfo } from './types';
 // second coincident sphere surface, so there is no z-fighting concern here;
 // this only needs to clear the surface visually.
 const GLYPH_R = R_SURFACE * 1.001;
+// The Plate Carrée equivalent: GLYPH_R's clearance ABOVE R_SURFACE, applied
+// as a Z offset instead of a radius (see lonLatToFlatVec3's own doc comment).
+const FLAT_GLYPH_Z = GLYPH_R - R_SURFACE;
 
 // The lattice step at density=1 (WindGlyphs.setDensity's default) -- halving
 // the previous step in BOTH directions (rings and per-ring count each
@@ -65,6 +69,27 @@ function buildLattice(latStep = BASE_LAT_STEP_DEG): Sample[] {
   return samples;
 }
 
+/**
+ * The Plate Carrée equivalent of buildLattice(): a PLAIN uniform lon/lat
+ * grid, without the cos(lat) longitude-widening buildLattice() uses to keep
+ * roughly even PHYSICAL-sphere-area coverage. On a flat equirectangular map
+ * there is no meridian convergence to compensate for -- every row already
+ * covers the same screen width per degree of longitude -- so applying the
+ * sphere's compensation here would UNDER-populate high latitudes relative to
+ * how the map actually reads, the opposite of what it's for. Same pole-row
+ * exclusion as buildLattice() for a consistent look between the two, even
+ * though "east is undefined at the pole" doesn't apply on a plane. */
+function buildLatticeFlat(latStep = BASE_LAT_STEP_DEG): Sample[] {
+  const samples: Sample[] = [];
+  const nLon = Math.max(4, Math.round(360 / latStep));
+  for (let lat = -90 + latStep; lat <= 90 - latStep + 1e-6; lat += latStep) {
+    for (let i = 0; i < nLon; i++) {
+      samples.push({ lon: -180 + (360 * i) / nLon, lat });
+    }
+  }
+  return samples;
+}
+
 /** A thin shaft (cylinder) with a cone head on top, merged into one
  *  geometry so a single InstancedMesh instance -- and a single per-instance
  *  matrix -- draws both: root at local +Y=0, tip at local +Y=1, oriented
@@ -97,6 +122,8 @@ const UP = new Vector3(0, 1, 0);
 export class WindGlyphs {
   readonly mesh: InstancedMesh;
   private lattice = buildLattice();
+  private latStep = BASE_LAT_STEP_DEG;
+  private mode: ProjectionMode = 'globe';
   private readonly tmp = new Object3D();
   private readonly dir = new Vector3();
   /** Uniform multiplier on top of the speed-driven length (and, unlike
@@ -107,12 +134,17 @@ export class WindGlyphs {
   constructor() {
     const geo = makeArrowGeometry();
     const mat = new MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 });
-    // Allocated for the DENSEST setDensity() can go (an InstancedMesh's
-    // instance count is fixed at construction, unlike a plain BufferGeometry
-    // array) -- setDensity() then narrows what's actually drawn via
-    // mesh.count, which three.js supports rendering fewer than the
-    // allocated maximum without touching the buffer's capacity.
-    const maxCount = buildLattice(MIN_LAT_STEP_DEG).length;
+    // Allocated for the DENSEST setDensity() can go, in EITHER Projection
+    // (an InstancedMesh's instance count is fixed at construction, unlike a
+    // plain BufferGeometry array) -- setDensity()/setProjection() then
+    // narrow what's actually drawn via mesh.count, which three.js supports
+    // rendering fewer than the allocated maximum without touching the
+    // buffer's capacity. buildLatticeFlat() has MORE samples than
+    // buildLattice() at the same step (no polar thinning), so it's the
+    // binding one here even though Globe is the default mode.
+    const maxCount = Math.max(
+      buildLattice(MIN_LAT_STEP_DEG).length, buildLatticeFlat(MIN_LAT_STEP_DEG).length,
+    );
     this.mesh = new InstancedMesh(geo, mat, maxCount);
     this.mesh.count = this.lattice.length;
     this.mesh.visible = false;
@@ -135,8 +167,23 @@ export class WindGlyphs {
    *  allowed range) and resize mesh.count to match. Like setSize(), this
    *  doesn't repose anything itself; see ClimateInstance.setWindDensity. */
   setDensity(density: number): void {
-    const step = Math.min(MAX_LAT_STEP_DEG, Math.max(MIN_LAT_STEP_DEG, BASE_LAT_STEP_DEG / density));
-    this.lattice = buildLattice(step);
+    this.latStep = Math.min(MAX_LAT_STEP_DEG, Math.max(MIN_LAT_STEP_DEG, BASE_LAT_STEP_DEG / density));
+    this.rebuildLattice();
+  }
+
+  /** Switch which lattice/position math update() uses -- see buildLattice()
+   *  vs. buildLatticeFlat()'s own doc comment for why these are genuinely
+   *  different grids, not just a coordinate relabelling. Doesn't repose
+   *  existing instances itself, same as setSize()/setDensity() -- see
+   *  ClimateInstance.setProjection(), which follows this with a
+   *  refreshWindGlyphs(). */
+  setProjection(mode: ProjectionMode): void {
+    this.mode = mode;
+    this.rebuildLattice();
+  }
+
+  private rebuildLattice(): void {
+    this.lattice = this.mode === 'globe' ? buildLattice(this.latStep) : buildLatticeFlat(this.latStep);
     this.mesh.count = this.lattice.length;
   }
 
@@ -156,11 +203,13 @@ export class WindGlyphs {
       const v = texelToPhysical(vVar, vData[texel]);
       const speed = Math.hypot(u, v);
 
-      // u/v are already components in the local east/north tangent frame --
-      // eastNorthAt supplies that frame's actual 3D directions AT THIS POINT
-      // (which rotate with position on a sphere), so this sum is a real 3D
-      // tangent-plane direction, not a flat (u, v) -> (x, y) guess.
-      const { east, north } = eastNorthAt(lon, lat);
+      // u/v are already components in a local east/north tangent frame --
+      // on the globe that frame rotates with position (eastNorthAt), so
+      // this sum is a real 3D tangent-plane direction, not a flat
+      // (u, v) -> (x, y) guess; on the flat plane east/north are the same
+      // everywhere (FLAT_EAST/FLAT_NORTH), which is what makes this branch
+      // trivial rather than a second position-dependent frame to derive.
+      const { east, north } = this.mode === 'globe' ? eastNorthAt(lon, lat) : { east: FLAT_EAST, north: FLAT_NORTH };
       this.dir.set(
         u * east[0] + v * north[0],
         u * east[1] + v * north[1],
@@ -169,7 +218,9 @@ export class WindGlyphs {
       if (this.dir.lengthSq() < 1e-8) this.dir.set(0, 1, 0); // calm: length ~0 makes orientation invisible anyway
       else this.dir.normalize();
 
-      const [px, py, pz] = lonLatToVec3(lon, lat, GLYPH_R);
+      const [px, py, pz] = this.mode === 'globe'
+        ? lonLatToVec3(lon, lat, GLYPH_R)
+        : lonLatToFlatVec3(lon, lat, FLAT_GLYPH_Z);
       this.tmp.position.set(px, py, pz);
       this.tmp.quaternion.setFromUnitVectors(UP, this.dir);
       const len = (MIN_ARROW_LEN
