@@ -310,6 +310,29 @@ export function texelToPhysical(v: VariableInfo, byte: number): number {
   return v.encode_min + (byte / 255) * (v.encode_max - v.encode_min);
 }
 
+/**
+ * A categorical Variable's already-decoded texelToPhysical() value -> its
+ * class index. FLOOR, never round: prep_climate.py encodes each class at
+ * its band centre (class + 0.5, not the raw integer) specifically so that
+ * decoding via floor() recovers it correctly -- the GPU shader path decodes
+ * the exact same way (floor(t * uSteps)), see material.ts. A naive round()
+ * looks equivalent at first glance but silently shifts every class down by
+ * one except class 0 (this exact bug shipped once for Koppen -- see
+ * prep_climate.py's own comment on the encode step -- confirmed by reading
+ * back the actual encoded bytes, not the pre-encoding array).
+ */
+export function classIndexFromValue(value: number): number {
+  return Math.floor(value);
+}
+
+/** A categorical Variable's decoded value -> its class name, or a numbered
+ *  fallback if `class_names` doesn't cover the index (stale manifest, or a
+ *  variable marked categorical without names). */
+export function classNameFor(v: VariableInfo, value: number): string {
+  const i = classIndexFromValue(value);
+  return v.class_names?.[i] ?? `class ${i}`;
+}
+
 /** (lon, lat) -> the flat index into one month's (nlat, nlon) plane. Mirrors
  *  geographic.ts's volumeUVW mapping exactly (see GEOGRAPHIC_GLSL): no
  *  half-texel offset on longitude (it wraps, no duplicate column), nearest

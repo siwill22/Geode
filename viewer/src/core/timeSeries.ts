@@ -1,5 +1,6 @@
 import { DEG } from './constants';
-import { fetchVariableBytes, texelToPhysical } from './volume';
+import type { FrameByteCache } from './frameByteCache';
+import { texelToPhysical } from './volume';
 import type { Manifest, VariableInfo } from './types';
 
 export interface TimeSeriesPoint {
@@ -45,10 +46,11 @@ function weightedPercentile(
  *  doesn't fire that many simultaneous requests, but high enough that this
  *  doesn't read as one-request-at-a-time slow. Not tied to FrameCache's
  *  FRAME_LIMIT (GPU-residency concern, irrelevant here -- see
- *  fetchVariableBytes's own doc comment). */
-const CONCURRENCY = 8;
+ *  fetchVariableBytes's own doc comment). Exported for core/queryPoint.ts's
+ *  ageSeries, which fetches/reduces per-Frame the same way. */
+export const CONCURRENCY = 8;
 
-async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+export async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let next = 0;
   async function worker(): Promise<void> {
@@ -88,13 +90,19 @@ async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise
  * IS the bin, since texelToPhysical decodes it via one linear map) so the
  * five percentiles on TimeSeriesPoint come from the same single pass over
  * the volume that the mean does -- see weightedPercentile.
+ *
+ * Reads Frame bytes through `cache` (core/frameByteCache.ts) rather than
+ * fetching directly, so a session that also queries an Anchored Point
+ * (core/queryPoint.ts's ageSeries) on the same (model, variable, resolution)
+ * shares the fetch instead of downloading every Frame twice -- see
+ * ADR-0011.
  */
 export async function computeTimeSeries(
-  archiveBase: string, modelId: string, manifest: Manifest, variable: VariableInfo,
+  cache: FrameByteCache, manifest: Manifest, variable: VariableInfo,
   resolutionId: string = manifest.default_resolution,
 ): Promise<TimeSeriesPoint[]> {
   const res = manifest.resolutions.find((r) => r.id === resolutionId);
-  if (!res) throw new Error(`${modelId}: no resolution ${resolutionId}`);
+  if (!res) throw new Error(`${manifest.id}: no resolution ${resolutionId}`);
   const { nlon, nlat, ndepth } = res;
   const plane = nlon * nlat;
   const layerOffset = (ndepth - 1) * plane;
@@ -103,9 +111,9 @@ export async function computeTimeSeries(
 
   return mapPool(manifest.frames, CONCURRENCY, async (frame) => {
     const [valueBytes, maskBytes] = await Promise.all([
-      fetchVariableBytes(archiveBase, modelId, manifest, variable.id, frame.id, resolutionId),
+      cache.get(manifest, variable.id, frame.id, resolutionId),
       maskVar
-        ? fetchVariableBytes(archiveBase, modelId, manifest, maskVar, frame.id, resolutionId)
+        ? cache.get(manifest, maskVar, frame.id, resolutionId)
         : Promise.resolve(null),
     ]);
 
