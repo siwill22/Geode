@@ -6,10 +6,17 @@ import { passthroughColor } from './material';
 import { GEOGRAPHIC_GLSL } from './glsl/geographic';
 import { R_SURFACE, LIGHT_DIR } from './constants';
 import { PALETTE } from './palette';
-import type { CoastlineLine, RotationTable } from './types';
+import type { ArchiveIndex, CoastlineLine, CoastlineSet, Manifest, RotationTable } from './types';
 
 const LAND_R = R_SURFACE * 1.0006;      // just clear of the surface sphere
 const COASTLINE_R = R_SURFACE * 1.0014; // and the lines just clear of the land
+
+/** Symmetric offset below R_SURFACE, for a caller that wants land to sit
+ *  UNDER a data sphere rather than above it -- see Coastlines' `landRadius`
+ *  constructor option. Depth-tested against the data sphere in front of it,
+ *  so it only shows through wherever that sphere discards (e.g. a no-data
+ *  sentinel, see ADR-0005), the same way any other occluded geometry would. */
+export const LAND_R_UNDER_SURFACE = R_SURFACE * (1 - 0.0006);
 
 /** Parse geometry.bin (see prep_coastlines.py for the layout). */
 export function parseGeometry(buf: ArrayBuffer): CoastlineLine[] {
@@ -161,6 +168,14 @@ export class Coastlines {
     private data: CoastlineLine[],
     private table: RotationTable,
     maskTexture: Texture,
+    /** Defaults match every existing caller (land just clear of R_SURFACE,
+     *  drawn OVER the data sphere -- the mantle/climate viewers' "land fill
+     *  substitutes for missing data" use). A caller that wants land as a
+     *  backdrop UNDER a data sphere instead (e.g. the deformation viewer's
+     *  grey continents, see docs/plans/deformation-viewer.md) passes
+     *  LAND_R_UNDER_SURFACE and a plain grey landColor. */
+    private readonly landRadius: number = LAND_R,
+    private readonly landColor: number = PALETTE.land,
   ) {
     // Allocate once at maximum size. The visible set changes with age, so we
     // update the draw range rather than rebuilding the buffers.
@@ -204,7 +219,7 @@ export class Coastlines {
       side: DoubleSide,
       uniforms: {
         uMask: { value: maskTexture },
-        uColor: { value: passthroughColor(PALETTE.land) },
+        uColor: { value: passthroughColor(this.landColor) },
         uUseMask: { value: 1 },
         uOpacity: { value: 1 },
         uLightDir: { value: LIGHT_DIR.clone() },
@@ -273,9 +288,9 @@ export class Coastlines {
           const rx = x + qw * tx + (qy * tz - qz * ty);
           const ry = y + qw * ty + (qz * tx - qx * tz);
           const rz = z + qw * tz + (qx * ty - qy * tx);
-          this.landPos[vw * 3] = rx * LAND_R;
-          this.landPos[vw * 3 + 1] = rz * LAND_R;
-          this.landPos[vw * 3 + 2] = -ry * LAND_R;
+          this.landPos[vw * 3] = rx * this.landRadius;
+          this.landPos[vw * 3 + 1] = rz * this.landRadius;
+          this.landPos[vw * 3 + 2] = -ry * this.landRadius;
           vw++;
         }
         const t = line.triangles;
@@ -331,6 +346,38 @@ export class Coastlines {
 export interface CoastlineData {
   lines: CoastlineLine[];
   table: RotationTable;
+}
+
+/**
+ * Which coastline set belongs on this Model's globe, generalized from the
+ * four hand-written versions of this same decision that predate it
+ * (tomography/main.ts, climate/main.ts, valdes/main.ts, deformation/main.ts).
+ *
+ * 1. A Manifest with its own `reconstruction_model` (ADR-0004) is looked up
+ *    in `archive.native_coastlines` -- never guessed from the model's id or
+ *    name, and never falls back to (2) even if the lookup misses, since a
+ *    run's own reconstruction is the only correct pairing for it.
+ * 2. Otherwise, by Manifest type: the climate family sits on the Scotese
+ *    plate model (Li et al. and the Scotese & Wright PaleoDEMs both do);
+ *    tomography/convection sit on Muller et al. (`archive.coastlines`).
+ * 3. Otherwise null -- a bare globe, tolerated everywhere already.
+ */
+export function resolveCoastlineSet(archive: ArchiveIndex, manifest: Manifest): CoastlineSet | null {
+  if (manifest.reconstruction_model) {
+    return archive.native_coastlines?.[manifest.reconstruction_model.toLowerCase()] ?? null;
+  }
+  switch (manifest.type) {
+    case 'climate':
+    case 'climate-monthly':
+    case 'climate-ocean-depth':
+    case 'paleogeography':
+      return archive.scotese_coastlines ?? null;
+    case 'tomography':
+    case 'convection':
+      return archive.coastlines ?? null;
+    default:
+      return null;
+  }
 }
 
 /**

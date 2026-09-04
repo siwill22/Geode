@@ -43,6 +43,17 @@ from matplotlib import colormaps
 DIVERGING = ["RdBu", "Spectral", "coolwarm", "seismic", "bwr"]
 SEQUENTIAL = ["viridis", "magma", "cividis", "gray", "plasma"]
 
+# Order MUST match prep_deformation.py's DEFORMATION_STYLE_CLASSES exactly --
+# same reasoning as KOPPEN_COLORS below: this script runs before
+# prep_deformation.py, so the order is kept as a literal list here rather than
+# imported. Source flag_values 0-9 (10 real styles) plus -1 ("undefined",
+# remapped to class 10 on ingest -- see prep_deformation.py) sampled from
+# matplotlib's tab10 qualitative palette, with a distinct grey appended for
+# "undefined" since tab10 only has 10 colours.
+DEFORMATION_STYLE_COLORS = [tuple(
+    int(round(c * 255)) for c in colormaps["tab10"](i)[:3]
+) for i in range(10)] + [(110, 110, 110)]  # 10 = undefined
+
 # Suffix for the warm-at-high variant. The unsuffixed name keeps its original
 # meaning (cool at high) so manifests written before this change still resolve.
 HOT_SUFFIX = "_hot"
@@ -163,6 +174,16 @@ def main():
         "diverging": False, "high_end": None, "general": False, "colors": koppen_colors,
     }
     print(f"  {'koppen':14s} categorical ({len(KOPPEN_COLORS)} classes)")
+
+    deformation_style_colors = build_categorical_colormap(DEFORMATION_STYLE_COLORS)
+    # general=False for the same reason koppen is: an 11-class palette keyed to
+    # deformation_style's own flag values, meaningless applied to any other
+    # variable.
+    out["deformation_style"] = {
+        "diverging": False, "high_end": None, "general": False,
+        "colors": deformation_style_colors,
+    }
+    print(f"  {'deformation_style':14s} categorical ({len(DEFORMATION_STYLE_COLORS)} classes)")
 
     if failures:
         raise SystemExit(f"\npolarity check failed for: {', '.join(failures)}")

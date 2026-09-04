@@ -137,6 +137,15 @@ export interface Manifest {
    *  computeTimeSeries, which skips this byte when tallying its per-Frame
    *  histogram. */
   no_data_sentinel?: number;
+  /** Which reconstruction this output was actually built against, read from
+   *  that run's own config rather than assumed from the model id or name --
+   *  see docs/adr/0004-per-run-coastline-rotations.md. Absent for a model
+   *  ingested before this field existed, or one with no per-run
+   *  reconstruction concept (e.g. a fixed-geometry static field). Use
+   *  core/coastlines.ts's resolveCoastlineSet() to turn this into an actual
+   *  coastline set -- never pair a model with coastlines by guessing from
+   *  its id/name. */
+  reconstruction_model?: string;
   default_resolution: string;
   resolutions: ResolutionInfo[];
   frames: FrameInfo[];
@@ -151,6 +160,15 @@ export interface Manifest {
   mask_variable?: string;
 }
 
+/** One reconstructable coastline set: present-day geometry plus a rotation
+ *  table, the shape core/coastlines.ts's fetchCoastlineData() expects. */
+export interface CoastlineSet {
+  geometry: string;
+  rotations: string;
+  age_min: number;
+  age_max: number;
+}
+
 export interface ArchiveIndex {
   models: Array<{
     id: string;
@@ -161,27 +179,28 @@ export interface ArchiveIndex {
     variables: Array<{ id: string; name: string }>;
     depth_min_km: number;
     depth_max_km: number;
+    /** Mirrors the same Model's own manifest.json field -- see Manifest's
+     *  doc comment. Carried up to archive.json so a consumer can pick
+     *  coastlines from the archive-level summary alone, without a second
+     *  fetch of the full manifest. */
+    reconstruction_model?: string;
   }>;
   colormaps: string;
   /** Muller et al., used by the tomography viewer (index.html). */
-  coastlines: {
-    geometry: string;
-    rotations: string;
-    age_min: number;
-    age_max: number;
-  };
+  coastlines: CoastlineSet;
   /** deep-time-map series manifest, absent if the boundaries were not exported. */
   boundaries?: string;
   /** Scotese, used by the paleoclimate viewer (climate.html) -- the Li et al.
    *  climate simulations and the Scotese & Wright PaleoDEMs both sit on the
    *  Scotese plate model, so this is the one that's geographically
    *  consistent with them, not `coastlines` above. Absent if not exported. */
-  scotese_coastlines?: {
-    geometry: string;
-    rotations: string;
-    age_min: number;
-    age_max: number;
-  };
+  scotese_coastlines?: CoastlineSet;
+  /** Per-run coastlines under that run's OWN native rotations, keyed by the
+   *  lowercased reconstruction_model string (e.g. "cao2024") -- see
+   *  docs/adr/0004-per-run-coastline-rotations.md and
+   *  core/coastlines.ts's resolveCoastlineSet(). Absent for an archive with
+   *  no per-run coastline exports. */
+  native_coastlines?: Record<string, CoastlineSet>;
 }
 
 export interface ColormapData {

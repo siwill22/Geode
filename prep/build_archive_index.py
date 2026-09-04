@@ -28,6 +28,12 @@ def main():
             "name": m["name"],
             "type": m["type"],
             "source": m.get("source", ""),
+            # Which reconstruction this output was actually built against,
+            # per that run's own copied config (see
+            # prep_deformation.py's find_reconstruction_model()) -- absent
+            # for models this field predates. The viewer must use THIS to
+            # pick coastlines, never assume one from the model id.
+            "reconstruction_model": m.get("reconstruction_model"),
             "path": f"models/{m['id']}/manifest.json",
             "variables": [
                 {"id": v["id"], "name": v["name"]} for v in m["variables"]
@@ -77,6 +83,33 @@ def main():
             "age_max": float(max(ages)),
         }
         print(f"  scotese coastlines cover {min(ages):.0f}-{max(ages):.0f} Ma")
+
+    # Per-run coastlines under that run's OWN native rotations -- see
+    # docs/adr/0004-per-run-coastline-rotations.md. Deliberately separate from
+    # `coastlines` above, which pairs the same geometry with Muller 2022's
+    # rotations for the mantle viewer's OPT1 frame; reusing that entry here
+    # would put a deformation run's data under continents rotated by however
+    # far that run's own rotation file disagrees with Muller 2022's.
+    #
+    # Discovered generically (archive/coastlines_<key>_native/) rather than
+    # one hardcoded block per run, and keyed by <key> (lowercase
+    # reconstruction_model, e.g. "muller2019", "cao2024") so the deformation
+    # viewer can look up a model's coastlines FROM that model's own
+    # reconstruction_model field -- see prep_deformation.py -- instead of
+    # assuming one by naming convention. A run whose coastlines are not
+    # exported here just renders without a coastline overlay.
+    native_coastlines = {}
+    for rot_path in sorted(args.archive.glob("coastlines_*_native/rotations.json")):
+        key = rot_path.parent.name[len("coastlines_"):-len("_native")]
+        ages = json.loads(rot_path.read_text())["ages"]
+        native_coastlines[key] = {
+            "geometry": f"{rot_path.parent.name}/geometry.bin",
+            "rotations": f"{rot_path.parent.name}/rotations.json",
+            "age_min": float(min(ages)), "age_max": float(max(ages)),
+        }
+        print(f"  {key}-native coastlines cover {min(ages):.0f}-{max(ages):.0f} Ma")
+    if native_coastlines:
+        index["native_coastlines"] = native_coastlines
 
     out = args.archive / "archive.json"
     out.write_text(json.dumps(index, indent=2))
