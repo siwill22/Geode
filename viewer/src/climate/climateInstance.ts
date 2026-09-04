@@ -65,9 +65,17 @@ export interface ClimateInstanceHooks {
 const OVERLAY_R = R_SURFACE * 1.0006;
 export const DEFAULT_OVERLAY_OPACITY = 0.4;
 const HILLSHADE_VARIABLE_ID = 'hillshade';
+/** Deliberately curated, not derived from grid shape like the main variable
+ *  dropdown (setLayerVariables()) -- temperature, precipitation, seasonality
+ *  and sea ice are the ones worth a global-mean-over-time overview; a model
+ *  that carries none of a given one (Pohl has no seasonality or sea-ice
+ *  variable; paleogeography has none of these at all) just shows fewer rows
+ *  or none, not a placeholder. Must match ClimateUI's own filter in
+ *  setLayerVariables() exactly -- see pickableTimeSeriesVariables(). */
+export const TIME_SERIES_VARIABLE_IDS: ReadonlySet<string> = new Set(['T', 'P', 'T_RANGE', 'ICECONC']);
 export const DEFAULT_WIND_VISIBLE = true;
 export const DEFAULT_WIND_SCALE = 1;
-export const DEFAULT_WIND_DENSITY = 1;
+export const DEFAULT_WIND_DENSITY = 1.5;
 export type WindStyle = 'glyph' | 'streak';
 export const DEFAULT_WIND_STYLE: WindStyle = 'glyph';
 // No manifest field carries this -- the coastline OUTLINE (not any model's
@@ -304,7 +312,19 @@ export class ClimateInstance {
     })));
 
     const paleogeography = this.sources[paleogeographyModelId];
-    this.activeResolution = paleogeography.manifest.default_resolution;
+    // Prefer the largest available grid over the manifest's own authored
+    // default_resolution -- that field just reflects whichever
+    // --resolution-id a prep run last used (prep_paleogeography.py's
+    // args.resolution_id), not a deliberate "start here" choice, and can
+    // drift independently across the archive/archive-deploy/dist manifest
+    // copies. A user opening the paleoclimate viewer should see the
+    // sharpest coastline/elevation detail available by default. Data-driven
+    // (max grid-cell count), not a hardcoded resolution-id match -- same
+    // "derive from shape, not name" precedent as the Annual-layer detection
+    // in computeTimeSeries().
+    this.activeResolution = paleogeography.manifest.resolutions.reduce(
+      (best, r) => (r.nlon * r.nlat > best.nlon * best.nlat ? r : best),
+    ).id;
     this.view.resolution = this.activeResolution;
     this.ui.setResolutions(paleogeography.manifest.resolutions);
 
@@ -352,7 +372,7 @@ export class ClimateInstance {
     this.ui.setLayerVariables(this.manifest.variables, this.view.layer);
     this.ui.setVariable(this.variable, this.deps.colormaps[this.variable.default_colormap]);
     this.applyMonth(this.view.month);
-    this.ui.setTimeInfo(`age ${this.view.age.toFixed(0)} Ma`);
+    this.ui.setAge(this.view.age);
     this.ui.setStatus('');
     this.updateCredit();
     // Re-apply whichever Projection was already active (set by main.ts's
@@ -385,7 +405,8 @@ export class ClimateInstance {
    *  to compute anything for one. */
   private pickableTimeSeriesVariables(): VariableInfo[] {
     return this.manifest.variables.filter(
-      (v) => !v.overlay_only && !v.vector_only && !v.mask_only && !v.categorical,
+      (v) => !v.overlay_only && !v.vector_only && !v.mask_only && !v.categorical
+        && TIME_SERIES_VARIABLE_IDS.has(v.id),
     );
   }
 
@@ -605,7 +626,7 @@ export class ClimateInstance {
     void this.loadFrame(this.view.layer, age);
     if (this.hasOverlay) void this.loadOverlayFrame(age);
     if (this.hasWind) void this.loadWindFrame(age);
-    this.ui.setTimeInfo(`age ${age.toFixed(0)} Ma`);
+    this.ui.setAge(age);
     this.ui.setTimeSeriesAge(age);
   }
 

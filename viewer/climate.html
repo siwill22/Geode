@@ -13,22 +13,31 @@
         color: #d8dee4;
       }
       canvas { display: block; }
-      /* Same circular icon-button pattern as index.html's #hint-toggle/
-         #preset-toggle -- a single control here since there's no "i"/"star"
-         pair on this page yet, so it takes their top-left corner slot. */
+      /* NOT independently positioned -- this single global control
+         (Projection applies to every globe at once, see docs/adr/0003) is
+         mounted as its own standalone circle, a sibling of ageSliderWrap
+         within bottomBar, by ClimateUI.mountProjectionToggle(), called from
+         main.ts. flex:none so the row never squeezes it; align-self:center
+         (not stretch, unlike .legend/.age-slider-wrap below) so it stays a
+         fixed-size circular badge regardless of the row's own height. Its
+         icon content (an inline SVG sketch of a graticule + landmasses,
+         swapped between a globe/flat-map look) is set by
+         main.ts's updateProjectionToggle() -- see PROJECTION_ICON_GLOBE/
+         PROJECTION_ICON_FLAT there. */
       #projection-toggle {
-        position: fixed; left: 12px; top: 12px; z-index: 20;
-        width: 24px; height: 24px; padding: 0;
+        flex: none; align-self: center;
+        width: 40px; height: 40px; padding: 0;
         display: flex; align-items: center; justify-content: center;
         font: inherit; color: #d8dee4; background: #1b1f24;
         border: 1px solid #3a4048; border-radius: 50%; cursor: pointer;
       }
       #projection-toggle:hover { background: #262b32; }
+      #projection-toggle svg { display: block; width: 22px; height: 22px; }
       /*
        * Positioned per-instance in JS (ClimateUI.setRect()), since each
-       * globe tile gets its own status/timeinfo/legend element -- these
-       * rules only carry the look, never left/top/bottom, which would
-       * collide as soon as there is more than one globe on screen.
+       * globe tile gets its own status/bottom-bar/timeseries-anchor element
+       * -- these rules only carry the look, never left/top/bottom, which
+       * would collide as soon as there is more than one globe on screen.
        */
       .status {
         position: fixed;
@@ -40,14 +49,76 @@
       .status.status--error {
         background: #3a1416; color: #ffb4b4;
       }
-      .timeinfo {
+      /* [legend] [age group, TRUE-centred] [credit] along a tile's bottom
+         edge -- position:fixed lives here (its children no longer are), see
+         ClimateUI's applyRect(). A 3-column grid, not a flex row with
+         justify-content:space-between -- space-between centres the MIDDLE
+         gap, not the middle ITEM, so with legend and credit at different
+         widths (credit's citation text varies a lot per model) the age
+         group visibly drifted off true-centre. `1fr auto 1fr` puts the age
+         group in a column that's genuinely centred on the tile regardless
+         of how wide legend/credit are, as long as each fits its own 1fr
+         share. pointer-events:none on the CONTAINER, re-enabled per child:
+         this box spans the tile's full width even though its three visible
+         groups only occupy small parts of it -- on a short tile (a small
+         window, or a second globe stacked in a grid row shorter than the
+         lil-gui panel's own content height), the empty grid gaps would
+         otherwise sit ON TOP of that same tile's own panel (added later in
+         the DOM, same z-index, so it wins ties) and silently swallow clicks
+         meant for whatever panel control happened to fall underneath --
+         including "remove this globe". Found because that's exactly what
+         broke. */
+      .bottom-bar {
         position: fixed;
-        padding: 6px 10px; border-radius: 4px;
-        background: rgba(0, 0, 0, 0.6); color: #9fb4c8;
-        font-variant-numeric: tabular-nums;
+        display: grid; grid-template-columns: 1fr auto 1fr;
+        align-items: flex-end; column-gap: 16px;
+        z-index: 10; pointer-events: none;
       }
+      .bottom-bar > * { pointer-events: auto; }
+      .legend { grid-column: 1; justify-self: start; }
+      /* Holds the age slider box and, on whichever instance is currently
+         "primary", the projection-toggle circle beside it (see
+         ClimateUI.mountProjectionToggle()) -- kept as two visually distinct
+         elements (a slider box and a separate circular button), just laid
+         out as one unit so the PAIR centres together in the grid's middle
+         column. align-items:flex-end so age-slider-wrap's own bottom lines
+         up with legend/credit's; the toggle overrides back to
+         align-self:center on itself (see #projection-toggle) so it reads
+         as its own centred badge next to the (taller) slider box, not
+         another box sharing its baseline. */
+      .age-group {
+        grid-column: 2; justify-self: center;
+        display: flex; align-items: flex-end; gap: 10px;
+      }
+      /* HEIGHT is set inline by ClimateUI.applyRect(), matched to
+         .legend's own natural height (and vice versa) -- NOT
+         align-self:stretch, which would instead match this to the CREDIT
+         column's height (often much taller: a wrapped multi-line citation),
+         making both boxes needlessly tall. The two should match each
+         OTHER, nothing else. */
+      /* WIDTH is set inline by ClimateUI.applyRect(), proportional to the
+         tile's own width -- a range input has no meaningful intrinsic
+         width of its own to grow from (flex:1 1 auto had nothing to
+         distribute into, since .age-group only ever sizes to its content,
+         not to the grid track's full space), so without this the slider
+         rendered far narrower than the room actually available beside it,
+         especially blatant on a single, full-width globe. */
+      .age-slider-wrap {
+        display: flex; flex-direction: column; align-items: center;
+        justify-content: center; gap: 4px;
+        padding: 8px 10px; border-radius: 4px;
+        background: rgba(0, 0, 0, 0.6);
+      }
+      .age-slider {
+        width: 100%;
+      }
+      .age-readout {
+        color: #9fb4c8; font-size: 11px; font-variant-numeric: tabular-nums;
+      }
+      /* HEIGHT set inline by applyRect() -- see .age-slider-wrap's own
+         comment, the same reasoning applies symmetrically here. */
       .legend {
-        position: fixed;
+        display: flex; flex-direction: column; justify-content: center;
         padding: 8px 10px; border-radius: 4px;
         background: rgba(0, 0, 0, 0.6);
       }
@@ -74,18 +145,48 @@
       .legend-key-swatch {
         flex: none; width: 10px; height: 10px; border-radius: 2px;
       }
-      /* Lives inside ClimateUI's panelAnchor, right below the lil-gui panel
-         -- 245px matches lil-gui's own default panel width so this reads as
-         a continuation of it, not a separate foreign widget. */
+      /* Own top-left-corner anchor (ClimateUI.timeSeriesAnchor), separate
+         from the top-right lil-gui panel -- position:fixed lives on the
+         anchor, its WIDTH is set inline per-tile by applyRect() (capped to
+         fit that tile's own available space, so a narrow multi-globe grid
+         shrinks this panel rather than letting it overlap the same tile's
+         own lil-gui panel on the right); overflow-y:auto since several
+         variable rows can exceed a tile's own height budget. display is
+         also toggled inline (flex/none) by setTimeSeriesVariables() when a
+         layer carries none of TIME_SERIES_VARIABLE_IDS (paleogeography).
+         align-items:flex-start -- the DEFAULT for a flex column is stretch
+         (full width), which is wrong for .timeseries-toggle below (should
+         shrink-wrap its own text, not fill the anchor); .timeseries-body
+         opts back into full width itself via align-self:stretch. */
+      .timeseries-anchor {
+        position: fixed;
+        display: flex; flex-direction: column; align-items: flex-start;
+        z-index: 10; overflow-y: auto; overflow-x: hidden;
+      }
+      /* Deliberately the SAME rules as #toolbar button (climate.html,
+         below) -- no explicit `display` override (a native <button>'s own
+         default already shrink-wraps to its content width, so
+         "inline-flex; align-items:center" was both unnecessary AND, because
+         flex height and default button height round slightly differently,
+         the one thing that kept this from being EXACTLY the same height as
+         "+ Add globe" and the sync toggles beside it), same padding/font,
+         so this button lines up with them (applyRect() puts
+         timeSeriesAnchor at the same y+8 top offset those sit at) as one
+         continuous strip. The plots themselves (.timeseries-body) sit
+         BELOW this same-height toggle in normal flex-column flow, which is
+         what actually keeps them clear of the toolbar -- not a separate
+         clearance calculation. */
       .timeseries-toggle {
-        display: block; width: 245px; margin-top: 4px;
-        font: inherit; font-size: 12px; text-align: left; color: #97a3ad;
+        white-space: nowrap;
+        font: inherit; text-align: left; color: #97a3ad;
         background: #1b1f24; border: 1px solid #3a4048; border-radius: 4px;
-        padding: 6px 8px; cursor: pointer;
+        padding: 6px 12px; cursor: pointer;
       }
       .timeseries-toggle:hover { background: #262b32; }
       .timeseries-body {
-        width: 245px; margin-top: 4px; padding: 8px;
+        align-self: stretch;
+        width: 100%; box-sizing: border-box;
+        margin-top: 4px; padding: 8px;
         background: #1b1f24; border: 1px solid #3a4048; border-radius: 4px;
         display: none; flex-direction: column; gap: 8px;
       }
@@ -96,20 +197,38 @@
         color: #97a3ad; font-size: 11px;
       }
       .timeseries-canvas {
-        display: block; width: 220px; height: 40px;
-        background: #12151a; border-radius: 2px;
+        display: block; width: 100%; max-width: 260px; height: 110px;
+        background: #12151a; border-radius: 2px; cursor: crosshair;
       }
       .timeseries-status {
-        color: #6b7580; font-size: 10px; font-style: italic;
+        color: #6b7580; font-size: 11px; font-style: italic;
         min-height: 12px;
+      }
+      /* Shared by every row of every instance's panel -- see
+         ClimateUI.showTooltip(). position:fixed on document.body (not
+         nested under a row) so it's never clipped by timeseries-anchor's
+         own overflow, and pointer-events:none so hovering the tooltip
+         itself can't steal the canvas's mouseleave. */
+      .timeseries-tooltip {
+        position: fixed; display: none; z-index: 30;
+        padding: 6px 8px; border-radius: 4px;
+        background: rgba(10, 12, 15, 0.95); border: 1px solid #3a4048;
+        color: #cfd6dd; font-size: 11px; line-height: 1.5;
+        pointer-events: none; white-space: nowrap;
       }
       #toolbar {
         position: fixed; left: 50%; top: 8px; transform: translateX(-50%);
-        display: flex; gap: 8px;
+        display: flex; align-items: center; gap: 8px;
         /* Above each instance's own panel (z-index 10, see ClimateUI's
            panelAnchor) -- a globe's panel is anchored top-right of its own
            tile, which sits near screen centre for a globe adjacent to the
-           middle of a multi-globe layout, the same place this toolbar lives. */
+           middle of a multi-globe layout, the same place this toolbar lives.
+           align-items:center (flexbox's default is stretch) -- without it,
+           #add-globe was silently stretched taller to match .sync-toggle's
+           own natural height, which meant "same padding/font as #toolbar
+           button" wasn't actually enough to make .timeseries-toggle exactly
+           as tall as "+ Add globe": add-globe's rendered height wasn't its
+           own natural size to begin with. */
         z-index: 20;
       }
       #toolbar button {
@@ -124,10 +243,10 @@
         border: 1px solid #3a4048; border-radius: 4px;
         padding: 6px 12px; cursor: pointer;
       }
-      /* Positioned per-instance in JS (ClimateUI.setRect()), like .status/
-       * .timeinfo/.legend above -- see ClimateUI.setCredit(). */
+      /* The 3rd column of .bottom-bar's grid (see ClimateUI.setCredit()),
+       * not independently positioned. */
       .credit {
-        position: fixed;
+        grid-column: 3; justify-self: end;
         color: #5d6873; font-size: 11px; max-width: 40ch; text-align: right;
       }
       #error {

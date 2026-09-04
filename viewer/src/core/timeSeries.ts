@@ -8,6 +8,37 @@ export interface TimeSeriesPoint {
    *  masked/no-data -- callers must skip NaN points (a gap), not plot them
    *  as zero. */
   mean: number;
+  /** Area-weighted percentiles of the same Frame's texel distribution --
+   *  NaN together with `mean` whenever every texel was masked/no-data. p50
+   *  is the fan chart's drawn median line; p25/p75 its darker IQR band;
+   *  p5/p95 its lighter outer band (deliberately not literal min/max -- see
+   *  weightedPercentile's doc comment). */
+  p5: number;
+  p25: number;
+  p50: number;
+  p75: number;
+  p95: number;
+}
+
+/** The smallest byte whose cumulative weighted histogram mass reaches
+ *  `fraction` of the Frame's total weight, decoded to physical units -- a
+ *  weighted-cumulative walk over the SAME 256-bin histogram the reduction
+ *  loop already builds, so this costs no second read of the volume.
+ *  Nearest-bin, not interpolated between bins: the source data is already
+ *  only 256 distinct levels (a uint8 texel), so interpolating between two
+ *  adjacent bins would fabricate precision the encoding never had. NaN
+ *  when the Frame had no valid weight at all (fully masked). */
+function weightedPercentile(
+  hist: Float64Array, weightSum: number, variable: VariableInfo, fraction: number,
+): number {
+  if (weightSum <= 0) return NaN;
+  const target = fraction * weightSum;
+  let cum = 0;
+  for (let b = 0; b < 256; b++) {
+    cum += hist[b];
+    if (cum >= target) return texelToPhysical(variable, b);
+  }
+  return texelToPhysical(variable, 255);
 }
 
 /** How many Frames to fetch/reduce at once -- bounded so a 100+ Frame model
@@ -52,6 +83,11 @@ async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise
  * (broadcast identically across every layer at prep time -- see
  * loadMask2D's doc comment), so it's read from its own layer 0 regardless of
  * which layer `variable` itself is being read from.
+ *
+ * Also accumulates a weighted 256-bin histogram per Frame (the byte itself
+ * IS the bin, since texelToPhysical decodes it via one linear map) so the
+ * five percentiles on TimeSeriesPoint come from the same single pass over
+ * the volume that the mean does -- see weightedPercentile.
  */
 export async function computeTimeSeries(
   archiveBase: string, modelId: string, manifest: Manifest, variable: VariableInfo,
@@ -75,6 +111,7 @@ export async function computeTimeSeries(
 
     let weightSum = 0;
     let valueSum = 0;
+    const hist = new Float64Array(256);
     for (let j = 0; j < nlat; j++) {
       const lat = -90 + (j * 180) / (nlat - 1);
       const w = Math.cos(lat * DEG);
@@ -86,10 +123,19 @@ export async function computeTimeSeries(
         if (maskBytes && maskBytes[rowBase + i] < 128) continue;
         const byte = valueBytes[layerOffset + rowBase + i];
         if (sentinel !== undefined && byte === sentinel) continue;
+        hist[byte] += w;
         valueSum += w * texelToPhysical(variable, byte);
         weightSum += w;
       }
     }
-    return { age: frame.age_ma, mean: weightSum > 0 ? valueSum / weightSum : NaN };
+    return {
+      age: frame.age_ma,
+      mean: weightSum > 0 ? valueSum / weightSum : NaN,
+      p5: weightedPercentile(hist, weightSum, variable, 0.05),
+      p25: weightedPercentile(hist, weightSum, variable, 0.25),
+      p50: weightedPercentile(hist, weightSum, variable, 0.50),
+      p75: weightedPercentile(hist, weightSum, variable, 0.75),
+      p95: weightedPercentile(hist, weightSum, variable, 0.95),
+    };
   });
 }

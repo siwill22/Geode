@@ -238,6 +238,11 @@ function removeInstance(inst: ClimateInstance): void {
   // a categorical legend visible, the next-first categorical globe (if any)
   // needs to pick it back up explicitly.
   refreshLegendVisibility();
+  // Same story for the projection toggle, if the removed globe was the one
+  // hosting it (see the "projection toggle" section below) -- dispose()
+  // already detached it from the DOM entirely, so it needs a new home
+  // regardless of whether idx happened to be 0.
+  if (projectionToggle) primary().ui.mountProjectionToggle(projectionToggle);
 }
 
 addEventListener('resize', () => {
@@ -253,20 +258,49 @@ document.getElementById('add-globe')?.addEventListener('click', () => {
 //
 // One global control (see docs/adr/0003), not part of any instance's own
 // ClimateUI panel -- ClimateUI is per-instance, but Projection applies to
-// every globe on screen at once, like the shared camera it rides on.
+// every globe on screen at once, like the shared camera it rides on. The
+// single DOM node still lives here, but is physically mounted (not cloned)
+// into whichever instance is currently "primary"'s own bottom bar, as its
+// own standalone circle beside (not inside) the age-slider box -- see
+// ClimateUI.mountProjectionToggle(). Re-mounted in boot() (first instance)
+// and removeInstance() (primary may change).
 
 const projectionToggle = document.getElementById('projection-toggle');
+
+// Small inline sketches (graticule + a few landmass blobs), not plain
+// geometric glyphs (a bare circle/rectangle character read as unrelated to
+// "map projection" -- see the icon swap below still encoding the click
+// TARGET, just with each shape now actually looking like a world map).
+const PROJECTION_ICON_GLOBE = `
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="12" cy="12" r="9"/>
+  <ellipse cx="12" cy="12" rx="4" ry="9"/>
+  <path d="M3 12h18"/>
+  <path d="M6.3 7.7c1.7 1.4 3.6 1.3 5.1-.6.6-.8-.3-1.6-1.5-1.3-1.6.4-2.9 1-3.6 1.9z" fill="currentColor" stroke="none" opacity="0.85"/>
+  <path d="M13.2 15c2-.5 4 .2 5.2 1.9.6.9-.5 1.5-1.8 1-1.7-.6-3-1.7-3.4-2.9z" fill="currentColor" stroke="none" opacity="0.85"/>
+</svg>`.trim();
+const PROJECTION_ICON_FLAT = `
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="3" y="6" width="18" height="12" rx="1.5"/>
+  <path d="M3 12h18"/>
+  <path d="M5.4 8.5c2.6-1.8 5-1 6.3 1.1.9 1.6-.5 2.8-2.2 2.1-2-.8-3.3-1.8-4.1-3.2z" fill="currentColor" stroke="none" opacity="0.85"/>
+  <path d="M13.6 9.3c2-.9 4-.2 5.1 1.5.7 1.1-.4 2-1.8 1.7-1.7-.4-3.1-1.7-3.3-3.2z" fill="currentColor" stroke="none" opacity="0.85"/>
+  <path d="M8.8 15c1.8-.6 3.9-.2 5.3 1 .9.8-.1 1.7-1.5 1.5-1.7-.2-3.3-1.1-3.8-2.5z" fill="currentColor" stroke="none" opacity="0.85"/>
+</svg>`.trim();
 
 function updateProjectionToggle(): void {
   if (!projectionToggle) return;
   const flat = projectionMode === 'plateCarree';
-  // The glyph shows what clicking switches TO, not the current shape --
-  // flat now means the click target is Globe, so the icon is a circle.
-  projectionToggle.textContent = flat ? '◯' : '▭'; // circle : rectangle
+  // The icon shows what clicking switches TO, not the current shape --
+  // flat now means the click target is Globe, so the icon is a globe.
+  projectionToggle.innerHTML = flat ? PROJECTION_ICON_GLOBE : PROJECTION_ICON_FLAT;
   const label = flat ? 'Switch to Globe projection' : 'Switch to Plate Carrée projection';
   projectionToggle.setAttribute('aria-label', label);
   projectionToggle.setAttribute('title', label);
 }
+// Paint the real icon immediately -- climate.html's static markup only has
+// a placeholder glyph so the button isn't empty before this module runs.
+updateProjectionToggle();
 
 projectionToggle?.addEventListener('click', () => {
   setProjection(projectionMode === 'globe' ? 'plateCarree' : 'globe');
@@ -330,6 +364,7 @@ async function boot(): Promise<void> {
   instances.push(first);
   focusedInstance = first;
   relayout();
+  if (projectionToggle) first.ui.mountProjectionToggle(projectionToggle);
   await first.boot(climateModelIds, paleogeographyModelId);
 
   if (window.__climate) window.__climate.ready = true;

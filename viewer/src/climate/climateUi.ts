@@ -1,5 +1,5 @@
 import GUI, { type Controller } from 'lil-gui';
-import type { ClimateLayer, WindStyle } from './climateInstance';
+import { TIME_SERIES_VARIABLE_IDS, type ClimateLayer, type WindStyle } from './climateInstance';
 import type { Rect } from '../core/layout';
 import type { TimeSeriesPoint } from '../core/timeSeries';
 import type { ColormapData, ResolutionInfo, VariableInfo } from '../core/types';
@@ -78,7 +78,6 @@ export class ClimateUI {
   private climateModelCtrl: Controller;
   private resolutionCtrl: Controller;
   private variableCtrl: Controller;
-  private ageCtrl: Controller;
   private monthCtrl: Controller;
   private playCtrl: Controller;
   private playTimer: ReturnType<typeof setInterval> | null = null;
@@ -94,7 +93,25 @@ export class ClimateUI {
    *  setClimateModels(), read by updateClimateModelVisibility(). */
   private climateModelCount = 1;
   private status: HTMLDivElement;
-  private timeInfo: HTMLDivElement;
+  /** Native range input, not a lil-gui controller -- age is common enough
+   *  to want at the bottom of the screen rather than buried in the panel,
+   *  and it's the one and only age control now (no duplicate lil-gui
+   *  slider -- see setAge()). */
+  private ageSlider: HTMLInputElement;
+  private ageReadout: HTMLSpanElement;
+  private ageSliderWrap: HTMLDivElement;
+  /** Wraps ageSliderWrap (and, on whichever instance is currently
+   *  "primary", the projection-toggle circle -- see
+   *  mountProjectionToggle()) so the pair is ONE grid item in bottomBar's
+   *  middle column, genuinely centred on the tile regardless of how wide
+   *  legend/credit are (see .age-group's own CSS doc comment for why a
+   *  flex justify-content:space-between wasn't good enough). */
+  private ageGroup: HTMLDivElement;
+  /** `[legend, ageGroup, credit]` as grid children, spanning this tile's
+   *  own width along its bottom edge -- replaces the old separate
+   *  bottom-left legend / bottom-right credit corners now that a slider
+   *  needs to sit between them. */
+  private bottomBar: HTMLDivElement;
   private legend: HTMLDivElement;
   private legendLabel: HTMLDivElement;
   private legendCanvas: HTMLCanvasElement;
@@ -102,11 +119,14 @@ export class ClimateUI {
   private legendTickMin: HTMLSpanElement;
   private legendTickMax: HTMLSpanElement;
   private legendKey: HTMLDivElement;
-  /** Collapsed by default (see the constructor) -- a chart per pickable
-   *  variable of the ACTIVE layer, one area-weighted global-mean point per
-   *  Frame, computed lazily on first expand (see setTimeSeriesVariables()'s
-   *  own doc comment) rather than at boot, so a user who never opens this
-   *  never pays for it. */
+  /** Collapsed by default (see the constructor) -- a fan chart (median +
+   *  IQR band + 5-95th pct band) per pickable variable of the ACTIVE layer,
+   *  computed lazily on first expand (see setTimeSeriesVariables()'s own
+   *  doc comment) rather than at boot, so a user who never opens this never
+   *  pays for it. Lives in its own left-side timeSeriesAnchor now, not
+   *  nested inside panelAnchor -- separated from the lil-gui menu both
+   *  visually and structurally. */
+  private timeSeriesAnchor: HTMLDivElement;
   private timeSeriesToggle: HTMLButtonElement;
   private timeSeriesBody: HTMLDivElement;
   private timeSeriesExpanded = false;
@@ -117,6 +137,10 @@ export class ClimateUI {
   private timeSeriesRows = new Map<string, {
     row: HTMLDivElement; canvas: HTMLCanvasElement; statusEl: HTMLDivElement; points: TimeSeriesPoint[] | null;
   }>();
+  /** Shared by every row of every variable -- one floating element, moved
+   *  and re-filled on each hover rather than built per-row, see
+   *  showTooltip(). */
+  private tooltip: HTMLDivElement;
   /** The Frame age range to plot the X axis over -- the manifest's own full
    *  range (see setAgeRange()), NOT the span of whichever points happen to
    *  be computed so far, so the marker line and axis stay stable as rows
@@ -190,9 +214,6 @@ export class ClimateUI {
       .add(this.state, 'variable', {})
       .name('variable')
       .onChange((v: string) => cb.onVariable(v));
-    this.ageCtrl = this.gui.add(this.state, 'age', 0, 540, 1)
-      .name('age (Ma)')
-      .onChange((v: number) => cb.onAge(v));
     this.monthCtrl = this.gui.add(this.state, 'month', 0, N_LAYERS - 1, 1)
       .name('month')
       .onChange((v: number) => cb.onMonth(v));
@@ -260,11 +281,6 @@ export class ClimateUI {
     document.body.appendChild(this.status);
     this.setStatus('');
 
-    this.timeInfo = document.createElement('div');
-    this.timeInfo.className = 'timeinfo';
-    document.body.appendChild(this.timeInfo);
-    this.setTimeInfo('');
-
     this.legend = document.createElement('div');
     this.legend.className = 'legend';
     this.legendLabel = document.createElement('div');
@@ -281,24 +297,84 @@ export class ClimateUI {
     this.legendKey = document.createElement('div');
     this.legendKey.className = 'legend-key';
     this.legend.append(this.legendLabel, this.legendCanvas, this.legendTicks, this.legendKey);
-    document.body.appendChild(this.legend);
+
+    // 'input' (not 'change') fires continuously while dragging, matching the
+    // feel of lil-gui's own slider drag which this replaces entirely -- see
+    // setAge() for the programmatic-update counterpart that must NOT loop
+    // back through cb.onAge (sync broadcast, boot, test hooks).
+    this.ageSlider = document.createElement('input');
+    this.ageSlider.type = 'range';
+    this.ageSlider.className = 'age-slider';
+    this.ageSlider.min = '0';
+    this.ageSlider.max = '540';
+    this.ageSlider.step = '1';
+    this.ageSlider.addEventListener('input', () => {
+      const age = Number(this.ageSlider.value);
+      this.state.age = age;
+      this.setAge(age);
+      cb.onAge(age);
+    });
+    this.ageReadout = document.createElement('span');
+    this.ageReadout.className = 'age-readout';
+    this.ageSliderWrap = document.createElement('div');
+    this.ageSliderWrap.className = 'age-slider-wrap';
+    this.ageSliderWrap.append(this.ageSlider, this.ageReadout);
+
+    // Wraps ageSliderWrap alone by default; mountProjectionToggle() prepends
+    // the (separate, circular) projection button in here too, beside it --
+    // see ageGroup's own field doc comment for why this needs to be one
+    // grid item rather than two.
+    this.ageGroup = document.createElement('div');
+    this.ageGroup.className = 'age-group';
+    this.ageGroup.append(this.ageSliderWrap);
 
     this.credit = document.createElement('div');
     this.credit.className = 'credit';
-    document.body.appendChild(this.credit);
 
-    // Lives inside panelAnchor, right below the lil-gui panel itself -- rides
-    // the SAME top-right positioning applyRect() already gives panelAnchor,
-    // no separate corner to manage.
+    // A single bottom strip per tile -- [colour bar] .... [projection
+    // toggle + age slider, centred] .... [attribution] -- replacing the old
+    // separate bottom-left legend / bottom-right credit corners, now that
+    // the age control lives here too rather than in the top-right lil-gui
+    // panel.
+    this.bottomBar = document.createElement('div');
+    this.bottomBar.className = 'bottom-bar';
+    this.bottomBar.append(this.legend, this.ageGroup, this.credit);
+    document.body.appendChild(this.bottomBar);
+
+    // Own top-left anchor, deliberately NOT inside panelAnchor -- separated
+    // from the lil-gui panel both visually and structurally, per the user's
+    // "not with the existing menu" ask. See applyRect() for how it clears
+    // both the page-level #toolbar (top) and the bottom bar (bottom).
+    this.timeSeriesAnchor = document.createElement('div');
+    this.timeSeriesAnchor.className = 'timeseries-anchor';
     this.timeSeriesToggle = document.createElement('button');
     this.timeSeriesToggle.className = 'timeseries-toggle';
     this.timeSeriesToggle.textContent = '▸ time series';
     this.timeSeriesBody = document.createElement('div');
     this.timeSeriesBody.className = 'timeseries-body';
     this.timeSeriesToggle.addEventListener('click', () => this.toggleTimeSeries());
-    this.panelAnchor.append(this.timeSeriesToggle, this.timeSeriesBody);
+    this.timeSeriesAnchor.append(this.timeSeriesToggle, this.timeSeriesBody);
+    document.body.appendChild(this.timeSeriesAnchor);
+
+    this.tooltip = document.createElement('div');
+    this.tooltip.className = 'timeseries-tooltip';
+    document.body.appendChild(this.tooltip);
 
     this.applyRect();
+  }
+
+  /** Mounts the page's single global projection-toggle button (ClimateUI has
+   *  no concept of Projection itself -- it applies to every globe on screen
+   *  at once, see docs/adr/0003) as its own standalone circle directly
+   *  beside THIS instance's own age-slider box (a sibling of ageSliderWrap
+   *  within ageGroup, not nested inside ageSliderWrap itself -- kept
+   *  visually separate so it doesn't read as part of the slider). main.ts
+   *  calls this only on whichever instance is currently "primary" (see its
+   *  own primary()/removeInstance()), re-mounting here -- moving the same
+   *  DOM node, not cloning -- whenever the primary instance changes.
+   *  Idempotent: safe to call again on an instance that already hosts it. */
+  mountProjectionToggle(el: HTMLElement): void {
+    this.ageGroup.insertBefore(el, this.ageSliderWrap);
   }
 
   private toggleTimeSeries(): void {
@@ -317,7 +393,9 @@ export class ClimateUI {
    *  archive.coastlines.age_max (200 Ma), which only bounds the paleogeography
    *  overlay, a narrower thing. See ClimateInstance's class doc. */
   setAgeRange(min: number, max: number, step = 1): void {
-    this.ageCtrl.min(min).max(max).step(step);
+    this.ageSlider.min = String(min);
+    this.ageSlider.max = String(max);
+    this.ageSlider.step = String(step);
     this.timeSeriesAgeMin = min;
     this.timeSeriesAgeMax = max;
   }
@@ -338,11 +416,15 @@ export class ClimateUI {
     // A time series is meaningful to look at (Koppen's class index stays a
     // dropdown choice below) but not to average -- "mean of class 3 and
     // class 7" isn't class 5 or anything else meaningful, unlike averaging a
-    // continuous physical quantity. Must match
-    // ClimateInstance.pickableTimeSeriesVariables()'s own filter, or a
-    // categorical row would be built here with nothing ever arriving to
-    // fill it -- ClimateInstance excludes it from what it computes.
-    this.setTimeSeriesVariables(pickable.filter((v) => !v.categorical));
+    // continuous physical quantity -- and the panel is further curated down
+    // to TIME_SERIES_VARIABLE_IDS (see that constant's own doc comment).
+    // Must match ClimateInstance.pickableTimeSeriesVariables()'s own filter
+    // exactly, or a row would be built here with nothing ever arriving to
+    // fill it -- ClimateInstance excludes anything outside this set from
+    // what it computes.
+    this.setTimeSeriesVariables(
+      pickable.filter((v) => !v.categorical && TIME_SERIES_VARIABLE_IDS.has(v.id)),
+    );
     if (pickable.length <= 1) {
       this.variableCtrl.hide();
       this.monthCtrl.hide();
@@ -433,8 +515,10 @@ export class ClimateUI {
       label.textContent = v.name;
       const canvas = document.createElement('canvas');
       canvas.className = 'timeseries-canvas';
-      canvas.width = 220;
-      canvas.height = 40;
+      canvas.width = 260;
+      canvas.height = 110;
+      canvas.addEventListener('mousemove', (e) => this.onTimeSeriesHover(e, v.id, canvas));
+      canvas.addEventListener('mouseleave', () => this.hideTooltip());
       const statusEl = document.createElement('div');
       statusEl.className = 'timeseries-status';
       row.append(label, canvas, statusEl);
@@ -443,7 +527,72 @@ export class ClimateUI {
         row, canvas, statusEl, points: null,
       });
     }
-    if (this.timeSeriesExpanded) this.cb.onExpandTimeSeries();
+    // Nothing to show (e.g. paleogeography, which carries none of
+    // TIME_SERIES_VARIABLE_IDS) -- hide the toggle entirely rather than
+    // offering an expand button for a permanently-empty box, and fold back
+    // to collapsed so a later layer switch that DOES have rows doesn't
+    // reopen already-expanded.
+    const hasAny = pickable.length > 0;
+    this.timeSeriesAnchor.style.display = hasAny ? 'flex' : 'none';
+    if (!hasAny) {
+      this.timeSeriesExpanded = false;
+      this.timeSeriesBody.style.display = 'none';
+      this.timeSeriesToggle.textContent = '▸ time series';
+    }
+    if (hasAny && this.timeSeriesExpanded) this.cb.onExpandTimeSeries();
+  }
+
+  /** Nearest-point lookup by X position, not exact pixel hit-testing --
+   *  Frame ages aren't evenly spaced (see computeTimeSeries()), so "nearest
+   *  age to the cursor" is the only sensible notion of hover target. Uses
+   *  the canvas's own CSS-rendered width via getBoundingClientRect(), not
+   *  its backing-store `width` attribute, so this stays correct regardless
+   *  of how the two differ (the anchor's width -- and therefore the
+   *  canvas's rendered width -- is capped per-tile by applyRect()). */
+  private onTimeSeriesHover(e: MouseEvent, variableId: string, canvas: HTMLCanvasElement): void {
+    const entry = this.timeSeriesRows.get(variableId);
+    if (!entry?.points?.length) return;
+    const rect = canvas.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    const hoverAge = this.timeSeriesAgeMin + frac * (this.timeSeriesAgeMax - this.timeSeriesAgeMin);
+    let nearest = entry.points[0];
+    let bestDist = Math.abs(nearest.age - hoverAge);
+    for (const p of entry.points) {
+      const d = Math.abs(p.age - hoverAge);
+      if (d < bestDist) { bestDist = d; nearest = p; }
+    }
+    this.showTooltip(e.clientX, e.clientY, nearest);
+  }
+
+  /** `position: fixed` on `document.body`, not nested under the row it's
+   *  triggered from -- timeSeriesAnchor clips its own overflow (see its CSS
+   *  doc comment), which would cut the tooltip off the moment it needed to
+   *  extend past the anchor's own (narrow, per-tile-capped) bounds. Clamped
+   *  to the viewport on the low/right edges so it never runs off-screen
+   *  near a tile's own edge. */
+  private showTooltip(clientX: number, clientY: number, p: TimeSeriesPoint): void {
+    const fmt = (v: number) => (Number.isNaN(v) ? '—' : this.formatTick(v));
+    this.tooltip.replaceChildren();
+    const lines = [
+      `${p.age.toFixed(0)} Ma`,
+      `median ${fmt(p.p50)}`,
+      `IQR ${fmt(p.p25)} – ${fmt(p.p75)}`,
+      `5–95th pct ${fmt(p.p5)} – ${fmt(p.p95)}`,
+      `mean ${fmt(p.mean)}`,
+    ];
+    for (const line of lines) {
+      const row = document.createElement('div');
+      row.textContent = line;
+      this.tooltip.appendChild(row);
+    }
+    this.tooltip.style.display = 'block';
+    const { width: tw, height: th } = this.tooltip.getBoundingClientRect();
+    this.tooltip.style.left = `${Math.min(clientX + 14, innerWidth - tw - 8)}px`;
+    this.tooltip.style.top = `${Math.min(clientY + 14, innerHeight - th - 8)}px`;
+  }
+
+  private hideTooltip(): void {
+    this.tooltip.style.display = 'none';
   }
 
   setTimeSeriesLoading(variableId: string): void {
@@ -474,13 +623,20 @@ export class ClimateUI {
     }
   }
 
-  /** A small line chart: per-Frame points (NOT evenly spaced in age -- see
-   *  computeTimeSeries()) connected in Frame-age order, auto-scaled to
-   *  whichever points exist so far (so a row redraws sensibly mid-progressive
-   *  -load, before every Frame has resolved), plus a vertical marker at the
-   *  CURRENT age. Redrawn from scratch on every call rather than incrementally
-   *  patched -- at most a few hundred points on a ~220px canvas, cheap enough
-   *  that a separate "just move the marker" fast path would be premature. */
+  /** A fan chart: a shaded p5-p95 band (outer, light), a shaded p25-p75 IQR
+   *  band (inner, darker) drawn on top of it, a p50 median line on top of
+   *  that, plus a vertical marker at the CURRENT age -- all from the SAME
+   *  per-Frame percentiles computeTimeSeries() already returns, no extra
+   *  fetch. p5/p95 rather than literal min/max deliberately, see
+   *  weightedPercentile()'s own doc comment: one anomalous texel shouldn't
+   *  dictate the band. Auto-scaled to whichever points exist so far (so a
+   *  row redraws sensibly mid-progressive-load). A run of points breaks
+   *  wherever p50 is NaN (mask covered every texel that Frame) -- both bands
+   *  and the line stop and restart around the gap, rather than bridging
+   *  across missing data, same "say so, don't fabricate" as before. Redrawn
+   *  from scratch on every call -- at most a few hundred points on a small
+   *  canvas, cheap enough that a separate "just move the marker" fast path
+   *  would be premature. */
   private drawTimeSeriesRow(canvas: HTMLCanvasElement, points: TimeSeriesPoint[]): void {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -488,10 +644,10 @@ export class ClimateUI {
     const h = canvas.height;
     ctx.clearRect(0, 0, w, h);
 
-    const values = points.map((p) => p.mean).filter((v) => !Number.isNaN(v));
-    if (values.length === 0) return;
-    let vMin = Math.min(...values);
-    let vMax = Math.max(...values);
+    const outer = points.flatMap((p) => [p.p5, p.p95]).filter((v) => !Number.isNaN(v));
+    if (outer.length === 0) return;
+    let vMin = Math.min(...outer);
+    let vMax = Math.max(...outer);
     if (vMin === vMax) { vMin -= 1; vMax += 1; } // a perfectly flat series would otherwise divide by zero below
 
     const padX = 2;
@@ -500,20 +656,42 @@ export class ClimateUI {
     const toX = (age: number) => padX + ((age - this.timeSeriesAgeMin) / ageSpan) * (w - 2 * padX);
     const toY = (v: number) => h - padY - ((v - vMin) / (vMax - vMin)) * (h - 2 * padY);
 
-    ctx.strokeStyle = '#7fd0ff';
-    ctx.lineWidth = 1.25;
-    ctx.beginPath();
-    let penDown = false;
+    // Contiguous non-gap runs -- a filled band can't skip a hole the way a
+    // stroked line can just lift the pen.
+    const runs: TimeSeriesPoint[][] = [];
+    let current: TimeSeriesPoint[] = [];
     for (const p of points) {
-      // A gap (mask/no-data covered every texel at this Frame, see
-      // computeTimeSeries()) breaks the line rather than interpolating
-      // across missing data -- "say so, don't fabricate" again.
-      if (Number.isNaN(p.mean)) { penDown = false; continue; }
-      const x = toX(p.age);
-      const y = toY(p.mean);
-      if (!penDown) { ctx.moveTo(x, y); penDown = true; } else ctx.lineTo(x, y);
+      if (Number.isNaN(p.p50)) { if (current.length) runs.push(current); current = []; continue; }
+      current.push(p);
     }
-    ctx.stroke();
+    if (current.length) runs.push(current);
+
+    const fillBand = (run: TimeSeriesPoint[], top: 'p5' | 'p25', bottom: 'p95' | 'p75', style: string) => {
+      ctx.fillStyle = style;
+      ctx.beginPath();
+      run.forEach((p, i) => {
+        const x = toX(p.age);
+        const y = toY(p[top]);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      for (let i = run.length - 1; i >= 0; i--) ctx.lineTo(toX(run[i].age), toY(run[i][bottom]));
+      ctx.closePath();
+      ctx.fill();
+    };
+
+    for (const run of runs) {
+      fillBand(run, 'p5', 'p95', 'rgba(127, 208, 255, 0.15)');
+      fillBand(run, 'p25', 'p75', 'rgba(127, 208, 255, 0.35)');
+      ctx.strokeStyle = '#7fd0ff';
+      ctx.lineWidth = 1.25;
+      ctx.beginPath();
+      run.forEach((p, i) => {
+        const x = toX(p.age);
+        const y = toY(p.p50);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    }
 
     const markerX = toX(this.timeSeriesCurrentAge);
     ctx.strokeStyle = '#ffb454';
@@ -661,9 +839,11 @@ export class ClimateUI {
 
   /** Repaint every controller from the bound state -- needed after a
    *  programmatic change (e.g. the test hook) edits `state` directly rather
-   *  than through a slider drag. */
+   *  than through a slider drag. Also syncs the age slider, which isn't a
+   *  lil-gui controller and so isn't swept by controllersRecursive(). */
   refreshDisplay(): void {
     this.gui.controllersRecursive().forEach((c) => c.updateDisplay());
+    this.setAge(this.state.age);
   }
 
   /** `isError` swaps in the same red styling as the page-level #error box
@@ -677,9 +857,14 @@ export class ClimateUI {
     this.status.classList.toggle('status--error', isError);
   }
 
-  setTimeInfo(msg: string): void {
-    this.timeInfo.textContent = msg;
-    this.timeInfo.style.display = msg ? 'block' : 'none';
+  /** Move the slider thumb and update its numeric readout WITHOUT re-firing
+   *  onAge -- mirrors lil-gui's own updateDisplay(), used for a programmatic
+   *  age change (sync broadcast, boot, test hook) that must not echo back
+   *  through cb.onAge(). Also the only place the current age is shown
+   *  textually, now that there's no separate top-left age label. */
+  setAge(age: number): void {
+    this.ageSlider.value = String(age);
+    this.ageReadout.textContent = `${age.toFixed(0)} Ma`;
   }
 
   setCredit(text: string): void {
@@ -706,32 +891,68 @@ export class ClimateUI {
     this.applyRect();
   }
 
-  // climate.html's #projection-toggle is a single page-fixed icon button at
-  // (12, 12)-(36, 36) -- only ever overlaps whichever tile's own top-left
-  // corner sits at the screen's top-left, but every tile's time-info is
-  // pushed clear of it unconditionally rather than special-cased by rect
-  // position: simpler, and the wasted margin on tiles that never needed it
-  // is invisible.
-  private static readonly PROJECTION_BUTTON_CLEARANCE = 46;
-
   private applyRect(): void {
     const { x, y, width, height } = this.rect;
-    // Panel anchored top-right; time-info/status top-left (time-info first,
-    // clear of #projection-toggle, status just below it); legend bottom-left
-    // -- the ramp can grow tall with a categorical key, which read better
-    // anchored at the bottom than pushing other top-left content around.
+    // Panel anchored top-right; time-series ANCHOR at the tile's top-left,
+    // top edge flush with y+8 -- the same top offset #toolbar's own buttons
+    // sit at -- so timeSeriesToggle ("time series") visually lines up with
+    // "+ Add globe" rather than sitting lower. It's now the SAME height as
+    // a toolbar button too (see .timeseries-toggle's CSS, matched padding
+    // and font), so the two rows read as one continuous strip. The plots
+    // themselves (timeSeriesBody) don't need a separate clearance
+    // calculation to avoid the toolbar -- they're simply stacked below the
+    // toggle in normal flex-column flow, and since the toggle's own height
+    // now equals the toolbar's, "below the toggle" already means "below the
+    // toolbar". Status sits below the toggle's OWN measured height, for the
+    // same reason.
     this.panelAnchor.style.top = `${y + 8}px`;
     this.panelAnchor.style.right = `${innerWidth - (x + width) + 8}px`;
-    this.timeInfo.style.top = `${y + 12}px`;
-    this.timeInfo.style.left = `${x + ClimateUI.PROJECTION_BUTTON_CLEARANCE}px`;
-    this.status.style.top = `${y + 44}px`;
-    this.status.style.left = `${x + ClimateUI.PROJECTION_BUTTON_CLEARANCE}px`;
-    this.legend.style.bottom = `${innerHeight - (y + height) + 12}px`;
-    this.legend.style.left = `${x + 12}px`;
-    // Bottom-right -- the same corner the original static #credit div in
-    // climate.html used, back when there was only ever one thing to credit.
-    this.credit.style.right = `${innerWidth - (x + width) + 12}px`;
-    this.credit.style.bottom = `${innerHeight - (y + height) + 8}px`;
+
+    this.bottomBar.style.left = `${x + 12}px`;
+    this.bottomBar.style.width = `${width - 24}px`;
+    this.bottomBar.style.bottom = `${innerHeight - (y + height) + 8}px`;
+
+    // Proportional to the tile's own width, not a fixed pixel value -- a
+    // single full-width globe should give the slider noticeably more room
+    // than a narrow tile in a multi-globe grid does. Floor keeps it usable
+    // on a narrow tile; cap keeps it from sprawling absurdly wide on an
+    // ultra-wide single-globe monitor.
+    const sliderWidth = Math.max(200, Math.min(700, width * 0.4));
+    this.ageSliderWrap.style.width = `${sliderWidth}px`;
+
+    // Match .legend and .age-slider-wrap to each other's natural height --
+    // NOT the bottom-bar row's own cross size, which the (often much
+    // taller, wrapped multi-line) credit citation text would otherwise
+    // drag both of them up to match (see their CSS doc comments). Reset
+    // any height forced by a PREVIOUS call before re-measuring, or repeated
+    // calls (window resize, adding/removing a globe) would ratchet the
+    // matched height upward forever.
+    this.legend.style.height = '';
+    this.ageSliderWrap.style.height = '';
+    const matchedHeight = Math.max(
+      this.legend.getBoundingClientRect().height,
+      this.ageSliderWrap.getBoundingClientRect().height,
+    );
+    this.legend.style.height = `${matchedHeight}px`;
+    this.ageSliderWrap.style.height = `${matchedHeight}px`;
+
+    const bottomBarHeight = this.bottomBar.getBoundingClientRect().height;
+    this.timeSeriesAnchor.style.top = `${y + 8}px`;
+    this.timeSeriesAnchor.style.left = `${x + 12}px`;
+    this.timeSeriesAnchor.style.bottom = `${innerHeight - (y + height) + bottomBarHeight + 20}px`;
+    // Capped to whatever's actually left of the tile after panelAnchor's own
+    // measured width -- on a narrow multi-globe grid, a fixed 260px here
+    // would run this tile's OWN lil-gui panel over, since both are
+    // independently edge-anchored with no shared awareness of each other.
+    // Floor of 140px keeps a collapsed row still legible rather than
+    // vanishing to nothing on an extreme grid.
+    const panelWidth = this.panelAnchor.getBoundingClientRect().width;
+    const available = width - 12 - panelWidth - 20;
+    this.timeSeriesAnchor.style.width = `${Math.max(140, Math.min(260, available))}px`;
+
+    const toggleHeight = this.timeSeriesToggle.getBoundingClientRect().height;
+    this.status.style.top = `${y + 8 + toggleHeight + 8}px`;
+    this.status.style.left = `${x + 12}px`;
   }
 
   dispose(): void {
@@ -739,8 +960,12 @@ export class ClimateUI {
     this.gui.destroy();
     this.panelAnchor.remove();
     this.status.remove();
-    this.timeInfo.remove();
-    this.legend.remove();
-    this.credit.remove();
+    // If this instance currently hosts the global projection-toggle button
+    // (see mountProjectionToggle()), this detaches it too -- main.ts's
+    // removeInstance() re-mounts it onto the new primary right after,
+    // synchronously, before anything renders in between.
+    this.bottomBar.remove(); // takes legend/ageGroup(+ageSliderWrap)/credit with it
+    this.timeSeriesAnchor.remove(); // takes timeSeriesToggle/timeSeriesBody with it
+    this.tooltip.remove();
   }
 }
