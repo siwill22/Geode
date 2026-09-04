@@ -1,4 +1,4 @@
-import { Clock, Color, WebGLRenderer, type Camera } from 'three';
+import { Clock, Color, Vector2, WebGLRenderer, type Camera } from 'three';
 import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 import { lonLatToVec3 } from '../core/constants';
@@ -311,27 +311,55 @@ projectionToggle?.addEventListener('click', () => {
 
 // --- interaction ---------------------------------------------------------
 //
-// The camera and canvas are shared, but unlike tomography there is no
+// The camera and canvas are shared. Unlike tomography there is no
 // per-instance TOOL state competing with OrbitControls for the same drag
-// gesture (no cutaway drawing here) and no raycasting -- OrbitControls
-// already owns 100% of pointer interaction with nothing to fight it. A
-// click only needs to know which tile it landed in, purely to update
-// `focusedInstance` for the sync fallback above.
+// gesture (no cutaway drawing here) -- OrbitControls owns ordinary pointer
+// interaction with nothing to fight it EXCEPT the one exception below:
+// shift-click, Anchored Point's Month Profile query (see
+// ClimateInstance.queryMonthProfileAt(), docs/plans/anchored-point-query.md).
+// That gesture needs a tile hit AND that tile's own NDC, unlike the old
+// click-just-to-focus-a-tile behaviour, which only needed the former.
 
-function hitTest(clientX: number, clientY: number): ClimateInstance | null {
+function hitTest(clientX: number, clientY: number): { inst: ClimateInstance; rect: Rect } | null {
   for (let i = 0; i < instances.length; i++) {
     const r = layoutRects[i];
     if (r && clientX >= r.x && clientX < r.x + r.width
       && clientY >= r.y && clientY < r.y + r.height) {
-      return instances[i];
+      return { inst: instances[i], rect: r };
     }
   }
   return null;
 }
 
+/** NDC for a point, relative to one tile rather than the whole window --
+ *  mirrors tomography/main.ts's own ndcFor(). */
+const ptr = new Vector2();
+function ndcFor(rect: Rect, clientX: number, clientY: number): Vector2 {
+  ptr.x = ((clientX - rect.x) / rect.width) * 2 - 1;
+  ptr.y = -((clientY - rect.y) / rect.height) * 2 + 1;
+  return ptr;
+}
+
 renderer.domElement.addEventListener('pointerdown', (ev) => {
   const hit = hitTest(ev.clientX, ev.clientY);
-  if (hit) focusedInstance = hit;
+  if (hit) focusedInstance = hit.inst;
+  // Shift owns this gesture entirely -- disable orbiting for its duration
+  // so a shift-drag can't ALSO spin the globe underneath the query. No
+  // movement threshold needed to tell a shift-click from a shift-drag: with
+  // orbiting off, nothing competes for the gesture either way (unlike
+  // tomography's tool modes, which need to keep dragging live).
+  if (ev.shiftKey) controls.enabled = false;
+});
+
+renderer.domElement.addEventListener('pointerup', (ev) => {
+  controls.enabled = true; // unconditional: a shift-release mid-drag must not wedge orbiting off
+  if (!ev.shiftKey) return;
+  const hit = hitTest(ev.clientX, ev.clientY);
+  if (!hit) return;
+  // The shared camera's aspect is left matching whichever tile animate()
+  // rendered last -- same reasoning as tomography's own focusCameraOn().
+  updateProjectionCameraAspect(camera, hit.rect.width / hit.rect.height);
+  void hit.inst.queryMonthProfileAt(ndcFor(hit.rect, ev.clientX, ev.clientY), ev.clientX, ev.clientY);
 });
 
 // --- boot -------------------------------------------------------------------

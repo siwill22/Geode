@@ -1,18 +1,20 @@
 import {
-  Scene, Vector3, type Camera, type Data3DTexture, type ShaderMaterial,
-  type Texture, type WebGLRenderer,
+  Raycaster, Scene, Vector3, type Camera, type Data3DTexture, type ShaderMaterial,
+  type Texture, type Vector2, type WebGLRenderer,
 } from 'three';
 
 import { DepthSlice } from '../core/depthSlice';
 import { setMaskMode, setValidMask } from '../core/material';
 import { createMaskTexture } from '../core/mask';
 import { Coastlines, type CoastlineData } from '../core/coastlines';
-import { R_SURFACE } from '../core/constants';
+import { R_SURFACE, vec3ToLonLat } from '../core/constants';
 import type { ProjectionMode } from '../core/projection';
 import type { Rect } from '../core/layout';
 import { WindGlyphs } from '../core/windGlyphs';
 import { WindStreaks } from '../core/windStreaks';
 import { computeTimeSeries, type TimeSeriesPoint } from '../core/timeSeries';
+import { FrameByteCache } from '../core/frameByteCache';
+import { monthProfile, type NoDataRule } from '../core/queryPoint';
 import {
   FrameCache, loadManifest, loadMask2D, makeColormapTexture, nearestFrame, physicalToEncoded,
 } from '../core/volume';
@@ -105,6 +107,11 @@ interface LayerSource {
   variables: VariableInfo[];
   variableId: string;
   frames: FrameCache;
+  /** CPU-only twin of `frames` -- shared between computeTimeSeries and any
+   *  Anchored Point query (core/queryPoint.ts) on this Model, so the two
+   *  don't each fetch the same Frame's bytes independently. See
+   *  ADR-0011. */
+  bytes: FrameByteCache;
   colormapTexture: Texture;
 }
 
@@ -202,6 +209,9 @@ export class ClimateInstance {
    *  boot() once coastlines/wind actually exist, to re-apply whichever
    *  Projection was already active before they did. */
   private projectionMode: ProjectionMode = 'globe';
+  /** Anchored Point (shift-click), see queryMonthProfileAt() -- a plain
+   *  console.log first slice, see docs/plans/anchored-point-query.md. */
+  private readonly queryRaycaster = new Raycaster();
   /** Keyed by `${manifest.id}/${resolutionId}/${variable.id}`, caching the
    *  PROMISE (not just the resolved points) so two expands racing (or one
    *  expand of a layer/model already computed earlier in the session) share
@@ -418,7 +428,8 @@ export class ClimateInstance {
    *  reflects whichever layer/model is active NOW, not whichever was active
    *  the first time the panel was opened. */
   private onExpandTimeSeries(): void {
-    const manifest = this.manifest;
+    const src = this.sources[this.sourceKey(this.view.layer)];
+    const manifest = src.manifest;
     const resolutionId = this.resolutionFor(this.view.layer);
     for (const v of this.pickableTimeSeriesVariables()) {
       const key = `${manifest.id}/${resolutionId}/${v.id}`;
@@ -428,13 +439,77 @@ export class ClimateInstance {
         continue;
       }
       this.ui.setTimeSeriesLoading(v.id);
-      const promise = computeTimeSeries(this.deps.archiveBase, manifest.id, manifest, v, resolutionId);
+      const promise = computeTimeSeries(src.bytes, manifest, v, resolutionId);
       this.timeSeriesCache.set(key, promise);
       void promise.then((points) => this.ui.setTimeSeriesData(v.id, points)).catch((e: unknown) => {
         console.error(e);
         this.timeSeriesCache.delete(key); // let the next expand retry rather than caching a permanent failure
       });
     }
+  }
+
+  /**
+   * Anchored Point, Month Profile shape (see CONTEXT.md, ADR-0011,
+   * docs/plans/anchored-point-query.md) -- shift-click on the globe to log
+   * the CURRENTLY DISPLAYED variable's value at every layer (Months +
+   * Annual, or whichever single layer paleogeography has) of the clicked
+   * cell. Console.log only, deliberately: this is the first slice through
+   * the whole click -> LonLat -> engine-call pipeline, kept separate from
+   * any on-screen display so the two can be debugged independently.
+   *
+   * Restricted to Globe: `field.mesh` is a sphere, and `vec3ToLonLat`
+   * assumes a hit point ON that sphere -- Plate Carrée's flat plane needs
+   * its own UV-to-LonLat mapping, not attempted here.
+   *
+   * Re-fetches the current Frame's texture via `src.frames.get()` rather
+   * than reading the material's own uVolume uniform -- FrameCache already
+   * has it cached (this IS the texture on screen), so this costs no new
+   * network request, and it avoids reaching into the material's internals.
+   *
+   * `clientX`/`clientY` are unrelated to `ndc` (already tile-relative) --
+   * they're the raw event coordinates, passed through only to position
+   * ClimateUI's floating result panel near the click, the same way
+   * showTooltip() positions itself off clientX/clientY rather than NDC.
+   */
+  async queryMonthProfileAt(ndc: Vector2, clientX: number, clientY: number): Promise<void> {
+    if (this.projectionMode !== 'globe') return;
+
+    this.queryRaycaster.setFromCamera(ndc, this.camera);
+    const hit = this.queryRaycaster.intersectObject(this.field.mesh, false)[0];
+    if (!hit) return;
+    const at = vec3ToLonLat(hit.point.x, hit.point.y, hit.point.z);
+
+    const src = this.sources[this.sourceKey(this.view.layer)];
+    const variable = this.variable;
+    const resolutionId = this.resolutionFor(this.view.layer);
+    const frame = nearestFrame(src.manifest, this.view.age);
+    const res = src.manifest.resolutions.find((r) => r.id === resolutionId)!;
+
+    const maskVar = src.manifest.mask_variable;
+    const [tex, maskBytes] = await Promise.all([
+      src.frames.get(src.manifest, variable.id, frame.id, resolutionId),
+      maskVar ? src.bytes.get(src.manifest, maskVar, frame.id, resolutionId) : Promise.resolve(undefined),
+    ]);
+    const rule: NoDataRule = { maskBytes, sentinel: src.manifest.no_data_sentinel };
+    const profile = monthProfile(tex, res, variable, at, rule);
+
+    const labels = profile.length === 13
+      ? [...Array(12).keys()].map((i) => `month ${i}`).concat('annual')
+      : profile.map((_, i) => `layer ${i}`);
+    console.log(
+      `Anchored Point -- ${variable.name} at (${at.lon.toFixed(2)}, ${at.lat.toFixed(2)}) `
+      + `[cell ${profile[0].cell.lon.toFixed(2)}, ${profile[0].cell.lat.toFixed(2)}], `
+      + `${frame.age_ma} Ma:`,
+      Object.fromEntries(labels.map((l, i) => [l, profile[i].value])),
+    );
+    // Highlight whichever layer the month slider currently shows -- only
+    // meaningful when this profile actually HAS a month axis (res.ndepth
+    // === 13, see Month (climate) in CONTEXT.md); paleogeography's
+    // single-layer profile has nothing for view.month to index into.
+    const currentIndex = res.ndepth === 13 ? this.view.month : undefined;
+    this.ui.showQueryPanel(
+      clientX, clientY, variable, at, profile[0].cell, frame.age_ma, profile, currentIndex,
+    );
   }
 
   /** Switch this globe's Projection -- always called from main.ts for every
@@ -475,6 +550,7 @@ export class ClimateInstance {
       variables: manifest.variables,
       variableId: variable.id,
       frames: new FrameCache(this.deps.archiveBase),
+      bytes: new FrameByteCache(this.deps.archiveBase),
       colormapTexture: makeColormapTexture(cm.colors),
     };
   }

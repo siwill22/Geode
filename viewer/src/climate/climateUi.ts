@@ -1,7 +1,10 @@
 import GUI, { type Controller } from 'lil-gui';
 import { TIME_SERIES_VARIABLE_IDS, type ClimateLayer, type WindStyle } from './climateInstance';
 import { clampClipOrder, clipSliderStep } from '../core/clipRange';
+import { classNameFor } from '../core/volume';
 import type { Rect } from '../core/layout';
+import type { LonLat } from '../core/constants';
+import type { CellSample } from '../core/queryPoint';
 import type { TimeSeriesPoint } from '../core/timeSeries';
 import type { ColormapData, ResolutionInfo, VariableInfo } from '../core/types';
 
@@ -142,6 +145,24 @@ export class ClimateUI {
    *  and re-filled on each hover rather than built per-row, see
    *  showTooltip(). */
   private tooltip: HTMLDivElement;
+  /** Whether the legend currently shows a categorical class key rather than
+   *  a continuous ramp -- see setVariable()'s height-handling and
+   *  applyRect()'s own matching branch, both of which need to know this to
+   *  keep a tall class key from inflating .ageSliderWrap (the time
+   *  slider). */
+  private legendCategorical = false;
+  /** .legend's own inline `style.height` STRING (e.g. "40px"), captured
+   *  verbatim the moment BEFORE it first grows for a categorical class key
+   *  -- restored exactly (not remeasured, and not reconstructed from a
+   *  getBoundingClientRect() reading, which is border-box and would double
+   *  -count .legend's padding if reapplied as a content-box `height`) when
+   *  leaving categorical. See setVariable()'s own doc comment. */
+  private legendRestoreHeight = '';
+  /** Anchored Point's Month Profile readout -- a sibling of `tooltip`, not
+   *  a reuse of it: that one is hover-driven, pointer-events:none, and tied
+   *  to the Time Series chart; this one is click-driven, has its own close
+   *  button, and stays open until dismissed. See showQueryPanel(). */
+  private queryPanel: HTMLDivElement;
   /** The Frame age range to plot the X axis over -- the manifest's own full
    *  range (see setAgeRange()), NOT the span of whichever points happen to
    *  be computed so far, so the marker line and axis stay stable as rows
@@ -362,6 +383,10 @@ export class ClimateUI {
     this.tooltip = document.createElement('div');
     this.tooltip.className = 'timeseries-tooltip';
     document.body.appendChild(this.tooltip);
+
+    this.queryPanel = document.createElement('div');
+    this.queryPanel.className = 'query-point-panel';
+    document.body.appendChild(this.queryPanel);
 
     this.applyRect();
   }
@@ -598,6 +623,166 @@ export class ClimateUI {
     this.tooltip.style.display = 'none';
   }
 
+  /**
+   * Anchored Point's Month Profile result, shift-clicked at (`at`, snapped
+   * to `cell`) on `ageMa`'s Frame -- see
+   * ClimateInstance.queryMonthProfileAt(). `profile` is 13 layers (Months +
+   * Annual) for a climate Variable, or 1 for paleogeography's single-layer
+   * case -- labelled by MONTH_NAMES + 'Annual' only when the length matches;
+   * a shorter profile falls back to a plain index so this never mislabels a
+   * Layer this wasn't written for.
+   *
+   * Positioned/clamped exactly like showTooltip(), but left open rather than
+   * hidden on pointer-leave (see hideQueryPanel(), wired to its own close
+   * button) -- a click result is something to read at leisure, not a hover
+   * hint that should vanish the moment the cursor moves.
+   */
+  showQueryPanel(
+    clientX: number, clientY: number, variable: VariableInfo, at: LonLat, cell: LonLat,
+    ageMa: number, profile: CellSample[], currentIndex?: number,
+  ): void {
+    this.queryPanel.replaceChildren();
+    const close = document.createElement('span');
+    close.className = 'qp-close';
+    close.textContent = '✕';
+    close.addEventListener('click', () => this.hideQueryPanel());
+    this.queryPanel.appendChild(close);
+
+    const title = document.createElement('div');
+    title.className = 'qp-title';
+    title.textContent = variable.categorical ? variable.name : `${variable.name} (${variable.units})`;
+    this.queryPanel.appendChild(title);
+
+    const subtitle = document.createElement('div');
+    subtitle.textContent = `${at.lon.toFixed(2)}, ${at.lat.toFixed(2)} `
+      + `[cell ${cell.lon.toFixed(2)}, ${cell.lat.toFixed(2)}] · ${ageMa.toFixed(0)} Ma`;
+    this.queryPanel.appendChild(subtitle);
+
+    if (variable.categorical) {
+      // A categorical Variable like Koppen is computed once from the whole
+      // year and broadcast identically across every layer (see
+      // prep_climate.py) -- a per-month PLOT of a flat line would be
+      // pointless, and "23.0" is meaningless without a class-name lookup
+      // (see classNameFor()'s own doc comment on why floor(), not round()).
+      // One word is the whole answer here, not a chart.
+      const idx = currentIndex ?? profile.length - 1;
+      const word = document.createElement('div');
+      word.className = 'qp-class';
+      word.textContent = Number.isNaN(profile[idx].value) ? '—' : classNameFor(variable, profile[idx].value);
+      this.queryPanel.appendChild(word);
+    } else {
+      const canvas = document.createElement('canvas');
+      canvas.className = 'qp-canvas';
+      canvas.width = 190;
+      canvas.height = 72;
+      this.queryPanel.appendChild(canvas);
+
+      const caption = document.createElement('div');
+      caption.className = 'qp-caption';
+      this.queryPanel.appendChild(caption);
+
+      this.drawQueryProfile(canvas, profile, currentIndex);
+      const fmt = (v: number) => (Number.isNaN(v) ? '—' : this.formatTick(v));
+      if (currentIndex !== undefined) {
+        caption.textContent = `${MONTH_NAMES[currentIndex]}: ${fmt(profile[currentIndex].value)}`;
+      } else {
+        const last = profile[profile.length - 1];
+        caption.textContent = profile.length === 13 ? `Annual: ${fmt(last.value)}` : fmt(last.value);
+      }
+    }
+
+    this.queryPanel.style.display = 'block';
+    const { width: pw, height: ph } = this.queryPanel.getBoundingClientRect();
+    this.queryPanel.style.left = `${Math.min(clientX + 14, innerWidth - pw - 8)}px`;
+    this.queryPanel.style.top = `${Math.min(clientY + 14, innerHeight - ph - 8)}px`;
+  }
+
+  hideQueryPanel(): void {
+    this.queryPanel.style.display = 'none';
+  }
+
+  /**
+   * A Month Profile's 12 Months + Annual (or paleogeography's single layer)
+   * as a small line-and-dots plot, same visual language as
+   * drawTimeSeriesRow() -- same stroke colour, same "a NaN cell breaks the
+   * line rather than bridging across it" rule -- but no percentile bands
+   * (a single cell has no distribution to band) and an orange marker on
+   * whichever index is `currentIndex` (the month the slider currently
+   * shows) instead of drawTimeSeriesRow()'s current-AGE marker -- the same
+   * "always show the reader where 'now' sits on this axis" idea, one axis
+   * over. Annual (index 12, when present) is set off from the 12-month
+   * cycle by a faint vertical divider -- it is not the next point in the
+   * seasonal sequence, and drawing it as a plain continuation would imply
+   * an ordering ("after December") that isn't real.
+   */
+  private drawQueryProfile(canvas: HTMLCanvasElement, profile: CellSample[], currentIndex?: number): void {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    const values = profile.map((p) => p.value).filter((v) => !Number.isNaN(v));
+    if (values.length === 0) return;
+    let vMin = Math.min(...values);
+    let vMax = Math.max(...values);
+    if (vMin === vMax) { vMin -= 1; vMax += 1; }
+
+    const padX = 4;
+    const padY = 4;
+    const n = profile.length;
+    const toX = (i: number) => (n === 1 ? w / 2 : padX + (i / (n - 1)) * (w - 2 * padX));
+    const toY = (v: number) => h - padY - ((v - vMin) / (vMax - vMin)) * (h - 2 * padY);
+
+    if (profile.length === 13) {
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+      ctx.lineWidth = 1;
+      const dividerX = (toX(11) + toX(12)) / 2;
+      ctx.beginPath();
+      ctx.moveTo(dividerX, 0);
+      ctx.lineTo(dividerX, h);
+      ctx.stroke();
+    }
+
+    // Contiguous non-NaN runs, same reasoning as drawTimeSeriesRow(): a
+    // masked/sentinel cell breaks the line rather than bridging over it.
+    const runs: number[][] = [];
+    let current: number[] = [];
+    for (let i = 0; i < n; i++) {
+      if (Number.isNaN(profile[i].value)) { if (current.length) runs.push(current); current = []; continue; }
+      current.push(i);
+    }
+    if (current.length) runs.push(current);
+
+    ctx.strokeStyle = '#7fd0ff';
+    ctx.fillStyle = '#7fd0ff';
+    ctx.lineWidth = 1.25;
+    for (const run of runs) {
+      ctx.beginPath();
+      run.forEach((i, k) => {
+        const x = toX(i);
+        const y = toY(profile[i].value);
+        if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      for (const i of run) {
+        ctx.beginPath();
+        ctx.arc(toX(i), toY(profile[i].value), 1.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    if (currentIndex !== undefined && !Number.isNaN(profile[currentIndex].value)) {
+      const markerX = toX(currentIndex);
+      ctx.strokeStyle = '#ffb454';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(markerX, 0);
+      ctx.lineTo(markerX, h);
+      ctx.stroke();
+    }
+  }
+
   setTimeSeriesLoading(variableId: string): void {
     const entry = this.timeSeriesRows.get(variableId);
     if (!entry) return;
@@ -751,8 +936,33 @@ export class ClimateUI {
     this.variableLabel = v.categorical ? v.name : `${v.name} (${v.units})`;
     this.updateLegendLabel();
     this.paintLegend(colormap);
-    if (v.categorical && v.class_names) this.showLegendKey(v.class_names, colormap.colors);
-    else this.hideLegendKey();
+
+    // .legend's height is normally locked by applyRect() -- once, matched
+    // to .ageSliderWrap's own height -- and untouched by an ordinary
+    // variable switch, which is what keeps a continuous Variable's box at
+    // its usual size. A categorical Variable's class key (up to 14 rows) is
+    // far taller than that lock, so entering/leaving one is handled here
+    // as its own narrow case, NOT by a general re-measure: growing .legend
+    // to fit the key on entry, and restoring the EXACT pre-Koppen height on
+    // exit (not a fresh remeasure, which would land on a slightly taller
+    // number now that the ticks row is populated -- see this method's own
+    // updateLegendTicks() call above -- than the very first, pre-data
+    // measurement applyRect() happened to lock in at boot). ageSliderWrap
+    // (the time slider) is never touched by either direction: a 14-class
+    // key must not inflate it the way applyRect()'s normal "match to each
+    // other" rule would if it ran again here.
+    if (v.categorical && v.class_names) {
+      if (!this.legendCategorical) this.legendRestoreHeight = this.legend.style.height;
+      this.legendCategorical = true;
+      this.showLegendKey(v.class_names, colormap.colors);
+      this.legend.style.height = '';
+      this.legend.style.height = `${this.legend.getBoundingClientRect().height}px`;
+    } else {
+      const wasCategorical = this.legendCategorical;
+      this.legendCategorical = false;
+      this.hideLegendKey();
+      if (wasCategorical) this.legend.style.height = this.legendRestoreHeight;
+    }
   }
 
   /** Show the active month's name on both the slider itself and next to the
@@ -934,14 +1144,27 @@ export class ClimateUI {
     // any height forced by a PREVIOUS call before re-measuring, or repeated
     // calls (window resize, adding/removing a globe) would ratchet the
     // matched height upward forever.
+    //
+    // EXCEPT while a categorical class key is showing: matching would
+    // inflate .ageSliderWrap (the time slider) to the key's own much taller
+    // height, which is exactly the bug setVariable()'s own categorical
+    // handling exists to avoid on a plain variable switch -- this branch is
+    // what keeps that fix intact across a resize/add-globe/remove-globe
+    // too, not just the switch itself. .legend still gets its own natural
+    // height (so it keeps fitting the key across a resize), just not
+    // matched to the slider.
     this.legend.style.height = '';
     this.ageSliderWrap.style.height = '';
-    const matchedHeight = Math.max(
-      this.legend.getBoundingClientRect().height,
-      this.ageSliderWrap.getBoundingClientRect().height,
-    );
-    this.legend.style.height = `${matchedHeight}px`;
-    this.ageSliderWrap.style.height = `${matchedHeight}px`;
+    const legendNatural = this.legend.getBoundingClientRect().height;
+    const ageNatural = this.ageSliderWrap.getBoundingClientRect().height;
+    if (this.legendCategorical) {
+      this.legend.style.height = `${legendNatural}px`;
+      this.ageSliderWrap.style.height = `${ageNatural}px`;
+    } else {
+      const matchedHeight = Math.max(legendNatural, ageNatural);
+      this.legend.style.height = `${matchedHeight}px`;
+      this.ageSliderWrap.style.height = `${matchedHeight}px`;
+    }
 
     const bottomBarHeight = this.bottomBar.getBoundingClientRect().height;
     this.timeSeriesAnchor.style.top = `${y + 8}px`;
@@ -974,5 +1197,6 @@ export class ClimateUI {
     this.bottomBar.remove(); // takes legend/ageGroup(+ageSliderWrap)/credit with it
     this.timeSeriesAnchor.remove(); // takes timeSeriesToggle/timeSeriesBody with it
     this.tooltip.remove();
+    this.queryPanel.remove();
   }
 }

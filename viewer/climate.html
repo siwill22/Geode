@@ -246,6 +246,31 @@
         color: #cfd6dd; font-size: 11px; line-height: 1.5;
         pointer-events: none; white-space: nowrap;
       }
+      /* Anchored Point's Month Profile readout -- see
+         ClimateUI.showQueryPanel(). Same position:fixed/floating-panel
+         convention as .timeseries-tooltip, but pointer-events:auto (it has
+         a close button) and z-index one above it so the two can never fight
+         if both happen to be open at once. */
+      .query-point-panel {
+        position: fixed; display: none; z-index: 31;
+        padding: 6px 10px 8px; border-radius: 4px; max-width: 220px;
+        background: rgba(10, 12, 15, 0.95); border: 1px solid #3a4048;
+        color: #cfd6dd; font-size: 11px; line-height: 1.5;
+        pointer-events: auto;
+      }
+      .query-point-panel .qp-title {
+        font-weight: 600; padding-right: 14px;
+      }
+      .query-point-panel .qp-close {
+        position: absolute; top: 4px; right: 7px; cursor: pointer;
+        color: #8a929b; font-size: 12px; line-height: 1;
+      }
+      .query-point-panel .qp-close:hover { color: #cfd6dd; }
+      .query-point-panel .qp-canvas { display: block; margin-top: 4px; }
+      .query-point-panel .qp-caption { margin-top: 2px; color: #9aa2ab; }
+      .query-point-panel .qp-class {
+        margin-top: 4px; font-size: 13px; font-weight: 600; color: #e7ebef;
+      }
       #toolbar {
         position: fixed; left: 50%; top: 8px; transform: translateX(-50%);
         display: flex; align-items: center; gap: 8px;
