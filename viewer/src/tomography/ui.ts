@@ -1,6 +1,7 @@
 import GUI from 'lil-gui';
 import { MAX_STEPS, type IsosurfaceState } from './isosurface';
 import { SINKING_RATE_PRESETS, CUSTOM_PRESET_ID, type DepthSliceState } from '../core/depthSlice';
+import { clipSliderStep } from '../core/clipRange';
 import type { Rect } from '../core/layout';
 import type { ArchiveIndex, Manifest, VariableInfo } from '../core/types';
 
@@ -317,8 +318,12 @@ export class UI {
   setVariable(v: VariableInfo): void {
     this.state.clipMin = v.default_clip_min;
     this.state.clipMax = v.default_clip_max;
-    this.clipMinCtrl.min(v.encode_min).max(0).setValue(v.default_clip_min);
-    this.clipMaxCtrl.min(0).max(v.encode_max).setValue(v.default_clip_max);
+    // Step must be re-derived per variable, same reasoning as min/max
+    // below -- see clipSliderStep()'s doc comment. Each half gets its own
+    // step, sized to ITS OWN span (min's [encode_min, 0], max's
+    // [0, encode_max]), since the two are rarely symmetric.
+    this.clipMinCtrl.min(v.encode_min).max(0).step(clipSliderStep(v.encode_min, 0)).setValue(v.default_clip_min);
+    this.clipMaxCtrl.min(0).max(v.encode_max).step(clipSliderStep(0, v.encode_max)).setValue(v.default_clip_max);
     this.clipMinCtrl.name(`clip min (${v.units})`);
     this.clipMaxCtrl.name(`clip max (${v.units})`);
 

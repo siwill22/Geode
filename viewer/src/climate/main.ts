@@ -267,25 +267,27 @@ document.getElementById('add-globe')?.addEventListener('click', () => {
 
 const projectionToggle = document.getElementById('projection-toggle');
 
-// Small inline sketches (graticule + a few landmass blobs), not plain
-// geometric glyphs (a bare circle/rectangle character read as unrelated to
-// "map projection" -- see the icon swap below still encoding the click
-// TARGET, just with each shape now actually looking like a world map).
+// Small inline sketches (graticule only -- no landmass shapes, since a
+// stylised continent reads as a claim about geography this icon isn't
+// making), not plain geometric glyphs either (a bare circle/rectangle
+// character reads as unrelated to "map projection"). The icon swap below
+// still encodes the click TARGET, just with each shape looking like a
+// gridded globe/map rather than a random glyph.
 const PROJECTION_ICON_GLOBE = `
 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
   <circle cx="12" cy="12" r="9"/>
   <ellipse cx="12" cy="12" rx="4" ry="9"/>
   <path d="M3 12h18"/>
-  <path d="M6.3 7.7c1.7 1.4 3.6 1.3 5.1-.6.6-.8-.3-1.6-1.5-1.3-1.6.4-2.9 1-3.6 1.9z" fill="currentColor" stroke="none" opacity="0.85"/>
-  <path d="M13.2 15c2-.5 4 .2 5.2 1.9.6.9-.5 1.5-1.8 1-1.7-.6-3-1.7-3.4-2.9z" fill="currentColor" stroke="none" opacity="0.85"/>
+  <path d="M4.5 7.5c4 2 10.5 2 14.5 0"/>
+  <path d="M4.5 16.5c4-2 10.5-2 14.5 0"/>
 </svg>`.trim();
 const PROJECTION_ICON_FLAT = `
 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
   <rect x="3" y="6" width="18" height="12" rx="1.5"/>
-  <path d="M3 12h18"/>
-  <path d="M5.4 8.5c2.6-1.8 5-1 6.3 1.1.9 1.6-.5 2.8-2.2 2.1-2-.8-3.3-1.8-4.1-3.2z" fill="currentColor" stroke="none" opacity="0.85"/>
-  <path d="M13.6 9.3c2-.9 4-.2 5.1 1.5.7 1.1-.4 2-1.8 1.7-1.7-.4-3.1-1.7-3.3-3.2z" fill="currentColor" stroke="none" opacity="0.85"/>
-  <path d="M8.8 15c1.8-.6 3.9-.2 5.3 1 .9.8-.1 1.7-1.5 1.5-1.7-.2-3.3-1.1-3.8-2.5z" fill="currentColor" stroke="none" opacity="0.85"/>
+  <path d="M3 10h18"/>
+  <path d="M3 14h18"/>
+  <path d="M9 6v12"/>
+  <path d="M15 6v12"/>
 </svg>`.trim();
 
 function updateProjectionToggle(): void {

@@ -1,5 +1,6 @@
 import GUI, { type Controller } from 'lil-gui';
 import { TIME_SERIES_VARIABLE_IDS, type ClimateLayer, type WindStyle } from './climateInstance';
+import { clampClipOrder, clipSliderStep } from '../core/clipRange';
 import type { Rect } from '../core/layout';
 import type { TimeSeriesPoint } from '../core/timeSeries';
 import type { ColormapData, ResolutionInfo, VariableInfo } from '../core/types';
@@ -258,12 +259,14 @@ export class ClimateUI {
     this.clipMinCtrl = this.gui.add(this.state, 'clipMin', -60, 50, 0.1)
       .name('clip min')
       .onChange(() => {
+        if (clampClipOrder(this.state, 'min')) this.clipMaxCtrl.updateDisplay();
         cb.onClip(this.state.clipMin, this.state.clipMax);
         this.updateLegendTicks(this.state.clipMin, this.state.clipMax);
       });
     this.clipMaxCtrl = this.gui.add(this.state, 'clipMax', -60, 50, 0.1)
       .name('clip max')
       .onChange(() => {
+        if (clampClipOrder(this.state, 'max')) this.clipMinCtrl.updateDisplay();
         cb.onClip(this.state.clipMin, this.state.clipMax);
         this.updateLegendTicks(this.state.clipMin, this.state.clipMax);
       });
@@ -733,8 +736,12 @@ export class ClimateUI {
       // same number, makes the two look equal and silently skips both
       // updateDisplay() and onChange. Let setValue() itself own the
       // assignment.
-      this.clipMinCtrl.min(v.encode_min).max(v.encode_max).setValue(v.default_clip_min);
-      this.clipMaxCtrl.min(v.encode_min).max(v.encode_max).setValue(v.default_clip_max);
+      // Step must be re-derived per variable, same reasoning as min/max --
+      // see clipSliderStep()'s doc comment for the bug a step stuck at
+      // whichever variable set it last causes.
+      const step = clipSliderStep(v.encode_min, v.encode_max);
+      this.clipMinCtrl.min(v.encode_min).max(v.encode_max).step(step).setValue(v.default_clip_min);
+      this.clipMaxCtrl.min(v.encode_min).max(v.encode_max).step(step).setValue(v.default_clip_max);
       this.clipMinCtrl.name(`clip min (${v.units})`);
       this.clipMaxCtrl.name(`clip max (${v.units})`);
       this.clipMinCtrl.show();
