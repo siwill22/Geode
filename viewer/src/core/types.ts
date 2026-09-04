@@ -90,6 +90,12 @@ export interface Manifest {
   depth_min_km: number;
   depth_max_km: number;
   dtype: string;
+  /** The byte (0-255) reserved for "no value at this texel", for a model
+   *  where absence is common rather than a thin edge case. Absent for a
+   *  model with no such sentinel -- see core/timeSeries.ts's
+   *  computeTimeSeries, which skips this byte when tallying its per-Frame
+   *  histogram. */
+  no_data_sentinel?: number;
   default_resolution: string;
   resolutions: ResolutionInfo[];
   frames: FrameInfo[];
