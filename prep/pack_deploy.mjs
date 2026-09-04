@@ -1,7 +1,7 @@
 /**
  * Build the deployable archive from the generated one.
  *
- *   node prep/pack_deploy.mjs [--keep-fixtures] [--out DIR]
+ *   node prep/pack_deploy.mjs [--keep-fixtures] [--exclude=id,id,...] [--out DIR]
  *
  * archive/ is what the prep scripts produce and what dev serves: every model,
  * volumes as raw uint8. archive-deploy/ is what ships. Two differences, both
@@ -14,6 +14,12 @@
  *     A CDN will not compress application/octet-stream, so doing it ahead of
  *     time is the difference between 12.5 MB and 6.2 MB per frame. The viewer
  *     decompresses in the browser; see fetchVolumeBytes in viewer/src/core/volume.ts.
+ *
+ * --exclude drops specific model ids on top of the fixture check -- for a
+ * model that exists locally (in-progress work, or anything else not meant to
+ * ship yet) without needing this script to know why. Deliberately just an id
+ * list, not a name/pattern baked in here: what's excluded on any given run is
+ * an operational choice made at the call site, not a fact about the archive.
  *
  * Everything else is copied verbatim. The JSON (rotations, velocities,
  * boundary frames) is left alone deliberately -- a CDN does compress
@@ -34,8 +40,11 @@ const argv = process.argv.slice(2);
 const keepFixtures = argv.includes('--keep-fixtures');
 const outIdx = argv.indexOf('--out');
 const OUT = join(ROOT, outIdx >= 0 ? argv[outIdx + 1] : 'archive-deploy');
+const excludeArg = argv.find((a) => a.startsWith('--exclude='));
+const excludeIds = new Set(excludeArg ? excludeArg.slice('--exclude='.length).split(',').filter(Boolean) : []);
 
 const isFixture = (id) => id.startsWith('fixture-');
+const isExcluded = (id) => excludeIds.has(id);
 
 // --- reset ------------------------------------------------------------------
 
@@ -45,14 +54,21 @@ mkdirSync(OUT, { recursive: true });
 // --- index ------------------------------------------------------------------
 
 const index = JSON.parse(readFileSync(join(SRC, 'archive.json'), 'utf8'));
-const dropped = keepFixtures ? [] : index.models.filter((m) => isFixture(m.id));
-index.models = index.models.filter((m) => keepFixtures || !isFixture(m.id));
+const dropped = index.models.filter((m) => (!keepFixtures && isFixture(m.id)) || isExcluded(m.id));
+index.models = index.models.filter((m) => (keepFixtures || !isFixture(m.id)) && !isExcluded(m.id));
 writeFileSync(join(OUT, 'archive.json'), JSON.stringify(index, null, 2));
 
 // --- everything that is not a model, verbatim -------------------------------
+//
+// --exclude also applies here, not just to index.models: a top-level entry
+// (e.g. a per-run coastline directory) can exist on disk and be excluded by
+// name without ever being listed as a model in archive.json, and this loop
+// copies by directory listing, not by following archive.json's references --
+// so an id excluded only from index.models above would still ship verbatim
+// through here.
 
 for (const name of readdirSync(SRC)) {
-  if (name === 'models' || name === 'archive.json') continue;
+  if (name === 'models' || name === 'archive.json' || isExcluded(name)) continue;
   cpSync(join(SRC, name), join(OUT, name), { recursive: true, dereference: true });
 }
 
