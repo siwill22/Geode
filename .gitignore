@@ -18,6 +18,7 @@
 node_modules/
 dist/
 shots/
+shots-*/
 
 __pycache__/
 *.pyc

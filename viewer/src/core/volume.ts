@@ -5,6 +5,7 @@ import {
 import type {
   ArchiveIndex, ColormapData, FrameInfo, Manifest, VariableInfo,
 } from './types';
+import type { LonLat } from './constants';
 
 export async function loadArchive(base: string): Promise<ArchiveIndex> {
   const r = await fetch(`${base}/archive.json`);
@@ -117,8 +118,16 @@ export async function loadVolume(
     throw new Error(`${path}: got ${buf.length} bytes, expected ${expected}`);
   }
 
+  // Categorical values are class indices (see above); a model that reserves
+  // a NO-DATA sentinel byte (manifest.no_data_sentinel, see ADR-0005) has
+  // the same problem in the other direction -- linear-blending a real value
+  // against the sentinel fabricates a plausible-looking intermediate colour
+  // at every boundary, which core/material.ts's sentinel check would then
+  // fail to catch (a blend is almost never exactly the sentinel value).
+  // Nearest sampling keeps every texel one of its original bytes.
   const categorical = manifest.variables.find((v) => v.id === variableId)?.categorical ?? false;
-  const filter = categorical ? NearestFilter : LinearFilter;
+  const sparse = manifest.no_data_sentinel !== undefined;
+  const filter = (categorical || sparse) ? NearestFilter : LinearFilter;
 
   const tex = new Data3DTexture(buf, res.nlon, res.nlat, res.ndepth);
   tex.format = RedFormat;
@@ -314,4 +323,16 @@ export function texelIndex(nlon: number, nlat: number, lon: number, lat: number)
   const pLat = (lat + 90) / 180;
   const jLat = Math.min(nlat - 1, Math.max(0, Math.round(pLat * (nlat - 1))));
   return jLat * nlon + iLon;
+}
+
+/** (iLon, jLat) -> that cell's own centre. The exact inverse of texelIndex's
+ *  mapping (longitude is a cell index -> its midpoint; latitude is already a
+ *  gridline node -> itself), for a query result to report "this is the cell
+ *  that actually answered" rather than only echo the coordinate a caller
+ *  asked for -- see core/queryPoint.ts and ADR-0011. */
+export function cellCenter(nlon: number, nlat: number, iLon: number, jLat: number): LonLat {
+  return {
+    lon: ((iLon + 0.5) / nlon) * 360 - 180,
+    lat: (jLat / (nlat - 1)) * 180 - 90,
+  };
 }

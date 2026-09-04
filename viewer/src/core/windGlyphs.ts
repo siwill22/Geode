@@ -191,16 +191,35 @@ export class WindGlyphs {
    *  a slice of the volume's raw backing buffer (see loadVolume's own doc
    *  comment on that memory order), not a whole Data3DTexture. Decoded
    *  through uVar/vVar's own encode range: the raw byte alone means nothing
-   *  without it (see texelToPhysical). */
+   *  without it (see texelToPhysical).
+   *
+   *  `sentinel`: the model's NO-DATA byte (manifest.no_data_sentinel, see
+   *  ADR-0005), undefined for a field with full coverage (wind, which has
+   *  none). Ocean Surface Current and Sea-Ice Drift are only defined over
+   *  ocean -- without this, a land texel's sentinel byte would decode
+   *  through texelToPhysical() same as any other value and draw a bogus
+   *  arrow at that cell's clip-range extreme. Scaled to zero rather than
+   *  skipped outright, so mesh.count/lattice indexing stays untouched.
+   *
+   *  `speedScale`: VectorFieldInfo.display_speed_scale, applied to the
+   *  decoded (u, v) before length/direction math -- see that field's own
+   *  doc comment for why. 1 (its default) is a no-op. */
   update(
     uData: Uint8Array, vData: Uint8Array, nlon: number, nlat: number,
-    uVar: VariableInfo, vVar: VariableInfo,
+    uVar: VariableInfo, vVar: VariableInfo, sentinel?: number, speedScale = 1,
   ): void {
     for (let i = 0; i < this.lattice.length; i++) {
       const { lon, lat } = this.lattice[i];
       const texel = texelIndex(nlon, nlat, lon, lat);
-      const u = texelToPhysical(uVar, uData[texel]);
-      const v = texelToPhysical(vVar, vData[texel]);
+      if (sentinel !== undefined && (uData[texel] === sentinel || vData[texel] === sentinel)) {
+        this.tmp.position.set(0, 0, 0);
+        this.tmp.scale.set(0, 0, 0);
+        this.tmp.updateMatrix();
+        this.mesh.setMatrixAt(i, this.tmp.matrix);
+        continue;
+      }
+      const u = texelToPhysical(uVar, uData[texel]) * speedScale;
+      const v = texelToPhysical(vVar, vData[texel]) * speedScale;
       const speed = Math.hypot(u, v);
 
       // u/v are already components in a local east/north tangent frame --

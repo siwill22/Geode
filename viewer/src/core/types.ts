@@ -63,6 +63,20 @@ export interface VectorFieldInfo {
   u_variable: string;
   v_variable: string;
   units: string;
+  /**
+   * Multiplier applied to (u, v) purely for on-screen motion -- arrow
+   * length/thickness and streak advection distance -- before the shared
+   * SPEED_CLIP_MS-style clip in windGlyphs.ts/windStreaks.ts. Absent means
+   * 1 (wind: 10-20 m/s typical, already reads well at that clip). Ocean
+   * currents are real but mostly < 0.5 m/s away from a few boundary-current
+   * extremes -- at scale 1 they'd sit near MIN_ARROW_LEN and barely creep
+   * along as a streak, both correct but visually unreadable. This is a
+   * deliberate, disclosed distortion of relative speed (see
+   * STREAK_SPEED_SCALE's own doc comment for the precedent: wind's time
+   * compression is exactly the same idea, just already baked into one
+   * constant because wind was the only field that existed then).
+   */
+  display_speed_scale?: number;
 }
 
 export interface ResolutionInfo {
@@ -80,7 +94,18 @@ export interface FrameInfo {
 export interface Manifest {
   id: string;
   name: string;
-  type: 'tomography' | 'convection' | 'climate' | 'paleogeography';
+  /**
+   * 'climate-monthly'/'climate-ocean-depth' are Valdes/BRIDGE's own two
+   * Layers, deliberately distinct from 'climate' so archive.json's shared
+   * model list naturally sorts them away from climate.html's Li/Pohl picker
+   * (which filters on `type === 'climate'` alone) without climate.html
+   * needing to know Valdes/BRIDGE exists -- see
+   * docs/adr/0008-valdes-bridge-gets-its-own-instance.md. valdes.html reads
+   * these two types instead, the same "pick your own models out of the
+   * shared archive, unknown to every other viewer" pattern.
+   */
+  type: 'tomography' | 'convection' | 'climate' | 'paleogeography'
+    | 'climate-monthly' | 'climate-ocean-depth';
   source: string;
   lon_min: number;
   lon_max: number;
@@ -89,6 +114,22 @@ export interface Manifest {
   /** The MODEL's valid depth range, not the mantle's. Never use R_CMB for this. */
   depth_min_km: number;
   depth_max_km: number;
+  /**
+   * Per-index real-depth labels (km), present only when depth_min_km/
+   * depth_max_km are an INDEX range in disguise rather than literal depth
+   * -- Valdes/BRIDGE's Ocean Depth Layer, whose 20 native levels are wildly
+   * non-uniformly spaced (5m near-surface spacing widening to ~600m near
+   * the bottom). volumeUVW's depth mapping is linear across
+   * depth_min_km..depth_max_km, which would sample the wrong layer entirely
+   * for a non-uniform grid -- so this Layer instead reuses Month's existing
+   * trick (see CONTEXT.md's Month/Ocean Depth entries): depth_min_km=0,
+   * depth_max_km=ndepth-1, a plain layer INDEX, with this array supplying
+   * the real km value to LABEL whichever index is selected. Length always
+   * equals the active resolution's `ndepth`. Absent for every model whose
+   * depth axis already IS literal depth (uniform by construction) or a
+   * calendar index with no physical distance to report (Month).
+   */
+  depth_labels_km?: number[];
   dtype: string;
   /** The byte (0-255) reserved for "no value at this texel", for a model
    *  where absence is common rather than a thin edge case. Absent for a

@@ -21,6 +21,28 @@ Model has a single Frame at 0 Ma. The distinction between a Model and its
 Frames exists so that a Tomography Model and a Convection Model are the same
 kind of thing to everything downstream of ingest.
 
+## Layer
+
+Which Model is currently loaded onto the globe, switched from a dropdown —
+Climate vs Paleogeography today, Monthly vs Ocean Depth in the Valdes/BRIDGE
+instance. Not every Layer supports every control: a Layer with no month
+axis hides the month slider, a Layer with no time axis at all pins its data
+to a single Frame while the Reconstruction Age slider keeps driving
+coastlines underneath it regardless (see Reconstruction Age). Distinct from
+Variable: switching Layer changes the Model itself — its grid, its Frame
+series, its no-data pattern; switching Variable stays inside one Model.
+
+Two Layers can be forced apart by grid alone even within one data source:
+Valdes/BRIDGE's Monthly fields (Month axis, every Frame) and Ocean Depth
+fields (Ocean Depth axis, annual only) don't share a grid or depth range,
+so per the Variable rule below they cannot be Variables of one Model — they
+are sibling Layers instead. Monthly is named for its axis, not a physical
+domain, precisely because it holds both atmosphere fields (air temperature,
+MSLP, wind) and ocean-surface fields (SST, SSS, ocean surface current,
+sea-ice drift, streamfunction, mixed-layer depth) that happen to share its
+grid and Month axis — a domain-based name ("Atmosphere") stopped being
+accurate once BRIDGE's ocean-surface output was folded in alongside it.
+
 ## Reconstruction Age
 
 **Continuous**, in Ma, present = 0 and deeper time increasing. The age the
@@ -145,6 +167,24 @@ The rasterised footprint of the Cutaway polygon, used to hide the parts of the
 surface and coastlines that fall inside it. An implementation of the Cutaway's
 effect on the surface, not a separate concept from it.
 
+## No-Data Style
+
+How a cell with no value (NaN) is drawn — transparent, light grey, or white,
+switchable at runtime, not fixed per Variable or baked into a manifest.
+Distinct from Mask: a cell hidden by a Cutaway has been deliberately removed
+from view; a No-Data cell was never computed in the first place. The two can
+coincide on screen but are not the same reason for invisibility, and a
+Variable that is mostly No-Data (an ocean-only field over land, or vice
+versa) needs this to be legible in a way a mostly-populated Variable does not.
+
+Valdes/BRIDGE stays on the `transparent` style, but composites a second,
+always-opaque sphere (paleogeography's shaded relief) immediately behind the
+primary field rather than actually leaving a hole — see
+docs/adr/0015-relief-fill-replaces-transparent-no-data.md. Not a fourth
+style: `transparent`'s discard is still what runs, just no longer visible as
+a literal gap, and it fixes a real bug in the same move (a discarded,
+non-opaque hole let Vector Streaks on the far hemisphere show through).
+
 ## Projection
 
 How the globe's surface is mapped onto the screen: **Globe** (a sphere, viewed
@@ -157,32 +197,54 @@ viewed, not what is being viewed.
 
 Coastlines and land fill do not reproject with it yet — their CPU build
 pipeline (plate-rotation slerp) is a separate, unrelated piece of work.
-Wind (glyphs and streaks) does reproject, including its own Plate-Carrée-only
-concern of a real antimeridian seam a sphere doesn't have. More Projections
+Vector Field overlays (glyphs and streaks) do reproject, including their own
+Plate-Carrée-only concern of a real antimeridian seam a sphere doesn't have.
+More Projections
 (Robinson, Mollweide, Spilhaus) are expected later; Plate Carrée is the
 first.
 
-## Wind Glyph
+## Vector Field
 
-One arrow instance in the paleoclimate viewer's wind vector-field overlay: a
-fixed position on a lattice, oriented and scaled each update from the wind
+A named pair of Variables (u, v) a Model declares for arrow/streak-style
+overlay, distinct from an ordinary scalar Variable painted on the surface —
+Wind was the first and, until Valdes/BRIDGE's ocean-surface data, the only
+one. A Model may declare several (Monthly declares Wind, Ocean Surface
+Current, and Sea-Ice Drift; Ocean Depth declares Ocean Current). Exactly
+one is shown at a time, chosen from a dropdown — never overlaid, since
+several arrow fields drawn together read as noise, not signal. To compare
+two, add a second globe instance and set each to a different Vector Field
+rather than looking for a way to show both on one.
+
+Named generically rather than kept as "Wind" once a second Vector Field
+existed, for the same reason Layer's Monthly is named for its axis rather
+than a domain: the mechanism (one active field, glyph/streak display,
+mutual exclusion) has nothing to do with wind specifically, and calling it
+Wind after Ocean Current existed would have been the "Atmosphere" mistake
+repeated.
+
+## Vector Glyph
+
+One arrow instance in a Vector Field overlay: a fixed position on a
+lattice, oriented and scaled each update from the active Vector Field's
 (u, v) sampled there. Static — it shows the field's instantaneous shape at
-one point, not motion. See Wind Streak for the overlay's other mode.
+one point, not motion. See Vector Streak for the overlay's other mode.
 
-## Wind Streak
+## Vector Streak
 
-The wind overlay's other display mode: particles seeded at random positions
-and advected each frame along a single, unchanging (u, v) snapshot — whichever
-month/age frame is currently selected — leaving a fading world-space trail
-ribbon tinted by local speed. Mutually exclusive with Wind Glyph; the two
-never render together.
+A Vector Field overlay's other display mode: particles seeded at random
+positions and advected each frame along a single, unchanging (u, v)
+snapshot — whichever month/age frame is currently selected — leaving a
+fading world-space trail ribbon tinted by local speed. Mutually exclusive
+with Vector Glyph; the two never render together, regardless of which
+Vector Field is active.
 
 "Perpetual" in the NASA *Perpetual Ocean* sense: the flow keeps moving even
 though the field driving it is one static frame, not a time-evolving
 simulation. A particle has a finite lifetime and respawns at a new random
 position on expiry — without this, particles drift into convergence zones
-(e.g. the ITCZ) and pile up there while divergent regions empty out, so
-coverage would visibly degrade the longer the animation runs.
+(e.g. the ITCZ, or an Ocean Current's own gyres) and pile up there while
+divergent regions empty out, so coverage would visibly degrade the longer
+the animation runs.
 
 ## Time Series (climate)
 
@@ -197,3 +259,115 @@ it to the scrubbable month would mean recomputing on every drag for a chart
 meant to be computed once and left alone. Undefined (not zero) for a Frame
 where the model's own validity mask covers every texel; never computed for a
 categorical Variable (Koppen), whose class indices have no meaningful mean.
+
+## Month (climate)
+
+The climate viewer's repurposing of a Volume's shared depth axis for a Model
+whose Frames vary seasonally rather than by physical depth: index 0-11 are
+the twelve calendar months, index 12 is the model's own native annual mean
+(not a derived average of the other twelve). Distinct from Ocean Depth,
+which reuses the exact same underlying axis machinery for a different Model
+to mean literal metres below the sea surface — the two meanings never
+coexist within one Model, only across sibling Models of the same source
+(see the Valdes/BRIDGE instance).
+
+## Ocean Depth
+
+Real depth in metres below the sea surface — the shared depth axis's
+meaning for an Ocean Layer's Model, as opposed to Month. Populated only as
+an **annual mean**: BRIDGE's ocean archive has no monthly 3D fields
+(confirmed directly against the source server — the monthly ocean file
+carries a single surface level only, the depth-resolved file exists
+annual-only). Distinct from Month, which the same axis machinery means for
+a Monthly Layer.
+
+## Vertical Velocity (ocean)
+
+Ocean upward/downward flow — positive is upwelling, negative is
+downwelling. Physically defined at the interfaces *between* Ocean Depth's
+levels, not co-located with Temperature/Salinity/Current at those levels.
+Stored anchored to the shallower level of each interface (level *i* holds
+the flow crossing into the level below it), leaving the deepest level
+undefined — nothing lies below it to flux into. A deliberate
+visual-completeness-over-physical-precision choice, favouring the
+scientifically interesting near-surface upwelling patterns (equatorial,
+coastal) over strict co-location or full-depth coverage at the physically
+quiet abyssal bottom (see ADR-0010). The half-level offset is recorded in
+the variable's own metadata so a future vertical-profile consumer can
+correct for it rather than assume co-location.
+
+## Query Point
+
+A user-chosen (lon, lat) and the Variable values read from the
+currently-loaded Model(s) there. The concept starts at a `LonLat` — however
+a viewer turns a screen click into one (raycasting against whatever mesh is
+currently pickable) is not part of it, and stays that viewer's own
+responsibility, the same way the tomography viewer's Cutaway tool already
+owns its own click-to-`LonLat` step. Two distinct shapes exist under this
+term (Month Profile, Age Series); there is no combined query across both
+axes at once.
+
+## Anchored Point
+
+A Query Point whose grid cell is held fixed in the Volume's own grid frame
+across every Frame — the same cell is read regardless of age, with no plate
+machinery involved. Honours the Model's own validity mask, reporting no
+value (never a fabricated one) for a Frame where the cell is masked — the
+same rule Time Series (climate) already follows, applied per cell instead
+of per globe. Snaps to the nearest grid cell using the same convention
+Vector Glyph and Vector Streak already sample by, and reports that cell's own centre
+back to the caller rather than only the raw click coordinate, since at 1°
+resolution the two can visibly disagree. Unlike Time Series (climate), an
+Anchored Point never reduces multiple cells together, so nothing stops a
+categorical Variable (Köppen) from being queried this way — the mean-of-
+class-indices problem that excludes Köppen from Time Series doesn't exist
+here.
+
+_Future work, not yet decided:_ nearest-cell snapping is a placeholder for
+continuous Variables — bilinear interpolation over the four nearest cells
+would be preferable, gated on the same `categorical` / no-data-sentinel
+distinction the manifest already carries for GPU texture filtering, since
+blending across a class boundary or a sentinel cell fabricates a value the
+same way it would on the GPU path.
+
+## Month Profile
+
+An Anchored Point query answering "how does this cell vary across the
+calendar": all layers of the Volume's depth axis (twelve Months plus
+Annual, see Month (climate)) at the currently-loaded Frame, read from the
+texture already resident for display. Costs no network request beyond what
+showing that Frame already paid for.
+
+## Age Series (point)
+
+An Anchored Point query answering "how has this cell changed across
+geological time": one value per Frame of the active Model, Annual layer
+only — never whichever Month is currently selected, for the same reason
+Time Series (climate) reads Annual only. _Avoid_: "Time Series" alone for
+this — that term already names the area-weighted global mean; qualify as
+"Age Series" to keep the two apart, since they answer different questions
+from what looks like the same axis.
+
+## Plate-Frame Point
+
+A Query Point whose grid cell is *not* fixed: pinned to a specific Plate at
+a reference age, then re-expressed in grid space at every other Frame via
+that plate's absolute rotation — the same rotation mechanism the coastline
+pipeline already supplies (see ADR-0001's rotation table), applied to an
+arbitrary point instead of a coastline vertex. Assigning the reference
+Plate itself requires point-in-polygon testing against plate polygon data
+the archive does not yet carry — nothing today gives an arbitrary clicked
+point a plate id the way coastline features already carry one from their
+own source shapefile. Not yet implemented; see
+`docs/plans/plate-frame-point.md`.
+
+"No plate contains this point at this age" is an expected outcome of the
+query, not an error condition — a point on crust that has since subducted,
+or outside reconstructed polygon coverage, simply cannot answer for some
+ages in a series and must say so per-age, not fail the whole query.
+
+The word "Frame" here means reference frame, as in a plate's own frame of
+reference — a second sense of the word that coexists with Frame's other
+meaning (one volume within a Model, tagged with an age) without replacing
+it: a Plate-Frame Point's grid position is recomputed once per per-age
+Frame.

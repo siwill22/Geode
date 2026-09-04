@@ -22,6 +22,7 @@ export default defineConfig({
       input: {
         main: fileURLToPath(new URL('index.html', import.meta.url)),
         climate: fileURLToPath(new URL('climate.html', import.meta.url)),
+        valdes: fileURLToPath(new URL('valdes.html', import.meta.url)),
       },
     },
   },

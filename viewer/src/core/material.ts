@@ -53,6 +53,9 @@ uniform float uUseSliceDepth; // 0 = derive depth from world position (wall/floo
 uniform float uClipLo;       // encoded 0..1 space
 uniform float uClipHi;
 uniform vec3  uNoDataColor;
+uniform vec3  uSparseNoDataColor;
+uniform float uNoDataSentinel;   // encoded 0..1 space; <0 disables this check
+uniform float uSparseNoDataMode; // 0 = colour fill (uSparseNoDataColor), 1 = discard (transparent)
 uniform float uUseMask;      // 0 = ignore, 1 = keep inside cut, -1 = keep outside
 uniform float uUseValidMask; // 0 = ignore, 1 = discard where uValidMask < 0.5
 uniform float uOpacity;
@@ -100,6 +103,29 @@ void main() {
 
   vec3 uvw = volumeUVW(ll, depth, uDepthMin, uDepthMax, uGrid);
   float v = texture(uVolume, uvw).r;
+
+  // A per-texel NO-DATA sentinel (byte 255; see ADR-0005), for a model
+  // where absence of data is the common case rather than a thin edge case
+  // -- distinct from the depth-out-of-range branch above, which every model
+  // already had. Disabled (uNoDataSentinel < 0) for any model that doesn't
+  // declare one, so a legitimate encoded value here is never mistaken for
+  // absence; a separate colour uniform from uNoDataColor so this toggle can
+  // never bleed into the unrelated depth-range case above.
+  //
+  // The threshold must sit strictly between byte 254 (the highest value
+  // real data ever clamps to) and byte 255 (the sentinel): those two are
+  // only 1/255 = 0.00392 apart in this normalised space. A 0.004 margin
+  // here first shipped wider than that gap and caught byte 254 too,
+  // silently discarding every texel clamped to the top of its own clip
+  // range as if it were absent -- confirmed by decoding the actual written
+  // bytes, the same discipline the Koppen off-by-one fix used, after a real
+  // render showed data going transparent where its encoded bytes were
+  // fine. 0.002 sits exactly between the two.
+  if (uNoDataSentinel >= 0.0 && v > uNoDataSentinel - 0.002) {
+    if (uSparseNoDataMode > 0.5) discard;
+    gl_FragColor = vec4(uSparseNoDataColor, uOpacity);
+    return;
+  }
 
   if (uDebug > 0.5) {
     // Display-only, so restating the normalisations here is harmless; the
@@ -151,6 +177,9 @@ export function createVolumeSurfaceMaterial(): ShaderMaterial {
       uClipLo: { value: 0 },
       uClipHi: { value: 1 },
       uNoDataColor: { value: passthroughColor(0x555555) },
+      uSparseNoDataColor: { value: passthroughColor(0x555555) },
+      uNoDataSentinel: { value: -1 },
+      uSparseNoDataMode: { value: 0 },
       uUseMask: { value: 0 },
       uUseValidMask: { value: 0 },
       uOpacity: { value: 1 },
@@ -172,6 +201,25 @@ export function setProjectionMode(mat: ShaderMaterial, mode: ProjectionMode): vo
 export function setMaskMode(mat: ShaderMaterial, mode: MaskMode): void {
   mat.uniforms.uUseMask.value =
     mode === 'none' ? 0 : mode === 'inside' ? 1 : -1;
+}
+
+/** How a per-texel NO-DATA sentinel is painted -- see ADR-0005. Not every
+ *  model has one; setNoDataSentinel(mat, undefined) disables the check
+ *  entirely regardless of which style is set here. */
+export type NoDataStyle = 'transparent' | 'grey' | 'white';
+
+/** Declare which byte (0-255, from the manifest's own `no_data_sentinel`) a
+ *  volume reserves for "no value here" -- undefined for a model that
+ *  doesn't reserve one, which disables the check so a legitimate encoded
+ *  value can never be mistaken for absence. */
+export function setNoDataSentinel(mat: ShaderMaterial, sentinel: number | undefined): void {
+  mat.uniforms.uNoDataSentinel.value = sentinel === undefined ? -1 : sentinel / 255;
+}
+
+export function setNoDataStyle(mat: ShaderMaterial, style: NoDataStyle): void {
+  mat.uniforms.uSparseNoDataMode.value = style === 'transparent' ? 1 : 0;
+  mat.uniforms.uSparseNoDataColor.value =
+    passthroughColor(style === 'white' ? 0xffffff : 0xcccccc);
 }
 
 /** Set/clear this material's per-texel validity mask -- see uValidMask's

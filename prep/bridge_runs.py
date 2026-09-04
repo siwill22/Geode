@@ -43,3 +43,22 @@ assert len(RUNS) == 109, f"expected 109 BRIDGE runs, got {len(RUNS)}"
 assert len({r for r, _ in RUNS}) == 109, "duplicate run code in RUNS"
 _ages = [a for _, a in RUNS]
 assert _ages == sorted(_ages, reverse=True), "RUNS must be oldest-first, monotonically decreasing"
+
+
+def cache_dirname(index: int, run: str) -> str:
+    """Collision-safe cache subdirectory name for RUNS[index].
+
+    Run codes are only unique case-SENSITIVELY (see module docstring --
+    e.g. teXPb/teXpb/texpb are three different runs, 35 such collision
+    groups covering 80 of the 109 codes). macOS's default filesystem (APFS)
+    is case-insensitive, so a bare run code is not a safe directory name:
+    teXPb/, teXpb/, and texpb/ all resolve to the SAME physical directory
+    there. fetch_bridge.py's exists()-based skip logic then silently treated
+    the 2nd/3rd run's downloads as "already cached" when they were actually
+    the 1st run's files under a folded name -- confirmed to have corrupted
+    45 of 109 runs before this fix (each mislabeled with an older run's
+    data). Prefixing with the RUNS index guarantees uniqueness regardless of
+    case folding; both fetch_bridge.py and prep_bridge.py must use this same
+    function so they agree on where a run's files live.
+    """
+    return f"{index:03d}_{run}"

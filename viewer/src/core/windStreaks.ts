@@ -265,10 +265,14 @@ export class WindStreaks {
    *  same plane-decoding contract. dtSeconds is real wall-clock time since
    *  the last tick (see STREAK_SPEED_SCALE for why it is NOT applied 1:1
    *  to physical wind speed). */
+  /** `speedScale`: VectorFieldInfo.display_speed_scale, forwarded to
+   *  advect() -- see windGlyphs.ts's update() doc comment and the field's
+   *  own definition for why this exists (ocean currents need one, wind
+   *  doesn't). 1 (its default) is a no-op. */
   update(
     dtSeconds: number,
     uData: Uint8Array, vData: Uint8Array, nlon: number, nlat: number,
-    uVar: VariableInfo, vVar: VariableInfo,
+    uVar: VariableInfo, vVar: VariableInfo, sentinel?: number, speedScale = 1,
   ): void {
     const dt = Math.min(dtSeconds, 0.25); // guard a tab-backgrounded huge dt spike
     this.recordAccum += dt;
@@ -284,7 +288,9 @@ export class WindStreaks {
       } else {
         // Plate Carrée: advect() can ALSO trigger a mid-step respawn, when a
         // particle crosses the antimeridian seam -- see its own doc comment.
-        justRespawned = this.advect(p, dt, uData, vData, nlon, nlat, uVar, vVar, commit);
+        justRespawned = this.advect(
+          p, dt, uData, vData, nlon, nlat, uVar, vVar, commit, sentinel, speedScale,
+        );
       }
       // A respawn touches every trail slot (see respawn()'s doc comment),
       // so it needs the full rebuild below regardless of `commit`.
@@ -335,17 +341,38 @@ export class WindStreaks {
    *  simply clamped -- a particle can't walk off the top/bottom of the map,
    *  and finite particle lifetime recycles it elsewhere within seconds
    *  regardless. */
+  /** `sentinel`: the model's NO-DATA byte (see WindGlyphs.update()'s own
+   *  doc comment for why Ocean Surface Current/Sea-Ice Drift need this and
+   *  Wind never has). A particle currently sitting over a sentinel texel
+   *  (freshly respawned there, or drifted there) gets re-respawned instead
+   *  of advecting from a decoded garbage velocity -- up to 8 tries, which
+   *  converges quickly against BRIDGE's ~40% ocean-only land fraction; a
+   *  particle that still lands on a sentinel cell after 8 tries is left in
+   *  place rather than looping forever, and simply retries again next tick
+   *  (it advects with zero real motion in the meantime, not a wrong one --
+   *  see the early return below skipping the decode/step entirely). */
   private advect(
     p: number, dt: number,
     uData: Uint8Array, vData: Uint8Array, nlon: number, nlat: number,
     uVar: VariableInfo, vVar: VariableInfo,
-    commit: boolean,
+    commit: boolean, sentinel?: number, speedScale = 1,
   ): boolean {
+    if (sentinel !== undefined) {
+      let texel = texelIndex(nlon, nlat, this.lon[p], this.lat[p]);
+      if (uData[texel] === sentinel || vData[texel] === sentinel) {
+        for (let tries = 0; tries < 8; tries++) {
+          this.respawn(p, false);
+          texel = texelIndex(nlon, nlat, this.lon[p], this.lat[p]);
+          if (uData[texel] !== sentinel && vData[texel] !== sentinel) break;
+        }
+        return true;
+      }
+    }
     const lon = this.lon[p];
     const lat = this.lat[p];
     const texel = texelIndex(nlon, nlat, lon, lat);
-    const u = texelToPhysical(uVar, uData[texel]);
-    const v = texelToPhysical(vVar, vData[texel]);
+    const u = texelToPhysical(uVar, uData[texel]) * speedScale;
+    const v = texelToPhysical(vVar, vData[texel]) * speedScale;
     this.speed[p] = Math.hypot(u, v);
     const step = (dt * STREAK_SPEED_SCALE) / EARTH_RADIUS_M;
 

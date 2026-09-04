@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Geode Valdes/BRIDGE</title>
+    <style>
+      :root { color-scheme: dark; }
+      html, body {
+        margin: 0; height: 100%; overflow: hidden;
+        background: #0b0d10;
+        font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, sans-serif;
+        color: #d8dee4;
+      }
+      canvas { display: block; }
+      /* See climate.html for why these lil-gui slider-knob overrides exist --
+         identical here, same library, same look. */
+      .lil-gui .lil-controller.lil-number .lil-slider {
+        --slider-knob-width: 8px;
+      }
+      .lil-gui .lil-controller.lil-number .lil-fill {
+        background: #565d66;
+        border-right: none;
+        position: relative;
+      }
+      .lil-gui .lil-controller.lil-number .lil-fill::after {
+        content: '';
+        position: absolute;
+        top: 0; right: calc(-1 * var(--slider-knob-width));
+        width: var(--slider-knob-width); height: 100%;
+        border-radius: 1.5px;
+        background:
+          linear-gradient(rgba(0, 0, 0, 0.35), rgba(0, 0, 0, 0.35)) center / 100% 2px no-repeat,
+          linear-gradient(180deg, #a83232 0%, #8f2626 50%, #7a1f1f 100%);
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.12),
+          0 0 0 1px rgba(0, 0, 0, 0.5),
+          0 1px 2px rgba(0, 0, 0, 0.5);
+      }
+      #projection-toggle {
+        flex: none; align-self: center;
+        width: 40px; height: 40px; padding: 0;
+        display: flex; align-items: center; justify-content: center;
+        font: inherit; color: #d8dee4; background: #1b1f24;
+        border: 1px solid #3a4048; border-radius: 50%; cursor: pointer;
+      }
+      #projection-toggle:hover { background: #262b32; }
+      #projection-toggle svg { display: block; width: 22px; height: 22px; }
+      .status {
+        position: fixed;
+        padding: 6px 10px; border-radius: 4px;
+        background: rgba(0, 0, 0, 0.6); color: #cfd6dd;
+      }
+      .status.status--error {
+        background: #3a1416; color: #ffb4b4;
+      }
+      /* See climate.html's identical rule for why this is a 3-column grid,
+         not a flex row with justify-content:space-between. */
+      .bottom-bar {
+        position: fixed;
+        display: grid; grid-template-columns: 1fr auto 1fr;
+        align-items: flex-end; column-gap: 16px;
+        z-index: 10; pointer-events: none;
+      }
+      .bottom-bar > * { pointer-events: auto; }
+      .legend { grid-column: 1; justify-self: start; }
+      .age-group {
+        grid-column: 2; justify-self: center;
+        display: flex; align-items: flex-end; gap: 10px;
+      }
+      .age-slider-wrap {
+        display: flex; flex-direction: column; align-items: center;
+        justify-content: center; gap: 4px;
+        padding: 8px 10px; border-radius: 4px;
+        background: rgba(0, 0, 0, 0.6);
+      }
+      .age-slider {
+        width: 100%;
+      }
+      .age-readout {
+        color: #9fb4c8; font-size: 11px; font-variant-numeric: tabular-nums;
+      }
+      .legend {
+        display: flex; flex-direction: column; justify-content: center;
+        padding: 8px 10px; border-radius: 4px;
+        background: rgba(0, 0, 0, 0.6);
+      }
+      .legend-label {
+        color: #cfd6dd; margin-bottom: 4px;
+      }
+      .legend-ramp {
+        display: block; width: 256px; height: 12px;
+        border-radius: 2px;
+      }
+      .legend-ticks {
+        display: none; justify-content: space-between; width: 256px;
+        margin-top: 3px; color: #97a3ad; font-size: 11px;
+        font-variant-numeric: tabular-nums;
+      }
+      .legend-key {
+        display: none; margin-top: 6px; width: 256px;
+        grid-template-columns: 1fr 1fr; column-gap: 10px; row-gap: 2px;
+      }
+      .legend-key-row {
+        display: flex; align-items: center; gap: 5px;
+        color: #cfd6dd; font-size: 11px; line-height: 1.3;
+      }
+      .legend-key-swatch {
+        flex: none; width: 10px; height: 10px; border-radius: 2px;
+      }
+      #toolbar {
+        position: fixed; left: 50%; top: 8px; transform: translateX(-50%);
+        display: flex; align-items: center; gap: 8px;
+        z-index: 20;
+      }
+      #toolbar button {
+        font: inherit; color: #d8dee4; background: #1b1f24;
+        border: 1px solid #3a4048; border-radius: 4px;
+        padding: 6px 12px; cursor: pointer;
+      }
+      #toolbar button:hover { background: #262b32; }
+      .sync-toggle {
+        display: flex; align-items: center; gap: 5px;
+        font: inherit; color: #d8dee4; background: #1b1f24;
+        border: 1px solid #3a4048; border-radius: 4px;
+        padding: 6px 12px; cursor: pointer;
+      }
+      .credit {
+        grid-column: 3; justify-self: end;
+        color: #5d6873; font-size: 11px; max-width: 40ch; text-align: right;
+      }
+      #error {
+        position: fixed; left: 12px; top: 60px; max-width: 60ch;
+        padding: 10px; border-radius: 4px; white-space: pre-wrap;
+        background: #3a1416; color: #ffb4b4;
+      }
+    </style>
+  </head>
+  <body>
+    <button id="projection-toggle" aria-label="Switch to Plate Carrée projection" title="Switch to Plate Carrée projection">&#9645;</button>
+    <div id="toolbar">
+      <button id="add-globe">+ Add globe</button>
+      <label class="sync-toggle"><input type="checkbox" id="sync-age" /> sync time</label>
+    </div>
+    <script type="module" src="/src/valdes/main.ts"></script>
+  </body>
+</html>
