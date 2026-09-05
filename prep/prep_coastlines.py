@@ -221,14 +221,37 @@ def export_geometry(coastline_files, out_path, spacing_deg):
     print(f"  geometry    {len(lines)} lines, {npts} points, {mb:.2f} MB")
     print(f"  land fill   {nland} vertices, {ntris} triangles")
     print(f"  plates      {len(plate_ids)} distinct ids")
-    return sorted(plate_ids)
+
+    # Per-plate line/point counts, for export_rotations()'s stuck-plate
+    # report -- how much geometry a plate id actually carries decides
+    # whether a constant rotation is a shrug (a handful of points on a
+    # negligible fragment) or a real gap (thousands of points on a major
+    # continental block silently frozen at every age).
+    line_counts = {}
+    for plate_id, _, _, pts, _, _ in lines:
+        n_lines, n_pts = line_counts.get(plate_id, (0, 0))
+        line_counts[plate_id] = (n_lines + 1, n_pts + len(pts))
+
+    return sorted(plate_ids), line_counts
 
 
-def export_rotations(rotation_files, plate_ids, ages, anchor, out_path):
-    """Absolute finite rotations per plate per age, as unit quaternions."""
+def export_rotations(rotation_files, plate_ids, ages, anchor, out_path, line_counts=None):
+    """Absolute finite rotations per plate per age, as unit quaternions.
+
+    Pass every rotation file the plate circuit needs in one `rotation_files`
+    list -- exactly what `pygplates.RotationModel(...)` expects, and the same
+    thing a multi-file model like Cao2024's (a deep-time model split at 1000
+    Ma into `1000_0_rotfile.rot` + `1800_1000_rotfile.rot`, both loaded
+    together by gprm's own `fetch_Cao2024()`) needs to resolve correctly.
+    `pygplates.RotationModel.get_rotation()` does NOT error on a plate id
+    absent from every loaded file -- it silently returns identity, which
+    looks exactly like a real, deliberately-static plate (see the stuck-plate
+    check below) unless the caller supplies the complete file set.
+    """
     model = pygplates.RotationModel([str(f) for f in rotation_files])
 
     plates = {}
+    stuck = []
     for pid in plate_ids:
         quats = []
         for age in ages:
@@ -248,12 +271,34 @@ def export_rotations(rotation_files, plate_ids, ages, anchor, out_path):
                 round(ax * s, 7), round(ay * s, 7), round(az * s, 7),
                 round(math.cos(angle / 2.0), 7),
             ])
+        if all(q == quats[0] for q in quats):
+            stuck.append(pid)
         plates[str(pid)] = quats
 
     out = {"ages": [float(a) for a in ages], "anchor": anchor, "plates": plates}
     out_path.write_text(json.dumps(out))
     mb = out_path.stat().st_size / 1024 / 1024
     print(f"  rotations   {len(plates)} plates x {len(ages)} ages, {mb:.2f} MB")
+
+    # A plate whose rotation never changes across the WHOLE age range is
+    # either genuinely static (fine for a small fragment near the anchor) or
+    # a plate id that one of the rotation files doesn't actually define --
+    # pygplates silently returns identity rather than erroring, so this is
+    # the only signal available short of visually scrubbing every polygon on
+    # the age slider (which is how this class of gap was first caught: see
+    # docs/adr/0004-per-run-coastline-rotations.md). Reported, not raised --
+    # a real, deliberately-fixed plate is a legitimate outcome this cannot
+    # tell apart from a genuine gap by itself, so a human judges from the
+    # line/point counts shown here.
+    if stuck:
+        total_lines = sum(n for n, _ in (line_counts or {}).values())
+        stuck_lines = sum((line_counts or {}).get(pid, (0, 0))[0] for pid in stuck)
+        print(f"  ! {len(stuck)} plate(s) have IDENTICAL rotation at every age "
+              f"({stuck_lines}/{total_lines} lines) -- check these aren't "
+              f"missing from the --rotations file set:")
+        for pid in sorted(stuck):
+            n_lines, n_pts = (line_counts or {}).get(pid, (0, 0))
+            print(f"      plate {pid}: {n_lines} lines, {n_pts} points")
 
 
 def main():
@@ -271,15 +316,16 @@ def main():
     args = ap.parse_args()
 
     args.out.mkdir(parents=True, exist_ok=True)
-    print(f"coastlines  {args.coastlines[0].name}")
-    print(f"rotations   {args.rotations[0].name}")
+    print(f"coastlines  {', '.join(f.name for f in args.coastlines)}")
+    print(f"rotations   {', '.join(f.name for f in args.rotations)}")
 
-    plate_ids = export_geometry(
+    plate_ids, line_counts = export_geometry(
         args.coastlines, args.out / "geometry.bin", args.fill_spacing_deg
     )
     ages = np.arange(args.age_min, args.age_max + args.age_step / 2, args.age_step)
     export_rotations(
-        args.rotations, plate_ids, ages, args.anchor, args.out / "rotations.json"
+        args.rotations, plate_ids, ages, args.anchor, args.out / "rotations.json",
+        line_counts,
     )
     print(f"\nwrote {args.out}/")
 

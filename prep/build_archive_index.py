@@ -34,6 +34,15 @@ def main():
             # for models this field predates. The viewer must use THIS to
             # pick coastlines, never assume one from the model id.
             "reconstruction_model": m.get("reconstruction_model"),
+            # Which role this Model plays within its own reconstruction's
+            # family (e.g. "Deformation" vs "Age & Heat Flux") -- a declared
+            # catalog fact (see prep_deformation.py), never inferred from the
+            # model id, so a generator recipe can group several Models into
+            # a comparison viewer purely from archive.json without knowing
+            # any id-naming convention. Absent for a Model with no such
+            # family concept (most models -- this is currently only set by
+            # prep_deformation.py).
+            "comparison_role": m.get("comparison_role"),
             "path": f"models/{m['id']}/manifest.json",
             "variables": [
                 {"id": v["id"], "name": v["name"]} for v in m["variables"]

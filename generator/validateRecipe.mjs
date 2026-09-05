@@ -24,6 +24,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_ARCHIVE_DIR = path.join(HERE, '..', 'archive');
 
 export const TOOL_ALLOWLIST = ['legend', 'age-slider', 'no-data-toggle', 'query-point'];
+export const WRAPPER_TYPES = ['single-model-globe', 'model-group-globe'];
 
 function loadJson(p) {
   return JSON.parse(readFileSync(p, 'utf8'));
@@ -111,6 +112,123 @@ function resolveCoastlines(archive, manifest) {
 }
 
 /**
+ * Group a recipe's `datasets` (model ids) into a comparison grid for the
+ * `model-group-globe` wrapper, driven entirely by each Model's own declared
+ * `reconstruction_model` and `comparison_role` fields -- never inferred
+ * from an id-naming convention (that was the original deformation viewer's
+ * approach, now retired in favour of this). See
+ * docs/plans/consider-this-general-question-virtual-kay.md.
+ *
+ * Requires the given models to form a COMPLETE grid: every combination of
+ * the distinct axis values actually present must have exactly one model.
+ * A partial grid (e.g. a reconstruction missing one of its two roles) is
+ * rejected up front rather than silently offering a dropdown combination
+ * that would 404 at runtime.
+ */
+async function resolveModelGroup(archive, source, datasets, tools, errors) {
+  const modelIds = archive.models.map((m) => m.id);
+  const entries = [];
+  for (const ds of datasets) {
+    const entry = archive.models.find((m) => m.id === ds.modelId);
+    if (!entry) {
+      errors.push({
+        message: `no model '${ds.modelId}' in archive.json`,
+        suggestions: nearestMatches(ds.modelId, modelIds),
+      });
+      continue;
+    }
+    entries.push({ modelId: ds.modelId, entry, manifest: await loadManifestFrom(source, entry.path) });
+  }
+  if (errors.length > 0) return null;
+
+  if (tools.includes('age-slider') && !entries.some((e) => e.manifest.frames.length > 1)) {
+    errors.push("'age-slider' was requested but no dataset in this group has more than 1 "
+      + 'frame -- nothing to scrub in any combination');
+  }
+
+  const axisAValues = [...new Set(entries.map((e) => e.manifest.reconstruction_model).filter(Boolean))];
+  const axisBValues = [...new Set(entries.map((e) => e.manifest.comparison_role).filter(Boolean))];
+
+  if (axisAValues.length <= 1 && axisBValues.length <= 1) {
+    errors.push("model-group-globe needs datasets that vary along a declared axis "
+      + "(reconstruction_model or comparison_role) -- these don't vary along either. Use "
+      + "wrapperType 'single-model-globe' for a single, non-comparison dataset.");
+    return null;
+  }
+
+  const aKeys = axisAValues.length ? axisAValues : [null];
+  const bKeys = axisBValues.length ? axisBValues : [null];
+  const expected = aKeys.length * bKeys.length;
+  if (entries.length !== expected) {
+    errors.push(`datasets must form a COMPLETE grid: ${aKeys.length} reconstruction(s) x `
+      + `${bKeys.length} role(s) = ${expected} expected, got ${entries.length}. A partial `
+      + 'grid is rejected rather than offering a dropdown combination that 404s.');
+    return null;
+  }
+
+  const grid = {};
+  for (const e of entries) {
+    const a = e.manifest.reconstruction_model ?? null;
+    const b = e.manifest.comparison_role ?? null;
+    grid[a ?? ''] ??= {};
+    if (grid[a ?? ''][b ?? '']) {
+      errors.push(`duplicate dataset for (reconstruction=${a}, role=${b}): `
+        + `both '${grid[a ?? ''][b ?? ''].modelId}' and '${e.modelId}'`);
+      continue;
+    }
+    grid[a ?? ''][b ?? ''] = e;
+  }
+  for (const a of aKeys) {
+    for (const b of bKeys) {
+      if (!grid[a ?? '']?.[b ?? '']) {
+        errors.push(`missing dataset for combination (reconstruction=${a ?? 'n/a'}, role=${b ?? 'n/a'})`);
+      }
+    }
+  }
+  if (errors.length > 0) return null;
+
+  // Within one role, every reconstruction must offer the same variable
+  // vocabulary -- switching reconstruction keeps the same Variable
+  // selected, so a role whose Models disagree on which variables exist
+  // would leave that selection dangling for some reconstructions.
+  for (const b of bKeys) {
+    const varSets = aKeys.map((a) => [...new Set(grid[a ?? ''][b ?? ''].manifest.variables.map((v) => v.id))].sort());
+    const first = varSets[0].join(',');
+    for (let i = 1; i < varSets.length; i++) {
+      if (varSets[i].join(',') !== first) {
+        errors.push(`role '${b ?? 'n/a'}' has different variables across reconstructions -- `
+          + `'${grid[aKeys[0] ?? ''][b ?? ''].modelId}' has [${first}], `
+          + `'${grid[aKeys[i] ?? ''][b ?? ''].modelId}' has [${varSets[i].join(',')}]`);
+      }
+    }
+  }
+  if (errors.length > 0) return null;
+
+  const gridResolved = {};
+  for (const a of aKeys) {
+    gridResolved[a ?? ''] = {};
+    for (const b of bKeys) {
+      const e = grid[a ?? ''][b ?? ''];
+      gridResolved[a ?? ''][b ?? ''] = {
+        modelId: e.modelId,
+        modelName: e.entry.name,
+        defaultVariable: e.manifest.default_variable,
+        coastlines: resolveCoastlines(archive, e.manifest),
+      };
+    }
+  }
+
+  return {
+    axisA: { field: 'reconstruction_model', values: axisAValues },
+    axisB: { field: 'comparison_role', values: axisBValues },
+    defaultAxisA: entries[0].manifest.reconstruction_model ?? null,
+    defaultAxisB: entries[0].manifest.comparison_role ?? null,
+    modelSource: entries[0].manifest.source ?? '',
+    grid: gridResolved,
+  };
+}
+
+/**
  * @param {object} recipe
  * @param {string} [source] Local archive directory or an http(s) archive
  *   base URL -- defaults to the recipe's OWN dataHost.archiveBase (the
@@ -131,8 +249,8 @@ export async function validateRecipe(recipe, source = recipe?.dataHost?.archiveB
   if (recipe.recipeVersion !== 1) {
     errors.push(`recipeVersion must be 1, got ${JSON.stringify(recipe.recipeVersion)}`);
   }
-  if (recipe.wrapperType !== 'single-model-globe') {
-    errors.push(`wrapperType must be 'single-model-globe' (the only value v1 supports), `
+  if (!WRAPPER_TYPES.includes(recipe.wrapperType)) {
+    errors.push(`wrapperType must be one of ${WRAPPER_TYPES.join(', ')}, `
       + `got ${JSON.stringify(recipe.wrapperType)}`);
   }
   if (!recipe.site?.repoName || !/^[\w.-]+$/.test(recipe.site.repoName)) {
@@ -141,11 +259,6 @@ export async function validateRecipe(recipe, source = recipe?.dataHost?.archiveB
   }
   if (!recipe.site?.title) errors.push('site.title is required');
   if (!recipe.dataHost?.archiveBase) errors.push('dataHost.archiveBase is required');
-
-  if (!Array.isArray(recipe.datasets) || recipe.datasets.length !== 1) {
-    errors.push(`datasets must have exactly 1 entry in v1 -- got ${recipe.datasets?.length ?? 0}. `
-      + 'Multi-dataset viewers aren\'t supported yet.');
-  }
 
   const tools = recipe.ui?.tools ?? [];
   for (const t of tools) {
@@ -157,34 +270,45 @@ export async function validateRecipe(recipe, source = recipe?.dataHost?.archiveB
     }
   }
 
+  if (!Array.isArray(recipe.datasets) || recipe.datasets.length === 0) {
+    errors.push('datasets must be a non-empty array');
+    return { ok: false, errors };
+  }
+
   let resolved = null;
-  const ds = recipe.datasets?.[0];
-  if (ds) {
-    const modelIds = archive.models.map((m) => m.id);
-    const entry = archive.models.find((m) => m.id === ds.modelId);
-    if (!entry) {
-      errors.push({
-        message: `no model '${ds.modelId}' in archive.json`,
-        suggestions: nearestMatches(ds.modelId, modelIds),
-      });
-    } else {
-      const manifest = await loadManifestFrom(source, entry.path);
-
-      if (tools.includes('age-slider') && manifest.frames.length <= 1) {
-        errors.push(`'age-slider' was requested but '${ds.modelId}' has only `
-          + `${manifest.frames.length} frame(s) -- nothing to scrub`);
-      }
-
-      if (errors.length === 0) {
-        resolved = {
-          modelId: ds.modelId,
-          modelName: entry.name,
-          modelSource: manifest.source ?? '',
-          defaultVariable: manifest.default_variable,
-          coastlines: resolveCoastlines(archive, manifest),
-        };
+  if (recipe.wrapperType === 'single-model-globe') {
+    if (recipe.datasets.length !== 1) {
+      errors.push(`'single-model-globe' takes exactly 1 dataset -- got ${recipe.datasets.length}. `
+        + "Use wrapperType 'model-group-globe' to compare several.");
+    }
+    const ds = recipe.datasets[0];
+    if (ds) {
+      const modelIds = archive.models.map((m) => m.id);
+      const entry = archive.models.find((m) => m.id === ds.modelId);
+      if (!entry) {
+        errors.push({
+          message: `no model '${ds.modelId}' in archive.json`,
+          suggestions: nearestMatches(ds.modelId, modelIds),
+        });
+      } else {
+        const manifest = await loadManifestFrom(source, entry.path);
+        if (tools.includes('age-slider') && manifest.frames.length <= 1) {
+          errors.push(`'age-slider' was requested but '${ds.modelId}' has only `
+            + `${manifest.frames.length} frame(s) -- nothing to scrub`);
+        }
+        if (errors.length === 0) {
+          resolved = {
+            modelId: ds.modelId,
+            modelName: entry.name,
+            modelSource: manifest.source ?? '',
+            defaultVariable: manifest.default_variable,
+            coastlines: resolveCoastlines(archive, manifest),
+          };
+        }
       }
     }
+  } else if (recipe.wrapperType === 'model-group-globe') {
+    resolved = await resolveModelGroup(archive, source, recipe.datasets, tools, errors);
   }
 
   return errors.length === 0 ? { ok: true, resolved } : { ok: false, errors };

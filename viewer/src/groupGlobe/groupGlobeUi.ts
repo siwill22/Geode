@@ -5,20 +5,22 @@ import type { ColormapData, VariableInfo } from '../core/types';
 import type { CellSample } from '../core/queryPoint';
 import type { GlobeTool } from '../core/tools';
 
-export type { GlobeTool };
-
-export interface GlobeViewState {
+export interface GroupGlobeViewState {
+  /** Current reconstruction_model value (e.g. "Cao2024"). */
+  axisA: string;
+  /** Current comparison_role value (e.g. "Deformation"). */
+  axisB: string;
   variable: string;
   age: number;
   clipMin: number;
   clipMax: number;
   noDataStyle: NoDataStyle;
-  /** UI-only: see DeformationUI's identical field for why this exists and
-   *  is never read by rendering code. */
   logScale: boolean;
 }
 
-export interface GlobeUICallbacks {
+export interface GroupGlobeUICallbacks {
+  onAxisA(value: string): void;
+  onAxisB(value: string): void;
   onVariable(id: string): void;
   onAge(age: number): void;
   onClip(lo: number, hi: number): void;
@@ -28,15 +30,18 @@ export interface GlobeUICallbacks {
 const LOG_SCALE_MIN_RATIO = 100;
 
 /**
- * The single-model-globe panel -- one dataset, no reconstruction/layer
- * switching (see deformation/deformationUi.ts for the shape this was
- * generalized from). Which controls actually appear is driven entirely by
- * `tools`, a recipe's own `ui.tools` list (see generator/recipeTypes.ts):
- * a generated site only shows what its recipe asked for, not everything
- * this class is capable of.
+ * The `model-group-globe` panel -- two dropdowns (one per declared axis,
+ * see generator/recipeTypes.ts) instead of `single-model-globe`'s one fixed
+ * Model, otherwise the same shape as that wrapper's GlobeUI. Generalized
+ * directly from deformation/deformationUi.ts's reconstruction+layer
+ * dropdowns: those two controls ARE this pattern, just hardcoded to
+ * deformation's own two axes instead of driven by whatever axis names a
+ * recipe's comparison group actually has.
  */
-export class GlobeUI {
+export class GroupGlobeUI {
   readonly gui: GUI;
+  private axisACtrl: Controller;
+  private axisBCtrl: Controller;
   private variableCtrl: Controller;
   private ageCtrl: Controller;
   private clipFolder: GUI;
@@ -60,12 +65,19 @@ export class GlobeUI {
   private queryPanel: HTMLDivElement | null = null;
 
   constructor(
-    private state: GlobeViewState,
-    private cb: GlobeUICallbacks,
+    private state: GroupGlobeViewState,
+    private cb: GroupGlobeUICallbacks,
     private readonly tools: GlobeTool[],
     title: string,
+    axisALabel: string,
+    axisBLabel: string,
   ) {
     this.gui = new GUI({ title });
+
+    this.axisACtrl = this.gui.add(this.state, 'axisA', {}).name(axisALabel)
+      .onChange((v: string) => cb.onAxisA(v));
+    this.axisBCtrl = this.gui.add(this.state, 'axisB', {}).name(axisBLabel)
+      .onChange((v: string) => cb.onAxisB(v));
 
     this.variableCtrl = this.gui
       .add(this.state, 'variable', {})
@@ -123,10 +135,6 @@ export class GlobeUI {
     }
 
     if (tools.includes('query-point')) {
-      // Stacks below .status/.timeinfo in the top-LEFT corner -- lil-gui's
-      // own panel already owns the top-right (see .lil-gui's default
-      // fixed positioning), so a query-point panel there would sit hidden
-      // behind it, as a first version of this did.
       this.queryPanel = document.createElement('div');
       this.queryPanel.className = 'query-panel';
       Object.assign(this.queryPanel.style, { top: '76px', left: '12px' });
@@ -144,8 +152,24 @@ export class GlobeUI {
     return this.tools.includes('query-point');
   }
 
+  setAxisAOptions(values: string[]): void {
+    this.axisACtrl.options(Object.fromEntries(values.map((v) => [v, v])));
+  }
+
+  setAxisBOptions(values: string[]): void {
+    this.axisBCtrl.options(Object.fromEntries(values.map((v) => [v, v])));
+  }
+
   setAgeRange(min: number, max: number, step = 1): void {
     this.ageCtrl.min(min).max(max).step(step);
+  }
+
+  /** Hidden, not disabled, when the active axisB combination is static (a
+   *  single Frame) -- see GroupGlobeInstance's isStaticAxisB(): a
+   *  greyed-out slider with nothing left for it to do reads as a bug, the
+   *  same reasoning as DeformationUI's identical choice. */
+  setAgeControlVisible(visible: boolean): void {
+    if (visible && this.tools.includes('age-slider')) this.ageCtrl.show(); else this.ageCtrl.hide();
   }
 
   setVariables(variables: VariableInfo[]): void {
@@ -282,13 +306,7 @@ export class GlobeUI {
     ctx.drawImage(off, 0, 0, this.legendCanvas.width, this.legendCanvas.height);
   }
 
-  /** Show the result of a point query -- see globeInstance.ts's
-   *  queryPointAt(), which reads through the same core/queryPoint.ts
-   *  monthProfile() the climate viewer's Anchored Point uses, against the
-   *  currently-displayed frame's own cached texture (no extra fetch), so
-   *  this always reflects whatever age/variable is on screen right now.
-   *  No-op if `query-point` wasn't in the recipe's tool list (queryPanel
-   *  is null). */
+  /** See GlobeUI.showQueryResult() -- same panel, same convention. */
   showQueryResult(sample: CellSample, variable: VariableInfo): void {
     if (!this.queryPanel) return;
     const label = variable.categorical

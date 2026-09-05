@@ -24,6 +24,7 @@ export default defineConfig({
         climate: fileURLToPath(new URL('climate.html', import.meta.url)),
         valdes: fileURLToPath(new URL('valdes.html', import.meta.url)),
         globe: fileURLToPath(new URL('globe.html', import.meta.url)),
+        groupGlobe: fileURLToPath(new URL('groupGlobe.html', import.meta.url)),
       },
     },
   },

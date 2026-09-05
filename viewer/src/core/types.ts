@@ -146,6 +146,13 @@ export interface Manifest {
    *  coastline set -- never pair a model with coastlines by guessing from
    *  its id/name. */
   reconstruction_model?: string;
+  /** Which role this Model plays within its own reconstruction's family
+   *  (e.g. "Deformation" vs "Age & Heat Flux") -- a declared catalog fact
+   *  (see prep_deformation.py), never inferred from the model id. Lets a
+   *  generator recipe group several Models into one comparison viewer
+   *  (see generator/recipeTypes.ts) purely from archive.json, without any
+   *  id-naming convention. Absent for a Model with no such family concept. */
+  comparison_role?: string;
   default_resolution: string;
   resolutions: ResolutionInfo[];
   frames: FrameInfo[];
@@ -184,6 +191,9 @@ export interface ArchiveIndex {
      *  coastlines from the archive-level summary alone, without a second
      *  fetch of the full manifest. */
     reconstruction_model?: string;
+    /** Mirrors the same Model's own manifest.json field -- see Manifest's
+     *  doc comment. */
+    comparison_role?: string;
   }>;
   colormaps: string;
   /** Muller et al., used by the tomography viewer (index.html). */

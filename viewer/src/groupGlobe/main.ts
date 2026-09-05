@@ -2,23 +2,22 @@ import { Clock, Color, Vector2, WebGLRenderer } from 'three';
 import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 import { PALETTE } from '../core/palette';
-import { fetchCoastlineData, resolveCoastlineSet } from '../core/coastlines';
-import { loadArchive, loadColormaps, loadManifest } from '../core/volume';
+import { loadArchive, loadColormaps } from '../core/volume';
 import {
   createProjectionCamera, createProjectionControls, updateProjectionCameraAspect,
 } from '../core/projection';
-import { GlobeInstance, type NoDataStyle } from './globeInstance';
-import { GLOBE_CONFIG } from '../generated/config';
+import { GroupGlobeInstance, type NoDataStyle } from './groupGlobeInstance';
+import { GROUP_GLOBE_CONFIG } from '../generated/groupConfig';
 
-// See deformation/main.ts for why this indirection exists: VITE_ARCHIVE_BASE
-// is the seam a generated repo's build points at the shared central data
-// host instead of a local archive/ tree -- see generator/scaffoldRepo.mjs.
+// See globe/main.ts for why this indirection exists: VITE_ARCHIVE_BASE
+// points a generated repo's build at the shared central data host instead
+// of a local archive/ tree.
 const ARCHIVE = import.meta.env.VITE_ARCHIVE_BASE ?? `${import.meta.env.BASE_URL}archive`;
 
-document.title = GLOBE_CONFIG.title;
+document.title = GROUP_GLOBE_CONFIG.title;
 
-// One globe, one camera, one Model -- no multi-globe support and no Plate
-// Carrée toggle in v1 (see the plan doc's fixed tool menu).
+// One globe, one camera -- no multi-globe support and no Plate Carrée
+// toggle in v1.5 (matches single-model-globe's own scope).
 const camera = createProjectionCamera('globe', innerWidth / innerHeight);
 
 const renderer = new WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
@@ -29,7 +28,7 @@ document.body.appendChild(renderer.domElement);
 
 const controls: OrbitControls = createProjectionControls('globe', camera, renderer.domElement);
 
-let instance: GlobeInstance;
+let instance: GroupGlobeInstance;
 
 addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
@@ -43,13 +42,9 @@ function ndcFor(clientX: number, clientY: number): Vector2 {
   return ptr;
 }
 
-// Anchored Point (see docs/adr/0011, docs/adr/0016): shift-click queries
-// the currently-displayed variable at the clicked cell. Shift owns this
-// gesture entirely -- OrbitControls is disabled only for its duration, the
-// same pattern climate/main.ts uses and for the same reason (a shift-drag
-// must not ALSO spin the globe underneath the query). controls.enabled is
-// reset unconditionally on pointerup, not conditioned on ev.shiftKey still
-// being true then, so releasing shift mid-drag can't wedge orbiting off.
+// Anchored Point (see docs/adr/0011, docs/adr/0016) -- same shift-click
+// gesture as globe/main.ts and climate/main.ts, for the same reason (a
+// plain click fights OrbitControls).
 renderer.domElement.addEventListener('pointerdown', (ev) => {
   if (ev.shiftKey) controls.enabled = false;
 });
@@ -65,46 +60,35 @@ async function boot(): Promise<void> {
   const archive = await loadArchive(ARCHIVE);
   const colormaps = await loadColormaps(ARCHIVE, archive.colormaps);
 
-  const entry = archive.models.find((m) => m.id === GLOBE_CONFIG.modelId);
-  if (!entry) {
-    throw new Error(`archive.json has no model '${GLOBE_CONFIG.modelId}' -- `
-      + 'check generated/config.ts against the current catalog');
-  }
-  const manifest = await loadManifest(ARCHIVE, entry.path);
-
-  const coastlineSet = resolveCoastlineSet(archive, manifest);
-  let coastlineData = null;
-  let creditCoastlines: string | null = null;
-  if (coastlineSet) {
-    try {
-      coastlineData = await fetchCoastlineData(ARCHIVE, coastlineSet.geometry, coastlineSet.rotations);
-      creditCoastlines = manifest.reconstruction_model
-        ? `coastlines ${manifest.reconstruction_model} (native rotations)`
-        : 'coastlines';
-    } catch {
-      coastlineData = null; // a layer, not a prerequisite -- the globe still works
-    }
-  }
-
-  instance = new GlobeInstance(camera, {
-    archiveBase: ARCHIVE, archive, colormaps, manifest, coastlineData, creditCoastlines,
-    tools: GLOBE_CONFIG.tools, title: GLOBE_CONFIG.title,
+  instance = new GroupGlobeInstance(camera, {
+    archiveBase: ARCHIVE,
+    archive,
+    colormaps,
+    tools: GROUP_GLOBE_CONFIG.tools,
+    title: GROUP_GLOBE_CONFIG.title,
+    axisALabel: GROUP_GLOBE_CONFIG.axisALabel,
+    axisBLabel: GROUP_GLOBE_CONFIG.axisBLabel,
+    grid: GROUP_GLOBE_CONFIG.grid,
+    defaultAxisA: GROUP_GLOBE_CONFIG.defaultAxisA,
+    defaultAxisB: GROUP_GLOBE_CONFIG.defaultAxisB,
   });
   await instance.boot();
 
-  if (window.__globe) window.__globe.ready = true;
+  if (window.__groupGlobe) window.__groupGlobe.ready = true;
 }
 
 // --- test hook ---------------------------------------------------------
 // Drives the viewer from ad-hoc verification scripts, same shape as
-// window.__climate/window.__deformation.
+// window.__globe/window.__climate.
 
 declare global {
-  interface Window { __globe?: Record<string, unknown> }
+  interface Window { __groupGlobe?: Record<string, unknown> }
 }
 
-window.__globe = {
+window.__groupGlobe = {
   ready: false,
+  setAxisA: async (v: string) => { await instance.setAxisA(v); instance.ui.refreshDisplay(); },
+  setAxisB: async (v: string) => { await instance.setAxisB(v); instance.ui.refreshDisplay(); },
   setAge: (age: number) => { instance.applyAge(age); instance.ui.refreshDisplay(); },
   setVariable: async (id: string) => {
     await instance.setVariable(id);
@@ -129,6 +113,8 @@ window.__globe = {
   getGui: () => instance.ui.gui,
   stats: () => ({
     model: instance.manifest?.id,
+    axisA: instance.view.axisA,
+    axisB: instance.view.axisB,
     variable: instance.variable?.id,
     age: instance.view.age,
     clip: [instance.view.clipMin, instance.view.clipMax],

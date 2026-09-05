@@ -1,4 +1,4 @@
-import type { GlobeTool } from '../globe/globeUi';
+import type { GlobeTool } from '../core/tools';
 
 export interface GlobeConfig {
   modelId: string;

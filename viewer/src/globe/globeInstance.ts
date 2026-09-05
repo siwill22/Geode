@@ -1,5 +1,6 @@
 import {
-  Vector3, Vector2, Raycaster, Scene, type Camera, type Data3DTexture, type WebGLRenderer,
+  Vector3, Mesh, MeshBasicMaterial, FrontSide,
+  type Vector2, Raycaster, Scene, type Camera, type Data3DTexture, type WebGLRenderer,
 } from 'three';
 
 import { DepthSlice } from '../core/depthSlice';
@@ -9,13 +10,13 @@ import {
 } from '../core/material';
 import { createMaskTexture } from '../core/mask';
 import { Coastlines, LAND_R_UNDER_SURFACE, type CoastlineData } from '../core/coastlines';
+import { createSurfaceGeometry } from '../core/projection';
 import {
-  FrameCache, makeColormapTexture, nearestFrame, physicalToEncoded, texelToPhysical,
-  texelIndex, cellCenter,
+  FrameCache, makeColormapTexture, nearestFrame, physicalToEncoded,
 } from '../core/volume';
-import { vec3ToLonLat, type LonLat } from '../core/constants';
+import { monthProfile, type NoDataRule, type CellSample } from '../core/queryPoint';
+import { vec3ToLonLat } from '../core/constants';
 import { GlobeUI, type GlobeViewState, type GlobeTool } from './globeUi';
-import type { CellSample } from './queryPointSample';
 import type { ArchiveIndex, ColormapData, Manifest, VariableInfo } from '../core/types';
 
 export type { NoDataStyle };
@@ -25,6 +26,11 @@ export type { NoDataStyle };
 // deformation/deformationInstance.ts, for the same reason: a fixed-model
 // generated viewer has no idea in advance whether its Model is sparse.
 const LAND_FILL_COLOR = 0x808080;
+
+// Strictly inside LAND_R_UNDER_SURFACE so the land mesh always occludes it
+// where land exists -- same margin convention as the other radius offsets
+// in coastlines.ts. See `backdrop`'s doc comment below.
+const BACKDROP_R = LAND_R_UNDER_SURFACE * (1 - 0.0006);
 
 export interface GlobeInstanceDeps {
   archiveBase: string;
@@ -50,6 +56,11 @@ export class GlobeInstance {
   readonly field = new DepthSlice();
   readonly ui: GlobeUI;
   coastlines: Coastlines | null = null;
+  /** A plain sphere UNDER the land mesh, painted only when noDataStyle is
+   *  'grey'/'white' -- see GroupGlobeInstance's identical field for the
+   *  full reasoning (painting that colour in the field itself would sit
+   *  ABOVE the land mesh and blank out the continents). */
+  private readonly backdrop: Mesh;
 
   readonly view: GlobeViewState = {
     variable: '', age: 0, clipMin: 0, clipMax: 1, noDataStyle: 'transparent', logScale: false,
@@ -58,6 +69,17 @@ export class GlobeInstance {
   private frames: FrameCache;
   private ageToken = 0;
   private raycaster = new Raycaster();
+  /** Guards setVariable() against a no-op re-entry -- deliberately NOT
+   *  `this.view.variable`: lil-gui's OptionController writes the new value
+   *  into the shared `view` object BEFORE firing onChange, so a real
+   *  dropdown click has already made `variableId === this.view.variable`
+   *  true by the time this callback runs. Guarding on that silently no-ops
+   *  every real UI change (the label updates because lil-gui already wrote
+   *  it, but the frame reload/colormap/clip-range never happen) while a
+   *  test-hook call, which invokes setVariable() directly before `view` is
+   *  touched, looks fine. Same bug, and same fix, as
+   *  GroupGlobeInstance's `activeAxisA`/`activeAxisB`. */
+  private activeVariable = '';
 
   get manifest(): Manifest { return this.deps.manifest; }
 
@@ -70,6 +92,13 @@ export class GlobeInstance {
     this.field.setDepthKm(0); // whole-sphere paint, no depth axis in this wrapper's manifests
     this.scene.add(this.field.mesh);
     this.frames = new FrameCache(deps.archiveBase);
+
+    this.backdrop = new Mesh(
+      createSurfaceGeometry('globe', BACKDROP_R),
+      new MeshBasicMaterial({ side: FrontSide }),
+    );
+    this.backdrop.visible = false; // 'transparent' style: nothing painted here at boot
+    this.scene.add(this.backdrop);
 
     this.ui = new GlobeUI(this.view, {
       onVariable: (id) => void this.setVariable(id),
@@ -96,10 +125,11 @@ export class GlobeInstance {
   async boot(): Promise<void> {
     this.ui.setStatus('loading...');
     setMaskMode(this.field.material, 'none'); // paints the WHOLE sphere
-    applyNoDataStyleUniform(this.field.material, this.view.noDataStyle);
+    this.setNoDataStyle(this.view.noDataStyle);
     setNoDataSentinel(this.field.material, this.manifest.no_data_sentinel);
 
     this.view.variable = this.manifest.default_variable;
+    this.activeVariable = this.manifest.default_variable;
     this.ui.setVariables(this.manifest.variables);
     this.ui.setVariable(this.variable, this.deps.colormaps[this.variable.default_colormap]);
     this.field.material.uniforms.uColormap.value =
@@ -120,7 +150,8 @@ export class GlobeInstance {
   }
 
   async setVariable(variableId: string): Promise<void> {
-    if (variableId === this.view.variable) return;
+    if (variableId === this.activeVariable) return;
+    this.activeVariable = variableId;
     this.view.variable = variableId;
     const cm = this.deps.colormaps[this.variable.default_colormap];
     this.field.material.uniforms.uColormap.value = makeColormapTexture(cm.colors);
@@ -146,6 +177,14 @@ export class GlobeInstance {
   setNoDataStyle(style: NoDataStyle): void {
     this.view.noDataStyle = style;
     applyNoDataStyleUniform(this.field.material, style);
+    // Override the colour-fill path applyNoDataStyleUniform just set: the
+    // field always discards at a no-data texel (see `backdrop`'s doc
+    // comment), never paints it directly.
+    this.field.material.uniforms.uSparseNoDataMode.value = 1;
+    this.backdrop.visible = style !== 'transparent';
+    if (style !== 'transparent') {
+      (this.backdrop.material as MeshBasicMaterial).color.set(style === 'white' ? 0xffffff : 0xcccccc);
+    }
   }
 
   private async loadFrame(age: number): Promise<void> {
@@ -169,31 +208,42 @@ export class GlobeInstance {
   }
 
   /**
-   * The `query-point` tool: raycast a click against the field sphere and
-   * report the CURRENTLY-DISPLAYED frame's value there. Deliberately reads
-   * only the texture already bound to the material -- no network fetch --
-   * so this stays instant regardless of how many Frames the Model has (a
-   * long deformation run can have ~1000; fetching all of them per click,
-   * the way core/queryPoint.ts's Age Series does for a dedicated
-   * time-series panel, would not be). Returns null if the click missed the
-   * globe or no frame is loaded yet.
+   * The `query-point` tool ("Anchored Point", see ADR-0011): raycast a
+   * click against the field sphere and report the CURRENTLY-DISPLAYED
+   * frame's value there, via the same engine-level monthProfile() the
+   * climate viewer's shift-click gesture uses (ClimateInstance's
+   * queryMonthProfileAt()) -- the engine boundary starts at a LonLat per
+   * ADR-0011, so raycasting stays here, in this wrapper's own code.
+   *
+   * Re-fetches the current Frame's texture via `this.frames.get()` rather
+   * than reading the material's uVolume uniform directly -- FrameCache
+   * already has it cached (this IS the texture on screen), so this costs
+   * no new network request, and it avoids reaching into the material's
+   * internals (same reasoning as ClimateInstance's own version).
+   *
+   * monthProfile() returns one CellSample per depth layer; this wrapper's
+   * v1 manifests are always single-layer whole-sphere fields (ndepth 1),
+   * so `profile[0]` is always the right one. A multi-layer manifest (e.g.
+   * a climate Model's Months) would need to pick whichever layer
+   * field.mesh is actually sampling, which this does not attempt.
+   *
+   * Returns null if the click missed the globe or the tool wasn't
+   * requested by the recipe.
    */
-  pickPoint(ndcX: number, ndcY: number): CellSample | null {
+  async queryPointAt(ndc: Vector2): Promise<CellSample | null> {
     if (!this.ui.queryPointEnabled) return null;
-    this.raycaster.setFromCamera(new Vector2(ndcX, ndcY), this.camera);
+    this.raycaster.setFromCamera(ndc, this.camera);
     const hit = this.raycaster.intersectObject(this.field.mesh, false)[0];
     if (!hit) return null;
-    const at: LonLat = vec3ToLonLat(hit.point.x, hit.point.y, hit.point.z);
+    const at = vec3ToLonLat(hit.point.x, hit.point.y, hit.point.z);
 
-    const tex = this.field.material.uniforms.uVolume.value as Data3DTexture | null;
-    if (!tex) return null;
     const res = this.manifest.resolutions.find((r) => r.id === this.manifest.default_resolution)!;
-    const idx = texelIndex(res.nlon, res.nlat, at.lon, at.lat);
-    const cell = cellCenter(res.nlon, res.nlat, idx % res.nlon, Math.floor(idx / res.nlon));
-    const byte = (tex.image.data as Uint8Array)[idx]; // layer 0 -- see class doc comment
-    const sentinel = this.manifest.no_data_sentinel;
-    const value = sentinel !== undefined && byte === sentinel ? NaN : texelToPhysical(this.variable, byte);
-    return { cell, value };
+    const variable = this.variable;
+    const frame = nearestFrame(this.manifest, this.view.age);
+    const tex = await this.frames.get(this.manifest, variable.id, frame.id);
+    const rule: NoDataRule = { sentinel: this.manifest.no_data_sentinel };
+    const profile = monthProfile(tex, res, variable, at, rule);
+    return profile[0] ?? null;
   }
 
   render(renderer: WebGLRenderer): void {
