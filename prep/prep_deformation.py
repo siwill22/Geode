@@ -335,6 +335,15 @@ def build_deformation_model(run_dir, out, model_id, name, source,
         "type": "convection",
         "source": source,
         "reconstruction_model": reconstruction_model,
+        # Which role this Model plays within its reconstruction's own family,
+        # for a viewer (or generator recipe) that wants to group/compare
+        # several Models -- see build_age_heatflux_model's twin field and
+        # docs/plans/consider-this-general-question-virtual-kay.md. Never
+        # inferred from the model id's own naming convention (that was the
+        # deformation viewer's original, now-retired approach); a declared
+        # catalog fact instead, the same discipline reconstruction_model
+        # already applies (ADR-0004).
+        "comparison_role": "Deformation",
         "lon_min": -180.0, "lon_max": 180.0,
         "lat_min": -90.0, "lat_max": 90.0,
         "depth_min_km": 0.0, "depth_max_km": 1.0,  # placeholder; no layer axis
@@ -445,6 +454,7 @@ def build_age_heatflux_model(run_dir, out, model_id, name, source,
                                 # meaningful while the data itself is static
         "source": source,
         "reconstruction_model": reconstruction_model,
+        "comparison_role": "Age & Heat Flux",
         "lon_min": -180.0, "lon_max": 180.0,
         "lat_min": -90.0, "lat_max": 90.0,
         "depth_min_km": 0.0, "depth_max_km": 1.0,
