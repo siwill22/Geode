@@ -1,8 +1,9 @@
-import type { GlobeTool } from '../core/tools';
+import type { GlobeTool, MultiGlobeConfig } from '../core/tools';
 
 export interface GroupGlobeConfig {
   title: string;
   tools: GlobeTool[];
+  multiGlobe?: MultiGlobeConfig;
   /** Dropdown label for the reconstruction_model axis. */
   axisALabel: string;
   /** Dropdown label for the comparison_role axis. */

@@ -39,7 +39,25 @@
           0 0 0 1px rgba(0, 0, 0, 0.5),
           0 1px 2px rgba(0, 0, 0, 0.5);
       }
-      /* Single globe, fixed corners -- no multi-globe tiling in v1. */
+      /* Multi-Globe toolbar (see docs/adr/0022) -- hidden by main.ts unless
+         the recipe declared `multiGlobe`. Mirrors index.html/climate.html's
+         identical #toolbar styling. */
+      #toolbar {
+        position: fixed; left: 50%; top: 8px; transform: translateX(-50%);
+        display: flex; gap: 8px; z-index: 20;
+      }
+      #toolbar button {
+        font: inherit; color: #d8dee4; background: #1b1f24;
+        border: 1px solid #3a4048; border-radius: 4px;
+        padding: 6px 12px; cursor: pointer;
+      }
+      #toolbar button:hover { background: #262b32; }
+      .sync-toggle {
+        display: flex; align-items: center; gap: 5px;
+        font: inherit; color: #d8dee4; background: #1b1f24;
+        border: 1px solid #3a4048; border-radius: 4px;
+        padding: 6px 12px; cursor: pointer;
+      }
       .status {
         position: fixed;
         padding: 6px 10px; border-radius: 4px;
@@ -90,6 +108,51 @@
         position: fixed;
         color: #5d6873; font-size: 11px; max-width: 40ch; text-align: right;
       }
+      /* The `time-series` tool's fan-chart box (core/timeSeriesPanel.ts) --
+         own top-left-ish anchor, positioned per-instance in JS (setRect()),
+         these rules only carry the look. overflow-y:auto since several
+         variable rows can exceed a tile's own height budget; width is set
+         inline, capped to fit the tile's own available space. */
+      .timeseries-anchor {
+        position: fixed;
+        display: flex; flex-direction: column; align-items: flex-start;
+        z-index: 10; overflow-y: auto; overflow-x: hidden;
+      }
+      .timeseries-toggle {
+        white-space: nowrap;
+        font: inherit; text-align: left; color: #97a3ad;
+        background: #1b1f24; border: 1px solid #3a4048; border-radius: 4px;
+        padding: 6px 12px; cursor: pointer;
+      }
+      .timeseries-toggle:hover { background: #262b32; }
+      .timeseries-body {
+        align-self: stretch;
+        width: 100%; box-sizing: border-box;
+        margin-top: 4px; padding: 8px;
+        background: #1b1f24; border: 1px solid #3a4048; border-radius: 4px;
+        display: none; flex-direction: column; gap: 8px;
+      }
+      .timeseries-row {
+        display: flex; flex-direction: column; gap: 2px;
+      }
+      .timeseries-label {
+        color: #97a3ad; font-size: 11px;
+      }
+      .timeseries-canvas {
+        display: block; width: 100%; max-width: 260px; height: 110px;
+        background: #12151a; border-radius: 2px; cursor: crosshair;
+      }
+      .timeseries-status {
+        color: #6b7580; font-size: 11px; font-style: italic;
+        min-height: 12px;
+      }
+      .timeseries-tooltip {
+        position: fixed; display: none; z-index: 30;
+        padding: 6px 8px; border-radius: 4px;
+        background: rgba(10, 12, 15, 0.95); border: 1px solid #3a4048;
+        color: #cfd6dd; font-size: 11px; line-height: 1.5;
+        pointer-events: none; white-space: nowrap;
+      }
       #error {
         position: fixed; left: 12px; top: 90px; max-width: 60ch;
         padding: 10px; border-radius: 4px; white-space: pre-wrap;
@@ -98,6 +161,10 @@
     </style>
   </head>
   <body>
+    <div id="toolbar" hidden>
+      <button id="add-globe">+ Add globe</button>
+      <label class="sync-toggle"><input type="checkbox" id="sync-age" /> sync time</label>
+    </div>
     <script type="module" src="/src/globe/main.ts"></script>
   </body>
 </html>

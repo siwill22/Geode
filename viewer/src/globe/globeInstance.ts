@@ -16,8 +16,11 @@ import {
 } from '../core/volume';
 import { monthProfile, type NoDataRule, type CellSample } from '../core/queryPoint';
 import { vec3ToLonLat } from '../core/constants';
+import { computeTimeSeries, type TimeSeriesPoint } from '../core/timeSeries';
+import { FrameByteCache } from '../core/frameByteCache';
 import { GlobeUI, type GlobeViewState, type GlobeTool } from './globeUi';
 import type { ArchiveIndex, ColormapData, Manifest, VariableInfo } from '../core/types';
+import type { Rect } from '../core/layout';
 
 export type { NoDataStyle };
 
@@ -41,6 +44,17 @@ export interface GlobeInstanceDeps {
   creditCoastlines: string | null;
   tools: GlobeTool[];
   title: string;
+}
+
+/** No onFocus -- unlike tomography's GlobeInstance, this wrapper has no
+ *  per-instance tool state competing with OrbitControls for the same drag
+ *  gesture, the same reasoning ClimateInstanceHooks already documents (see
+ *  docs/adr/0022). Age is the only Synced Field this wrapper type offers
+ *  (see CONTEXT.md) -- there's no depth-slice/month control in the fixed
+ *  `GlobeTool` vocabulary to broadcast. */
+export interface GlobeInstanceHooks {
+  onRemove(self: GlobeInstance): void;
+  onAgeChange?(self: GlobeInstance, age: number): void;
 }
 
 /**
@@ -67,6 +81,15 @@ export class GlobeInstance {
   };
 
   private frames: FrameCache;
+  /** CPU-only twin of `frames`, feeding the `time-series` tool's Field
+   *  Aggregate computation -- see climate/climateInstance.ts's identical
+   *  `bytes` field and ADR-0011 for why this is a separate cache from the
+   *  GPU-bound one above. */
+  private bytes: FrameByteCache;
+  /** Keyed by `${manifest.id}/${resolutionId}/${variable.id}`, caching the
+   *  PROMISE so two expands racing share the same in-flight fetch -- see
+   *  ClimateInstance's identical field for the full reasoning. */
+  private timeSeriesCache = new Map<string, Promise<TimeSeriesPoint[]>>();
   private ageToken = 0;
   private raycaster = new Raycaster();
   /** Guards setVariable() against a no-op re-entry -- deliberately NOT
@@ -87,11 +110,16 @@ export class GlobeInstance {
     return this.manifest.variables.find((v) => v.id === this.view.variable) ?? this.manifest.variables[0];
   }
 
-  constructor(private camera: Camera, private readonly deps: GlobeInstanceDeps) {
+  constructor(
+    private camera: Camera,
+    private readonly deps: GlobeInstanceDeps,
+    private readonly hooks: GlobeInstanceHooks,
+  ) {
     this.field.mesh.visible = true;
     this.field.setDepthKm(0); // whole-sphere paint, no depth axis in this wrapper's manifests
     this.scene.add(this.field.mesh);
     this.frames = new FrameCache(deps.archiveBase);
+    this.bytes = new FrameByteCache(deps.archiveBase);
 
     this.backdrop = new Mesh(
       createSurfaceGeometry('globe', BACKDROP_R),
@@ -102,10 +130,11 @@ export class GlobeInstance {
 
     this.ui = new GlobeUI(this.view, {
       onVariable: (id) => void this.setVariable(id),
-      onAge: (age) => this.applyAge(age),
+      onAge: (age) => { this.applyAge(age); this.hooks.onAgeChange?.(this, age); },
       onClip: (lo, hi) => this.applyClip(lo, hi),
       onNoDataStyle: (style) => this.setNoDataStyle(style),
-    }, deps.tools, deps.title);
+      onExpandTimeSeries: () => this.onExpandTimeSeries(),
+    }, deps.tools, deps.title, () => this.hooks.onRemove(this));
 
     if (deps.coastlineData) {
       // Blank, permanently disabled mask -- no cutaway concept here, but
@@ -141,6 +170,8 @@ export class GlobeInstance {
     const ageMax = Math.max(...ages);
     this.view.age = ageMin;
     this.ui.setAgeRange(ageMin, ageMax);
+    this.ui.setTimeSeriesAgeRange(ageMin, ageMax);
+    this.ui.setTimeSeriesVariables(this.pickableTimeSeriesVariables());
 
     await this.loadFrame(this.view.age);
     this.coastlines?.setAge(this.view.age);
@@ -172,6 +203,47 @@ export class GlobeInstance {
     this.coastlines?.setAge(age);
     void this.loadFrame(age);
     this.ui.setTimeInfo(`age ${age.toFixed(0)} Ma`);
+    this.ui.setTimeSeriesAge(age);
+  }
+
+  /** The variables a Field Aggregate `time-series` can meaningfully be
+   *  computed for -- unlike climate/climateInstance.ts's curated
+   *  TIME_SERIES_VARIABLE_IDS (a fixed allowlist that only makes sense for
+   *  ONE specific source), this wrapper type has no domain reason to
+   *  exclude any non-auxiliary variable: a generated site shows every
+   *  Field-Aggregate-computable variable its Model has, not a hardcoded
+   *  subset (see docs/adr/0023, ADR-0017's "never restrict without a
+   *  domain reason"). Categorical is still excluded -- "mean of class 3 and
+   *  class 7" is meaningless for a class index, the same exclusion
+   *  ClimateInstance applies. */
+  private pickableTimeSeriesVariables(): VariableInfo[] {
+    return this.manifest.variables.filter(
+      (v) => !v.overlay_only && !v.vector_only && !v.mask_only && !v.categorical,
+    );
+  }
+
+  /** Compute (or resolve from cache) the Field Aggregate series for every
+   *  pickable variable of this Model -- see ClimateInstance's identical
+   *  onExpandTimeSeries() for the full reasoning (shared cache keying,
+   *  retry-on-failure). */
+  private onExpandTimeSeries(): void {
+    const manifest = this.manifest;
+    const resolutionId = manifest.default_resolution;
+    for (const v of this.pickableTimeSeriesVariables()) {
+      const key = `${manifest.id}/${resolutionId}/${v.id}`;
+      const cached = this.timeSeriesCache.get(key);
+      if (cached) {
+        void cached.then((points) => this.ui.setTimeSeriesData(v.id, points));
+        continue;
+      }
+      this.ui.setTimeSeriesLoading(v.id);
+      const promise = computeTimeSeries(this.bytes, manifest, v, resolutionId);
+      this.timeSeriesCache.set(key, promise);
+      void promise.then((points) => this.ui.setTimeSeriesData(v.id, points)).catch((e: unknown) => {
+        console.error(e);
+        this.timeSeriesCache.delete(key); // let the next expand retry rather than caching a permanent failure
+      });
+    }
   }
 
   setNoDataStyle(style: NoDataStyle): void {
@@ -248,6 +320,12 @@ export class GlobeInstance {
 
   render(renderer: WebGLRenderer): void {
     renderer.render(this.scene, this.camera);
+  }
+
+  /** Move this instance's panel/status/legend/etc. onto a new tile -- see
+   *  core/multiInstanceHost.ts, docs/adr/0022. */
+  applyLayout(rect: Rect): void {
+    this.ui.setRect(rect);
   }
 
   dispose(): void {

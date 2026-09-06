@@ -7,7 +7,9 @@ import { loadArchive, loadColormaps, loadManifest } from '../core/volume';
 import {
   createProjectionCamera, createProjectionControls, updateProjectionCameraAspect,
 } from '../core/projection';
-import { GlobeInstance, type NoDataStyle } from './globeInstance';
+import type { Rect } from '../core/layout';
+import { MultiInstanceHost } from '../core/multiInstanceHost';
+import { GlobeInstance, type GlobeInstanceDeps, type NoDataStyle } from './globeInstance';
 import { GLOBE_CONFIG } from '../generated/config';
 
 // See deformation/main.ts for why this indirection exists: VITE_ARCHIVE_BASE
@@ -17,8 +19,10 @@ const ARCHIVE = import.meta.env.VITE_ARCHIVE_BASE ?? `${import.meta.env.BASE_URL
 
 document.title = GLOBE_CONFIG.title;
 
-// One globe, one camera, one Model -- no multi-globe support and no Plate
-// Carrée toggle in v1 (see the plan doc's fixed tool menu).
+// One shared camera for every tile -- see docs/adr/0022, tomography/main.ts's
+// original comment on why a single OrbitControls this way keeps rotation/
+// zoom locked together across an arbitrary number of tiles for free. No
+// Plate Carrée toggle in v1 (see the plan doc's fixed tool menu).
 const camera = createProjectionCamera('globe', innerWidth / innerHeight);
 
 const renderer = new WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
@@ -29,35 +33,115 @@ document.body.appendChild(renderer.domElement);
 
 const controls: OrbitControls = createProjectionControls('globe', camera, renderer.domElement);
 
-let instance: GlobeInstance;
+// --- globe instances ---------------------------------------------------
+//
+// Instance bookkeeping lives in core/multiInstanceHost.ts (docs/adr/0022).
+// Every instance shows the SAME dataset (this wrapper type is exactly one
+// Model, per generator/recipeTypes.ts) -- Multi-Globe here is purely about
+// comparing it at different ages side by side, gated entirely by whether
+// the recipe declared `multiGlobe` (see core/tools.ts's MultiGlobeConfig).
+
+const host = new MultiInstanceHost<GlobeInstance>(() => ({ width: innerWidth, height: innerHeight }));
+let deps: GlobeInstanceDeps;
+
+/** Push `source`'s current age into every OTHER instance's own state --
+ *  age is the only Synced Field this wrapper type offers (see CONTEXT.md). */
+function broadcastAge(source: GlobeInstance): void {
+  host.broadcast('age', source, source.view.age, (inst, age) => {
+    inst.applyAge(age);
+    inst.ui.refreshDisplay();
+  });
+}
+
+function createInstance(): GlobeInstance {
+  return new GlobeInstance(camera, deps, {
+    onRemove: (self) => removeInstance(self),
+    onAgeChange: (self) => broadcastAge(self),
+  });
+}
+
+function removeInstance(inst: GlobeInstance): void {
+  host.remove(inst);
+}
+
+async function addInstance(): Promise<void> {
+  const inst = createInstance();
+  host.add(inst);
+  await inst.boot();
+  // A globe added while sync is active joins the synced group immediately,
+  // rather than booting at age 0 and waiting for the next drag elsewhere.
+  broadcastAge(host.lastEditOrFocused('age')!);
+}
+
+// --- Multi-Globe toolbar -------------------------------------------------
+//
+// Always present in the static HTML (see globe.html) so scaffoldRepo.mjs
+// never has to template it per recipe -- same convention `ui.tools`
+// already uses (GlobeUI shows/hides its own controls at runtime). Hidden
+// entirely when the recipe didn't ask for it.
+
+const toolbar = document.getElementById('toolbar');
+const syncAgeCheckbox = document.getElementById('sync-age') as HTMLInputElement | null;
+
+if (GLOBE_CONFIG.multiGlobe) {
+  if (toolbar) toolbar.hidden = false;
+  document.getElementById('add-globe')?.addEventListener('click', () => {
+    void addInstance();
+  });
+  if (syncAgeCheckbox) {
+    syncAgeCheckbox.checked = GLOBE_CONFIG.multiGlobe.syncAge;
+    host.setSync('age', GLOBE_CONFIG.multiGlobe.syncAge);
+    syncAgeCheckbox.addEventListener('change', (e) => {
+      host.setSync('age', (e.target as HTMLInputElement).checked);
+      broadcastAge(host.lastEditOrFocused('age')!);
+    });
+  }
+}
 
 addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
   updateProjectionCameraAspect(camera, innerWidth / innerHeight);
+  host.relayout();
 });
 
+// --- interaction ---------------------------------------------------------
+//
+// Anchored Point (see docs/adr/0011, docs/adr/0016): shift-click queries the
+// currently-displayed variable at the clicked cell. Needs a tile hit AND
+// that tile's own NDC once more than one globe can be on screen -- mirrors
+// climate/main.ts's identical hitTest/ndcFor pattern.
+
+function hitTest(clientX: number, clientY: number): { inst: GlobeInstance; rect: Rect } | null {
+  for (let i = 0; i < host.instances.length; i++) {
+    const r = host.layoutRects[i];
+    if (r && clientX >= r.x && clientX < r.x + r.width
+      && clientY >= r.y && clientY < r.y + r.height) {
+      return { inst: host.instances[i], rect: r };
+    }
+  }
+  return null;
+}
+
 const ptr = new Vector2();
-function ndcFor(clientX: number, clientY: number): Vector2 {
-  ptr.x = (clientX / innerWidth) * 2 - 1;
-  ptr.y = -(clientY / innerHeight) * 2 + 1;
+function ndcFor(rect: Rect, clientX: number, clientY: number): Vector2 {
+  ptr.x = ((clientX - rect.x) / rect.width) * 2 - 1;
+  ptr.y = -((clientY - rect.y) / rect.height) * 2 + 1;
   return ptr;
 }
 
-// Anchored Point (see docs/adr/0011, docs/adr/0016): shift-click queries
-// the currently-displayed variable at the clicked cell. Shift owns this
-// gesture entirely -- OrbitControls is disabled only for its duration, the
-// same pattern climate/main.ts uses and for the same reason (a shift-drag
-// must not ALSO spin the globe underneath the query). controls.enabled is
-// reset unconditionally on pointerup, not conditioned on ev.shiftKey still
-// being true then, so releasing shift mid-drag can't wedge orbiting off.
 renderer.domElement.addEventListener('pointerdown', (ev) => {
+  const hit = hitTest(ev.clientX, ev.clientY);
+  if (hit) host.focused = hit.inst;
   if (ev.shiftKey) controls.enabled = false;
 });
 renderer.domElement.addEventListener('pointerup', (ev) => {
   controls.enabled = true;
-  if (!ev.shiftKey || !instance) return;
-  void instance.queryPointAt(ndcFor(ev.clientX, ev.clientY)).then((sample) => {
-    if (sample) instance.ui.showQueryResult(sample, instance.variable);
+  if (!ev.shiftKey) return;
+  const hit = hitTest(ev.clientX, ev.clientY);
+  if (!hit) return;
+  updateProjectionCameraAspect(camera, hit.rect.width / hit.rect.height);
+  void hit.inst.queryPointAt(ndcFor(hit.rect, ev.clientX, ev.clientY)).then((sample) => {
+    if (sample) hit.inst.ui.showQueryResult(sample, hit.inst.variable);
   });
 });
 
@@ -86,53 +170,88 @@ async function boot(): Promise<void> {
     }
   }
 
-  instance = new GlobeInstance(camera, {
+  deps = {
     archiveBase: ARCHIVE, archive, colormaps, manifest, coastlineData, creditCoastlines,
     tools: GLOBE_CONFIG.tools, title: GLOBE_CONFIG.title,
-  });
-  await instance.boot();
+  };
+
+  const first = createInstance();
+  host.add(first);
+  await first.boot();
 
   if (window.__globe) window.__globe.ready = true;
 }
 
 // --- test hook ---------------------------------------------------------
 // Drives the viewer from ad-hoc verification scripts, same shape as
-// window.__climate/window.__deformation.
+// window.__climate/window.__deformation. Flat methods target the FIRST
+// instance ("primary"), same convention window.__geode/__climate use; the
+// ...On(index, ...) methods target a specific instance.
 
 declare global {
   interface Window { __globe?: Record<string, unknown> }
 }
 
+function primary(): GlobeInstance { return host.instances[0]; }
+
 window.__globe = {
   ready: false,
-  setAge: (age: number) => { instance.applyAge(age); instance.ui.refreshDisplay(); },
+  setAge: (age: number) => {
+    const inst = primary();
+    inst.applyAge(age);
+    inst.ui.refreshDisplay();
+    broadcastAge(inst);
+  },
   setVariable: async (id: string) => {
-    await instance.setVariable(id);
-    instance.ui.refreshDisplay();
+    await primary().setVariable(id);
+    primary().ui.refreshDisplay();
   },
   setNoDataStyle: (style: NoDataStyle) => {
-    instance.setNoDataStyle(style);
-    instance.ui.refreshDisplay();
+    primary().setNoDataStyle(style);
+    primary().ui.refreshDisplay();
   },
-  queryPointAt: (ndcX: number, ndcY: number) => instance.queryPointAt(new Vector2(ndcX, ndcY)),
+  queryPointAt: (ndcX: number, ndcY: number) => primary().queryPointAt(new Vector2(ndcX, ndcY)),
   probeScreen: (o: { nx?: number; ny?: number } = {}) => {
     const gl = renderer.getContext();
     const w = renderer.domElement.width;
     const h = renderer.domElement.height;
-    renderer.render(instance.scene, camera);
+    renderer.render(primary().scene, camera);
     const x = Math.round(((o.nx ?? 0) * 0.5 + 0.5) * (w - 1));
     const y = Math.round(((o.ny ?? 0) * 0.5 + 0.5) * (h - 1));
     const px = new Uint8Array(4);
     gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
     return { x, y, rgb: [px[0], px[1], px[2]] };
   },
-  getGui: () => instance.ui.gui,
+  getGui: () => primary().ui.gui,
+  addGlobe: () => addInstance(),
+  removeGlobe: (index = host.instances.length - 1) => {
+    const inst = host.instances[index];
+    if (inst) removeInstance(inst);
+  },
+  globeCount: () => host.instances.length,
+  setSyncAge: (on: boolean) => {
+    host.setSync('age', on);
+    if (syncAgeCheckbox) syncAgeCheckbox.checked = on;
+    broadcastAge(host.lastEditOrFocused('age')!);
+  },
+  getSyncState: () => ({ syncAge: host.isSynced('age') }),
+  setAgeOn: (index: number, age: number) => {
+    const inst = host.instances[index];
+    inst.applyAge(age);
+    inst.ui.refreshDisplay();
+    broadcastAge(inst);
+  },
+  instanceState: (index: number) => {
+    const inst = host.instances[index];
+    return { age: inst.view.age, variable: inst.variable?.id };
+  },
   stats: () => ({
-    model: instance.manifest?.id,
-    variable: instance.variable?.id,
-    age: instance.view.age,
-    clip: [instance.view.clipMin, instance.view.clipMax],
-    noDataStyle: instance.view.noDataStyle,
+    model: primary().manifest?.id,
+    variable: primary().variable?.id,
+    age: primary().view.age,
+    clip: [primary().view.clipMin, primary().view.clipMax],
+    noDataStyle: primary().view.noDataStyle,
+    globeCount: host.instances.length,
   }),
 };
 
@@ -142,7 +261,18 @@ function animate(): void {
   requestAnimationFrame(animate);
   controls.update();
   clock.getDelta();
-  if (instance) instance.render(renderer);
+
+  renderer.setScissorTest(host.instances.length > 1);
+  for (let i = 0; i < host.instances.length; i++) {
+    const rect = host.layoutRects[i];
+    if (!rect) continue;
+    updateProjectionCameraAspect(camera, rect.width / rect.height);
+    const glY = innerHeight - rect.y - rect.height;
+    renderer.setViewport(rect.x, glY, rect.width, rect.height);
+    renderer.setScissor(rect.x, glY, rect.width, rect.height);
+    host.instances[i].render(renderer);
+  }
+  renderer.setScissorTest(false);
 }
 
 boot().catch((e) => {

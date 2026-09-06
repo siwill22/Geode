@@ -1,9 +1,10 @@
-import type { GlobeTool } from '../core/tools';
+import type { GlobeTool, MultiGlobeConfig } from '../core/tools';
 
 export interface GlobeConfig {
   modelId: string;
   title: string;
   tools: GlobeTool[];
+  multiGlobe?: MultiGlobeConfig;
 }
 
 /**

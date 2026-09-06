@@ -16,9 +16,12 @@ import {
 } from '../core/volume';
 import { monthProfile, type NoDataRule, type CellSample } from '../core/queryPoint';
 import { vec3ToLonLat } from '../core/constants';
+import { computeTimeSeries, type TimeSeriesPoint } from '../core/timeSeries';
+import { FrameByteCache } from '../core/frameByteCache';
 import { GroupGlobeUI, type GroupGlobeViewState } from './groupGlobeUi';
 import type { GlobeTool } from '../core/tools';
 import type { ArchiveIndex, ColormapData, Manifest, VariableInfo } from '../core/types';
+import type { Rect } from '../core/layout';
 
 export type { NoDataStyle };
 
@@ -49,10 +52,21 @@ export interface GroupGlobeInstanceDeps {
   defaultAxisB: string;
 }
 
+/** See globe/globeInstance.ts's GlobeInstanceHooks -- identical reasoning
+ *  (no onFocus, age is the only Synced Field this wrapper type offers). */
+export interface GroupGlobeInstanceHooks {
+  onRemove(self: GroupGlobeInstance): void;
+  onAgeChange?(self: GroupGlobeInstance, age: number): void;
+}
+
 interface GridSource {
   manifest: Manifest;
   variableId: string;
   frames: FrameCache;
+  /** CPU-only twin of `frames`, feeding the `time-series` tool's Field
+   *  Aggregate computation for THIS cell -- see globe/globeInstance.ts's
+   *  identical field. */
+  bytes: FrameByteCache;
 }
 
 /**
@@ -113,6 +127,9 @@ export class GroupGlobeInstance {
    *  `activeLayer` field. */
   private activeAxisA = '';
   private activeAxisB = '';
+  /** Keyed by `${manifest.id}/${resolutionId}/${variable.id}` -- see
+   *  globe/globeInstance.ts's identical field. */
+  private timeSeriesCache = new Map<string, Promise<TimeSeriesPoint[]>>();
 
   private get cell(): GridSource {
     return this.grid[this.view.axisA][this.view.axisB];
@@ -125,7 +142,11 @@ export class GroupGlobeInstance {
     return src.manifest.variables.find((v) => v.id === src.variableId) ?? src.manifest.variables[0];
   }
 
-  constructor(private camera: Camera, private readonly deps: GroupGlobeInstanceDeps) {
+  constructor(
+    private camera: Camera,
+    private readonly deps: GroupGlobeInstanceDeps,
+    private readonly hooks: GroupGlobeInstanceHooks,
+  ) {
     this.field.mesh.visible = true;
     this.field.setDepthKm(0); // whole-sphere paint, no depth axis in this wrapper's manifests
     this.scene.add(this.field.mesh);
@@ -141,10 +162,11 @@ export class GroupGlobeInstance {
       onAxisA: (v) => void this.setAxisA(v),
       onAxisB: (v) => void this.setAxisB(v),
       onVariable: (id) => void this.setVariable(id),
-      onAge: (age) => this.applyAge(age),
+      onAge: (age) => { this.applyAge(age); this.hooks.onAgeChange?.(this, age); },
       onClip: (lo, hi) => this.applyClip(lo, hi),
       onNoDataStyle: (style) => this.setNoDataStyle(style),
-    }, deps.tools, deps.title, deps.axisALabel, deps.axisBLabel);
+      onExpandTimeSeries: () => this.onExpandTimeSeries(),
+    }, deps.tools, deps.title, deps.axisALabel, deps.axisBLabel, () => this.hooks.onRemove(this));
   }
 
   async boot(): Promise<void> {
@@ -176,10 +198,12 @@ export class GroupGlobeInstance {
     this.view.age = this.isStaticAxisB(this.view.axisB) ? ages[0] : Math.min(...ages);
     this.lastAgeByAxisB[this.view.axisB] = this.view.age;
     this.ui.setAgeRange(Math.min(...ages), Math.max(...ages));
+    this.ui.setTimeSeriesAgeRange(Math.min(...ages), Math.max(...ages));
     this.ui.setAgeControlVisible(!this.isStaticAxisB(this.view.axisB));
 
     this.view.variable = this.cell.variableId;
     this.ui.setVariables(this.manifest.variables);
+    this.ui.setTimeSeriesVariables(this.pickableTimeSeriesVariables());
     this.ui.setVariable(this.variable, this.deps.colormaps[this.variable.default_colormap]);
     this.field.material.uniforms.uColormap.value =
       makeColormapTexture(this.deps.colormaps[this.variable.default_colormap].colors);
@@ -190,6 +214,7 @@ export class GroupGlobeInstance {
     this.ui.setTimeInfo(
       this.isStaticAxisB(this.view.axisB) ? 'present day' : `age ${this.view.age.toFixed(0)} Ma`,
     );
+    this.ui.setTimeSeriesAge(this.view.age);
     this.updateCredit();
     this.ui.setStatus('');
     this.ui.refreshDisplay();
@@ -200,7 +225,45 @@ export class GroupGlobeInstance {
     if (!entry) throw new Error(`no model in archive with id ${modelId}`);
     const manifest = await loadManifest(this.deps.archiveBase, entry.path);
     const variable = manifest.variables.find((v) => v.id === manifest.default_variable) ?? manifest.variables[0];
-    return { manifest, variableId: variable.id, frames: new FrameCache(this.deps.archiveBase) };
+    return {
+      manifest,
+      variableId: variable.id,
+      frames: new FrameCache(this.deps.archiveBase),
+      bytes: new FrameByteCache(this.deps.archiveBase),
+    };
+  }
+
+  /** See globe/globeInstance.ts's identical method -- same "no curated
+   *  allowlist" reasoning (ADR-0017/docs/adr/0023), applied to whichever
+   *  grid cell is CURRENTLY active. */
+  private pickableTimeSeriesVariables(): VariableInfo[] {
+    return this.manifest.variables.filter(
+      (v) => !v.overlay_only && !v.vector_only && !v.mask_only && !v.categorical,
+    );
+  }
+
+  /** See globe/globeInstance.ts's identical method -- computes for the
+   *  CURRENTLY active grid cell, same "reflects whichever is active now"
+   *  reasoning as ClimateInstance.onExpandTimeSeries(). */
+  private onExpandTimeSeries(): void {
+    const cell = this.cell;
+    const manifest = cell.manifest;
+    const resolutionId = manifest.default_resolution;
+    for (const v of this.pickableTimeSeriesVariables()) {
+      const key = `${manifest.id}/${resolutionId}/${v.id}`;
+      const cached = this.timeSeriesCache.get(key);
+      if (cached) {
+        void cached.then((points) => this.ui.setTimeSeriesData(v.id, points));
+        continue;
+      }
+      this.ui.setTimeSeriesLoading(v.id);
+      const promise = computeTimeSeries(cell.bytes, manifest, v, resolutionId);
+      this.timeSeriesCache.set(key, promise);
+      void promise.then((points) => this.ui.setTimeSeriesData(v.id, points)).catch((e: unknown) => {
+        console.error(e);
+        this.timeSeriesCache.delete(key);
+      });
+    }
   }
 
   /** A comparison-role combination is "static" when every reconstruction's
@@ -267,6 +330,7 @@ export class GroupGlobeInstance {
     const ageMin = Math.min(...ages);
     const ageMax = Math.max(...ages);
     this.ui.setAgeRange(ageMin, ageMax);
+    this.ui.setTimeSeriesAgeRange(ageMin, ageMax);
     if (!this.isStaticAxisB(this.activeAxisB)) {
       this.view.age = Math.min(Math.max(this.view.age, ageMin), ageMax);
     }
@@ -274,6 +338,7 @@ export class GroupGlobeInstance {
 
     this.view.variable = this.cell.variableId;
     this.ui.setVariables(this.manifest.variables);
+    this.ui.setTimeSeriesVariables(this.pickableTimeSeriesVariables());
     this.ui.setVariable(this.variable, this.deps.colormaps[this.variable.default_colormap]);
     this.field.material.uniforms.uColormap.value =
       makeColormapTexture(this.deps.colormaps[this.variable.default_colormap].colors);
@@ -282,6 +347,7 @@ export class GroupGlobeInstance {
     this.ui.setTimeInfo(
       this.isStaticAxisB(this.activeAxisB) ? 'present day' : `age ${this.view.age.toFixed(0)} Ma`,
     );
+    this.ui.setTimeSeriesAge(this.view.age);
     this.ui.refreshDisplay();
     this.updateCredit();
   }
@@ -297,10 +363,12 @@ export class GroupGlobeInstance {
     this.view.age = age;
     this.coastlines?.setAge(age);
     this.ui.setAgeRange(Math.min(...ages), Math.max(...ages));
+    this.ui.setTimeSeriesAgeRange(Math.min(...ages), Math.max(...ages));
     this.ui.setAgeControlVisible(!this.isStaticAxisB(axisB));
 
     this.view.variable = this.cell.variableId;
     this.ui.setVariables(this.manifest.variables);
+    this.ui.setTimeSeriesVariables(this.pickableTimeSeriesVariables());
     this.ui.setVariable(this.variable, this.deps.colormaps[this.variable.default_colormap]);
     this.field.material.uniforms.uColormap.value =
       makeColormapTexture(this.deps.colormaps[this.variable.default_colormap].colors);
@@ -308,6 +376,7 @@ export class GroupGlobeInstance {
     this.applyClip(this.variable.default_clip_min, this.variable.default_clip_max);
     await this.loadFrame(age);
     this.ui.setTimeInfo(this.isStaticAxisB(axisB) ? 'present day' : `age ${age.toFixed(0)} Ma`);
+    this.ui.setTimeSeriesAge(age);
     this.ui.refreshDisplay();
     this.updateCredit();
   }
@@ -341,6 +410,7 @@ export class GroupGlobeInstance {
     this.coastlines?.setAge(age);
     void this.loadFrame(age);
     this.ui.setTimeInfo(`age ${age.toFixed(0)} Ma`);
+    this.ui.setTimeSeriesAge(age);
   }
 
   setNoDataStyle(style: NoDataStyle): void {
@@ -403,6 +473,11 @@ export class GroupGlobeInstance {
 
   render(renderer: WebGLRenderer): void {
     renderer.render(this.scene, this.camera);
+  }
+
+  /** See globe/globeInstance.ts's identical applyLayout(). */
+  applyLayout(rect: Rect): void {
+    this.ui.setRect(rect);
   }
 
   dispose(): void {

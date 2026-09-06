@@ -1,9 +1,12 @@
 import GUI, { type Controller } from 'lil-gui';
 import type { NoDataStyle } from '../core/material';
 import { clampClipOrder, clipSliderStep } from '../core/clipRange';
+import { TimeSeriesPanel } from '../core/timeSeriesPanel';
 import type { ColormapData, VariableInfo } from '../core/types';
 import type { CellSample } from '../core/queryPoint';
+import type { TimeSeriesPoint } from '../core/timeSeries';
 import type { GlobeTool } from '../core/tools';
+import type { Rect } from '../core/layout';
 
 export type { GlobeTool };
 
@@ -23,6 +26,10 @@ export interface GlobeUICallbacks {
   onAge(age: number): void;
   onClip(lo: number, hi: number): void;
   onNoDataStyle(style: NoDataStyle): void;
+  /** The `time-series` panel was just expanded -- see
+   *  TimeSeriesPanel.setVariables()'s own doc comment for why every open
+   *  fires this rather than tracking "already requested" here. */
+  onExpandTimeSeries(): void;
 }
 
 const LOG_SCALE_MIN_RATIO = 100;
@@ -58,14 +65,28 @@ export class GlobeUI {
   private legendKey!: HTMLDivElement;
   private credit: HTMLDivElement;
   private queryPanel: HTMLDivElement | null = null;
+  /** Positioned per-instance by setRect(); anchors the panel's top-right
+   *  corner -- see tomography/ui.ts's identical panelAnchor, the pattern
+   *  this generalizes for Multi-Globe (docs/adr/0022). */
+  private panelAnchor: HTMLDivElement;
+  /** The `time-series` tool's fan-chart box, extracted into core/ so this
+   *  wrapper and groupGlobe/groupGlobeUi.ts don't each duplicate the DOM/
+   *  canvas plumbing (see docs/adr/0023) -- null unless the recipe asked
+   *  for it. */
+  private timeSeriesPanel: TimeSeriesPanel | null = null;
+  private rect: Rect = { x: 0, y: 0, width: innerWidth, height: innerHeight };
 
   constructor(
     private state: GlobeViewState,
     private cb: GlobeUICallbacks,
     private readonly tools: GlobeTool[],
     title: string,
+    onRemove?: () => void,
   ) {
-    this.gui = new GUI({ title });
+    this.panelAnchor = document.createElement('div');
+    Object.assign(this.panelAnchor.style, { position: 'fixed', zIndex: '10' });
+    document.body.appendChild(this.panelAnchor);
+    this.gui = new GUI({ title, container: this.panelAnchor });
 
     this.variableCtrl = this.gui
       .add(this.state, 'variable', {})
@@ -138,6 +159,58 @@ export class GlobeUI {
     this.credit.className = 'credit';
     Object.assign(this.credit.style, { bottom: '8px', right: '12px' });
     document.body.appendChild(this.credit);
+
+    if (tools.includes('time-series')) {
+      this.timeSeriesPanel = new TimeSeriesPanel({ onExpand: () => cb.onExpandTimeSeries() });
+    }
+
+    if (onRemove) {
+      this.gui.add({ remove: onRemove }, 'remove').name('remove this globe');
+    }
+  }
+
+  /** Move this instance's panel, status, time-info, legend, query panel and
+   *  credit onto a new tile, in CSS pixels -- called once at boot with the
+   *  full window and again whenever the globe grid is relaid out (see
+   *  core/multiInstanceHost.ts, docs/adr/0022). */
+  setRect(rect: Rect): void {
+    this.rect = rect;
+    this.applyRect();
+  }
+
+  private applyRect(): void {
+    const { x, y, width, height } = this.rect;
+    const rightEdge = innerWidth - (x + width);
+    const bottomEdge = innerHeight - (y + height);
+    // Anchored to the same corners the original fixed-viewport CSS put each
+    // element in, matching tomography/ui.ts's identical convention.
+    this.panelAnchor.style.top = `${y + 8}px`;
+    this.panelAnchor.style.right = `${rightEdge + 8}px`;
+    this.status.style.top = `${y + 12}px`;
+    this.status.style.left = `${x + 12}px`;
+    this.timeInfo.style.top = `${y + 44}px`;
+    this.timeInfo.style.left = `${x + 12}px`;
+    if (this.queryPanel) {
+      this.queryPanel.style.top = `${y + 76}px`;
+      this.queryPanel.style.left = `${x + 12}px`;
+    }
+    if (this.legend) {
+      this.legend.style.bottom = `${bottomEdge + 12}px`;
+      this.legend.style.left = `${x + 12}px`;
+    }
+    this.credit.style.bottom = `${bottomEdge + 8}px`;
+    this.credit.style.right = `${rightEdge + 12}px`;
+
+    if (this.timeSeriesPanel) {
+      // Below status(y+12)/timeInfo(y+44)/queryPanel(y+76)'s fixed top-left
+      // stack; above the legend, whose own height varies (taller for a
+      // categorical class key) -- measured fresh each call rather than
+      // assumed, same reasoning as panelWidth below.
+      const panelWidth = this.panelAnchor.getBoundingClientRect().width;
+      const legendHeight = this.legend ? this.legend.getBoundingClientRect().height : 0;
+      const bottomPx = bottomEdge + 12 + (this.legend ? legendHeight + 8 : 0);
+      this.timeSeriesPanel.setRect(this.rect, { topOffset: 108, bottomPx, panelWidth });
+    }
   }
 
   get queryPointEnabled(): boolean {
@@ -299,6 +372,26 @@ export class GlobeUI {
     this.queryPanel.style.display = 'block';
   }
 
+  setTimeSeriesAgeRange(min: number, max: number): void {
+    this.timeSeriesPanel?.setAgeRange(min, max);
+  }
+
+  setTimeSeriesVariables(variables: VariableInfo[]): void {
+    this.timeSeriesPanel?.setVariables(variables.map((v) => ({ id: v.id, name: v.name })));
+  }
+
+  setTimeSeriesLoading(variableId: string): void {
+    this.timeSeriesPanel?.setLoading(variableId);
+  }
+
+  setTimeSeriesData(variableId: string, points: TimeSeriesPoint[]): void {
+    this.timeSeriesPanel?.setData(variableId, points);
+  }
+
+  setTimeSeriesAge(age: number): void {
+    this.timeSeriesPanel?.setAge(age);
+  }
+
   refreshDisplay(): void {
     this.gui.controllersRecursive().forEach((c) => c.updateDisplay());
   }
@@ -319,10 +412,12 @@ export class GlobeUI {
 
   dispose(): void {
     this.gui.destroy();
+    this.panelAnchor.remove();
     this.status.remove();
     this.timeInfo.remove();
     this.legend?.remove();
     this.queryPanel?.remove();
     this.credit.remove();
+    this.timeSeriesPanel?.dispose();
   }
 }
