@@ -163,6 +163,15 @@ export class ClimateUI {
    *  to the Time Series chart; this one is click-driven, has its own close
    *  button, and stays open until dismissed. See showQueryPanel(). */
   private queryPanel: HTMLDivElement;
+  /** The profile/canvas/caption currently shown in `queryPanel`, kept so
+   *  updateQueryMonth() can redraw the marker in place when the month
+   *  slider moves -- null whenever the last shown result had no month axis
+   *  (paleogeography) or was categorical (a single word, no canvas/marker
+   *  to move). See showQueryPanel()'s own `profile.length === 13` check for
+   *  why that's the signal used, not a separately threaded flag. */
+  private queryMonthProfile: {
+    profile: CellSample[]; canvas: HTMLCanvasElement; caption: HTMLDivElement;
+  } | null = null;
   /** The Frame age range to plot the X axis over -- the manifest's own full
    *  range (see setAgeRange()), NOT the span of whichever points happen to
    *  be computed so far, so the marker line and axis stay stable as rows
@@ -196,11 +205,19 @@ export class ClimateUI {
     private cb: ClimateUICallbacks,
     title = 'Geode Paleoclimate',
     onRemove?: () => void,
+    // Every additional globe past the first starts with its panel collapsed
+    // to just the title bar (see main.ts's addInstance()) -- with several
+    // Multi-Globe instances each carrying a full panel, the panels
+    // themselves were obscuring most of the screen. The FIRST globe keeps
+    // the original, always-open behaviour: nothing about a single globe's
+    // panel was ever a complaint.
+    startCollapsed = false,
   ) {
     this.panelAnchor = document.createElement('div');
     Object.assign(this.panelAnchor.style, { position: 'fixed', zIndex: '10' });
     document.body.appendChild(this.panelAnchor);
     this.gui = new GUI({ title, container: this.panelAnchor });
+    if (startCollapsed) this.gui.close();
     // 'layer' picks which MODEL is active (the CESM climate simulation vs.
     // the Scotese paleogeography raster) -- labelled "Climate" rather than
     // any one variable's name, since 'variable' below is what actually
@@ -642,6 +659,7 @@ export class ClimateUI {
     ageMa: number, profile: CellSample[], currentIndex?: number,
   ): void {
     this.queryPanel.replaceChildren();
+    this.queryMonthProfile = null; // set below only for the non-categorical, month-axis case
     const close = document.createElement('span');
     close.className = 'qp-close';
     close.textContent = '✕';
@@ -689,6 +707,9 @@ export class ClimateUI {
         const last = profile[profile.length - 1];
         caption.textContent = profile.length === 13 ? `Annual: ${fmt(last.value)}` : fmt(last.value);
       }
+      // Only a real month axis (13 layers) has a marker worth keeping live --
+      // see updateQueryMonth(), called from ClimateInstance.applyMonth().
+      if (profile.length === 13) this.queryMonthProfile = { profile, canvas, caption };
     }
 
     this.queryPanel.style.display = 'block';
@@ -699,6 +720,21 @@ export class ClimateUI {
 
   hideQueryPanel(): void {
     this.queryPanel.style.display = 'none';
+  }
+
+  /** Move the Anchored Point query panel's orange month marker (and its
+   *  caption) to the NEW month -- called on every month-slider drag so an
+   *  open Month Profile result stays in sync with what's actually selected,
+   *  the same "always show the reader where 'now' sits" rule
+   *  drawTimeSeriesRow()'s age marker already follows. A no-op whenever no
+   *  month-axis result is currently shown (see `queryMonthProfile`'s own
+   *  doc comment) or the panel has since been closed. */
+  updateQueryMonth(month: number): void {
+    if (!this.queryMonthProfile || this.queryPanel.style.display === 'none') return;
+    const { profile, canvas, caption } = this.queryMonthProfile;
+    this.drawQueryProfile(canvas, profile, month);
+    const fmt = (v: number) => (Number.isNaN(v) ? '—' : this.formatTick(v));
+    caption.textContent = `${MONTH_NAMES[month]}: ${fmt(profile[month].value)}`;
   }
 
   /**
@@ -1167,7 +1203,14 @@ export class ClimateUI {
     }
 
     const bottomBarHeight = this.bottomBar.getBoundingClientRect().height;
-    this.timeSeriesAnchor.style.top = `${y + 8}px`;
+    // +48, not +8: clears the page-level #globe-menu-toggle icon (see
+    // climate.html), which sits fixed at the screen's actual top-left
+    // corner regardless of which tile's own timeSeriesAnchor happens to
+    // land there -- for a single globe (the common case) this tile's own
+    // top-left IS the screen's top-left, so without this the toggle button
+    // and the icon would draw on top of each other.
+    const topClear = y + 48;
+    this.timeSeriesAnchor.style.top = `${topClear}px`;
     this.timeSeriesAnchor.style.left = `${x + 12}px`;
     this.timeSeriesAnchor.style.bottom = `${innerHeight - (y + height) + bottomBarHeight + 20}px`;
     // Capped to whatever's actually left of the tile after panelAnchor's own
@@ -1181,7 +1224,7 @@ export class ClimateUI {
     this.timeSeriesAnchor.style.width = `${Math.max(140, Math.min(260, available))}px`;
 
     const toggleHeight = this.timeSeriesToggle.getBoundingClientRect().height;
-    this.status.style.top = `${y + 8 + toggleHeight + 8}px`;
+    this.status.style.top = `${topClear + toggleHeight + 8}px`;
     this.status.style.left = `${x + 12}px`;
   }
 

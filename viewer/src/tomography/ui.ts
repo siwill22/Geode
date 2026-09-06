@@ -86,6 +86,11 @@ export class UI {
     private cb: UICallbacks,
     title = 'Geode',
     onRemove?: () => void,
+    // Every additional globe past the first starts collapsed to just its
+    // title bar -- see climate/climateUi.ts's identical parameter for the
+    // full reasoning (several full panels from Multi-Globe/the "Start Here"
+    // presets otherwise obscure most of the screen).
+    startCollapsed = false,
   ) {
     // lil-gui's own auto-placement is a single fixed panel pinned to the
     // window's top-right corner, which is right for one globe but would stack
@@ -97,6 +102,7 @@ export class UI {
     Object.assign(this.panelAnchor.style, { position: 'fixed', zIndex: '10' });
     document.body.appendChild(this.panelAnchor);
     this.gui = new GUI({ title, container: this.panelAnchor });
+    if (startCollapsed) this.gui.close();
 
     // Quick access: added directly to the panel root, above every folder and
     // never collapsed with one -- these are the two controls scrubbed
@@ -117,14 +123,31 @@ export class UI {
       .onChange(() => cb.onDepthSlice());
 
     const models: Record<string, string> = {};
-    // Climate/paleogeography models have their own page (climate.html) with
-    // an interface suited to them; listing one here would just be a
-    // confusing dead end, since this panel offers no path to anything but
-    // its cutaway/isosurface/sinking-rate controls, none of which apply to a
-    // single-layer field.
-    const CLIMATE_PAGE_TYPES = new Set(['climate', 'paleogeography']);
+    // Climate/paleogeography models have their own page (climate.html), and
+    // Valdes/BRIDGE's Monthly/Ocean Depth Layers have their own dedicated
+    // instance (valdes.html, see docs/adr/0008) -- all four have an
+    // interface suited to them; listing one here would just be a confusing
+    // dead end, since this panel offers no path to anything but its
+    // cutaway/isosurface/sinking-rate controls (no month axis, in
+    // particular), none of which apply to those Layers.
+    const OTHER_PAGE_TYPES = new Set([
+      'climate', 'paleogeography', 'climate-monthly', 'climate-ocean-depth',
+    ]);
     for (const m of archive.models) {
-      if (!CLIMATE_PAGE_TYPES.has(m.type)) models[m.name] = m.id;
+      // fixture-* entries are synthetic data for scripts/shoot.mjs's own
+      // acceptance checks -- never a real published model, so never offered
+      // here. A Model declaring reconstruction_model/comparison_role is a
+      // member of a comparison family (e.g. Cao2024/Muller2019 Deformation
+      // vs. Age & Heat Flux) meant to be switched between via the
+      // generator's model-group-globe wrapper's two dedicated axis
+      // dropdowns -- exposed one-by-one in this plain single-model list, it
+      // reads as four confusingly-similar near-duplicate entries with no
+      // way to see they're related. Same exclusion tomography/main.ts's
+      // Atlantic preset already applies for the same reason.
+      if (!OTHER_PAGE_TYPES.has(m.type) && !m.id.startsWith('fixture-')
+        && !m.reconstruction_model && !m.comparison_role) {
+        models[m.name] = m.id;
+      }
     }
 
     // "Data": what to look at and how to colour it -- model/variable choice

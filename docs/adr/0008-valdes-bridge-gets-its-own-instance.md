@@ -47,3 +47,25 @@ answer.
 Any existing link or workflow pointing at Valdes-in-`climate.html` breaks.
 Nothing in this repo currently treats that URL as a stable, external
 contract, so this is accepted rather than mitigated.
+
+## Amendment: Atmosphere restored to climate.html
+
+Removing Valdes/BRIDGE from `climate.html` **entirely** turned out to go
+further than this ADR's own reasoning justified. The three numbered reasons
+above are all about the genuinely incompatible Ocean Layer (a different axis
+`climate.html`'s Month-based UI doesn't drive) — none of them argue against
+the Atmosphere Layer specifically, which this ADR's own opening paragraph
+already says fit `climate.html`'s existing UI fine before this decision.
+Losing it from `climate.html` was a real, user-visible regression with no
+matching benefit.
+
+`climate.html` now includes any Model of type `climate-monthly` (Valdes/
+BRIDGE's Atmosphere Layer) alongside `climate`, treated exactly like Li et
+al./Pohl et al. — same dropdown, same Month/Time-Series/query-point
+machinery, since the underlying `Manifest` shape is identical. `valdes.html`
+remains the sole home for `climate-ocean-depth` (Ocean), where this ADR's
+reasoning still fully holds, and continues to also offer Atmosphere as its
+own second Layer — the same data is now reachable from both places, which
+is fine: nothing in this repo treats "which viewer serves which Model" as
+an exclusivity guarantee, only `archive.json`'s own `type` field decides
+what a given viewer will show.

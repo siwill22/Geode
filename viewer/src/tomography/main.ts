@@ -12,7 +12,8 @@ import {
   loadArchive, loadColormaps, nearestFrame,
 } from '../core/volume';
 import { GlobeInstance, type GlobeInstanceDeps } from './instance';
-import { tileGrid, type Rect } from '../core/layout';
+import type { Rect } from '../core/layout';
+import { MultiInstanceHost } from '../core/multiInstanceHost';
 import type { IsosurfaceState } from './isosurface';
 import { sinkingDepthKm, type DepthSliceState } from '../core/depthSlice';
 import type { SurfaceMode } from './ui';
@@ -60,111 +61,86 @@ controls.maxDistance = 12;
 controls.enablePan = false;
 
 // --- globe instances ---------------------------------------------------
+//
+// Instance bookkeeping (the array, tileGrid() relayout, focus, and the
+// Synced Field broadcast registry) lives in core/multiInstanceHost.ts --
+// see docs/adr/0022. What's left here is tomography-specific: which fields
+// are actually syncable (age, depth-slice -- see below), and focus driving
+// OrbitControls' enabled state / which instance Enter/Escape/dblclick act
+// on, which only makes sense for a viewer with per-instance tool state.
 
-const instances: GlobeInstance[] = [];
-let layoutRects: Rect[] = [];
+const host = new MultiInstanceHost<GlobeInstance>(() => ({ width: innerWidth, height: innerHeight }));
 let deps: GlobeInstanceDeps;
 let defaultModelId = '';
-
-/** The globe that OrbitControls' enabled state and Enter/Escape/dblclick act
- *  on: whichever globe was last clicked, or whose panel last changed tool. */
-let focusedInstance: GlobeInstance;
 
 // --- cross-globe sync ---------------------------------------------------
 //
 // Rotation/zoom are locked across every globe for free (one shared camera).
-// Age and depth-slice are not -- each instance owns its own ViewState -- so
-// linking them is an explicit broadcast: a user edit on one instance pushes
-// the new value into every OTHER instance's own state and re-runs that
-// instance's own applyAge()/applyDepthSlice(), reusing its existing
-// per-model guards (nearestFrame clamping, the tomography-only sinking-mode
-// check, the shader's own out-of-range no-data colour) unchanged. Kept as
-// two independent flags, matching the existing precedent that cutaway,
+// Age and depth-slice are Synced Fields (see CONTEXT.md) -- each instance
+// owns its own ViewState, so linking them is an explicit broadcast through
+// the host: a user edit on one instance pushes the new value into every
+// OTHER instance's own state and re-runs that instance's own
+// applyAge()/applyDepthSlice(), reusing its existing per-model guards
+// (nearestFrame clamping, the tomography-only sinking-mode check, the
+// shader's own out-of-range no-data colour) unchanged. Kept as two
+// independent fields, matching the existing precedent that cutaway,
 // isosurface and depth-slice are manually independent rather than
 // auto-coupled -- comparing two different ages on purpose still has to work.
-
-let syncAge = false;
-let syncDepthSlice = false;
-
-/**
- * Whichever instance most recently had its age / depth-slice edited --
- * separate from focusedInstance on purpose. focusedInstance is set by
- * clicking a globe's canvas tile or switching its cutaway tool; a user
- * configuring a globe's age or depth slice typically does that entirely
- * through that globe's OWN panel, without ever clicking its canvas tile, so
- * focusedInstance can easily still be some OTHER globe. Snapping from the
- * wrong one when a sync toggle switches on would silently clobber whatever
- * was just configured -- which is exactly the bug this was chasing. Falls
- * back to focusedInstance until an edit has actually happened.
- */
-let lastAgeEdit: GlobeInstance | null = null;
-let lastDepthSliceEdit: GlobeInstance | null = null;
 
 /**
  * Push `source`'s current age into every OTHER instance's own state. This is
  * the one place that logic lives -- called from the UI callback (a real
  * slider drag), from the test hook that edits one instance directly, from
  * turning a sync flag on, and from a globe being added while a sync is
- * active. All of those are "this instance's age changed," which is exactly
- * what this function is for -- it also records `source` as the sync
- * reference regardless of whether syncAge happens to be on at the moment.
+ * active.
  */
 function broadcastAge(source: GlobeInstance): void {
-  lastAgeEdit = source;
-  if (!syncAge) return;
-  const age = source.view.reconstructionAge;
-  for (const inst of instances) {
-    if (inst === source) continue;
+  host.broadcast('age', source, source.view.reconstructionAge, (inst, age) => {
     inst.applyAge(age);
     refreshGUI(inst);
-  }
+  });
 }
 
 function broadcastDepthSlice(source: GlobeInstance): void {
-  lastDepthSliceEdit = source;
-  if (!syncDepthSlice) return;
-  const state = { ...source.view.depthSlice };
-  for (const inst of instances) {
-    if (inst === source) continue;
+  host.broadcast('depthSlice', source, { ...source.view.depthSlice }, (inst, state) => {
     Object.assign(inst.view.depthSlice, state);
     inst.applyDepthSlice();
     refreshGUI(inst);
-  }
+  });
 }
 
 function relayout(): void {
-  layoutRects = tileGrid(instances.length, innerWidth, innerHeight);
-  instances.forEach((inst, i) => inst.applyLayout(layoutRects[i]));
+  host.relayout();
 }
 
-function createInstance(label: string): GlobeInstance {
+function createInstance(label: string, startCollapsed = false): GlobeInstance {
   let inst!: GlobeInstance;
   inst = new GlobeInstance(camera, deps, {
     onFocus: (self) => {
-      focusedInstance = self;
+      host.focused = self;
       controls.enabled = !self.toolActive(modifierHeld);
     },
     onRemove: (self) => removeInstance(self),
     onAgeChange: (self) => broadcastAge(self),
     onDepthSliceChange: (self) => broadcastDepthSlice(self),
-  }, label);
+  }, label, startCollapsed);
   return inst;
 }
 
 /** Used by both the toolbar checkbox and the test hook, so "snap every other
  *  globe to the focused one's value" lives in exactly one place. */
 function setSyncAge(on: boolean): void {
-  syncAge = on;
+  host.setSync('age', on);
   const cb = document.getElementById('sync-age') as HTMLInputElement | null;
   if (cb) cb.checked = on;
-  broadcastAge(lastAgeEdit ?? focusedInstance);
+  broadcastAge(host.lastEditOrFocused('age')!);
 }
 
 function setSyncDepthSlice(on: boolean): void {
-  syncDepthSlice = on;
+  host.setSync('depthSlice', on);
   const cb = document.getElementById('sync-depth') as HTMLInputElement | null;
   if (cb) cb.checked = on;
-  broadcastDepthSlice(lastDepthSliceEdit ?? focusedInstance);
+  broadcastDepthSlice(host.lastEditOrFocused('depthSlice')!);
 }
 
 document.getElementById('sync-age')?.addEventListener('change', (e) => {
@@ -175,27 +151,23 @@ document.getElementById('sync-depth')?.addEventListener('change', (e) => {
 });
 
 async function addInstance(): Promise<void> {
-  const inst = createInstance(`Globe ${instances.length + 1}`);
-  instances.push(inst);
-  relayout();
+  // Collapsed by default -- see UI's own startCollapsed doc comment. Also
+  // applies to every globe the Atlantic/depth-slice presets add this way,
+  // which is a real improvement there too: those presets already configure
+  // each globe correctly on their own, so an open panel repeating settings
+  // the preset just set is pure screen clutter, not information.
+  const inst = createInstance(`Globe ${host.instances.length + 1}`, true);
+  host.add(inst);
   await inst.boot(defaultModelId);
   // A globe added while a sync is active joins the synced group immediately,
   // rather than booting at age 0 / the default depth-slice and waiting for
   // the next drag elsewhere to catch it up.
-  broadcastAge(lastAgeEdit ?? focusedInstance);
-  broadcastDepthSlice(lastDepthSliceEdit ?? focusedInstance);
+  broadcastAge(host.lastEditOrFocused('age')!);
+  broadcastDepthSlice(host.lastEditOrFocused('depthSlice')!);
 }
 
 function removeInstance(inst: GlobeInstance): void {
-  if (instances.length <= 1) return; // always leave one globe on screen
-  const idx = instances.indexOf(inst);
-  if (idx < 0) return;
-  instances.splice(idx, 1);
-  inst.dispose();
-  if (focusedInstance === inst) focusedInstance = instances[0];
-  if (lastAgeEdit === inst) lastAgeEdit = null;
-  if (lastDepthSliceEdit === inst) lastDepthSliceEdit = null;
-  relayout();
+  host.remove(inst);
 }
 
 addEventListener('resize', () => {
@@ -205,6 +177,11 @@ addEventListener('resize', () => {
 
 document.getElementById('add-globe')?.addEventListener('click', () => {
   void addInstance();
+});
+
+document.getElementById('globe-menu-toggle')?.addEventListener('click', () => {
+  const menu = document.getElementById('globe-menu');
+  if (menu) menu.hidden = !menu.hidden;
 });
 
 document.getElementById('hint-toggle')?.addEventListener('click', () => {
@@ -249,25 +226,39 @@ function applyCutawayPolygon(inst: GlobeInstance, verts: [number, number][], dep
   refreshGUI(inst);
 }
 
-/** Matched by name fragment rather than the 'opt1' id, since the id is an
- *  internal dataset label while "Muller" is the thing every preset actually
- *  means to pick. */
+/** Matched by id, not a "muller" name fragment -- a fragment match was tried
+ *  first and broke the moment the catalog grew a Muller2019 deformation/
+ *  age-heat-flux family (`muller2019-deformation`, `muller2019-age-heatflux`):
+ *  `archive.models.find()` returns the FIRST match in catalog order, which
+ *  is now one of those (alphabetically before `opt1`), not the intended
+ *  Muller 2022 OPT1 convection model -- this preset was silently loading a
+ *  2D tomography-type age/heat-flux field and turning on isosurfaces over
+ *  it. `opt1`'s id is stable and unique; matching it directly is the same
+ *  convention `applyPresetDepthSliceComparison()` already uses for
+ *  'reveal'/'uup07' below. */
 function findMullerModel(): ArchiveIndex['models'][number] | undefined {
-  return deps.archive.models.find((m) => m.name.toLowerCase().includes('muller'));
+  return deps.archive.models.find((m) => m.id === 'opt1');
 }
 
 /** Preset 1: a single globe on the Muller et al. 2022 convection model, with
  *  the outer surface hidden and both isosurfaces on, so the mantle structure
  *  is the very first thing visible. */
 async function applyPresetConvection(): Promise<void> {
-  while (instances.length > 1) removeInstance(instances[instances.length - 1]);
-  const inst = instances[0];
-  focusedInstance = inst;
+  while (host.instances.length > 1) removeInstance(host.instances[host.instances.length - 1]);
+  const inst = host.instances[0];
+  host.focused = inst;
 
   const model = findMullerModel();
   if (model) await inst.selectModel(model.id);
 
   inst.applySurfaceMode('none');
+  // A cutaway left open from an earlier preset (the Atlantic comparison)
+  // would otherwise still be cut into whatever this preset shows -- same
+  // "each preset must reset what an earlier one might have left dirty"
+  // reasoning as the depth-slice reset below, just for a different piece of
+  // per-instance state. onKeyEscape() is the same reset the Escape key
+  // itself drives.
+  inst.onKeyEscape();
   // selectModel()'s own reconcileDepthSliceWithModel() only clears
   // sinkingEnabled on a non-tomography model, not `enabled` itself -- a
   // depth slice left on from an earlier preset (e.g. the REVEAL/UU-P07
@@ -282,30 +273,51 @@ async function applyPresetConvection(): Promise<void> {
   refreshGUI(inst);
 }
 
-/** Preset 2: one globe per real tomography model (skipping the dev fixtures),
- *  each cut open over the same Atlantic square so REVEAL/SEMUCB-WM1/UU-P07
- *  can be compared side by side in the same region. */
+/** Preset 2: one globe per real, STANDALONE seismic tomography model
+ *  (skipping the dev fixtures), each cut open over the same Atlantic square
+ *  so REVEAL/SEMUCB-WM1/UU-P07 can be compared side by side in the same
+ *  region. `type === 'tomography'` alone is not enough to mean "a seismic
+ *  inversion" any more -- Cao2024/Muller2019's Age & Heat Flux family
+ *  members also reuse that type tag for an unrelated, incidental rendering-
+ *  pipeline reason (same ADR-0018 caveat as convection), so without the
+ *  reconstruction_model/comparison_role exclusion below this preset quietly
+ *  grew from 3 globes to 5, mixing REVEAL/SEMUCB-WM1/UU-P07 with unrelated
+ *  deformation-family products the moment that family was added to the
+ *  catalog. A standalone model (no declared family axis) is what "real
+ *  tomography model" actually means here. */
 async function applyPresetAtlanticComparison(): Promise<void> {
   const models = deps.archive.models.filter(
-    (m) => m.type === 'tomography' && !m.id.startsWith('fixture-'),
+    (m) => m.type === 'tomography' && !m.id.startsWith('fixture-')
+      && !m.reconstruction_model && !m.comparison_role,
   );
   if (models.length === 0) return;
 
-  while (instances.length > models.length) removeInstance(instances[instances.length - 1]);
-  while (instances.length < models.length) await addInstance();
+  while (host.instances.length > models.length) removeInstance(host.instances[host.instances.length - 1]);
+  while (host.instances.length < models.length) await addInstance();
   relayout();
 
   for (let i = 0; i < models.length; i++) {
-    const inst = instances[i];
+    const inst = host.instances[i];
     await inst.selectModel(models[i].id);
     // A consistent surface across all three, regardless of what each
     // instance's surface happened to be left at by earlier interaction (e.g.
     // the convection preset's "none") -- the point of this preset is a
     // like-for-like comparison.
     inst.applySurfaceMode('topography');
+    // A depth slice left ENABLED from an earlier preset (the REVEAL/UU-P07
+    // depth-slice comparison) paints its own opaque constant-depth sphere
+    // regardless of the cutaway -- the cutaway polygon still gets recorded
+    // (closePolygon() below doesn't care), but visually the depth slice's
+    // settings are what's showing, not the cutaway this preset means to
+    // demonstrate. Same "each preset must reset what an earlier one left
+    // dirty" reasoning as the Convection preset's own identical reset, and
+    // the onKeyEscape() calls those two presets make for a cutaway left
+    // open by THIS one.
+    inst.view.depthSlice.enabled = false;
+    inst.applyDepthSlice();
     applyCutawayPolygon(inst, ATLANTIC_CUT_POLYGON, ATLANTIC_CUT_DEPTH_KM);
   }
-  focusedInstance = instances[0];
+  host.focused = host.instances[0];
   // One shared camera for every tile: point it at the Atlantic so the cut
   // this preset just made is actually the thing on screen, not a coincidence
   // of wherever the camera happened to be left.
@@ -324,13 +336,17 @@ async function applyPresetDepthSliceComparison(): Promise<void> {
   const wanted = [reveal, uup07].filter((m): m is ArchiveIndex['models'][number] => !!m);
   if (wanted.length === 0) return;
 
-  while (instances.length > wanted.length) removeInstance(instances[instances.length - 1]);
-  while (instances.length < wanted.length) await addInstance();
+  while (host.instances.length > wanted.length) removeInstance(host.instances[host.instances.length - 1]);
+  while (host.instances.length < wanted.length) await addInstance();
   relayout();
 
   for (let i = 0; i < wanted.length; i++) {
-    const inst = instances[i];
+    const inst = host.instances[i];
     await inst.selectModel(wanted[i].id);
+    // Same reasoning as the Convection preset's own onKeyEscape() call -- a
+    // cutaway left open from the Atlantic comparison would otherwise still
+    // be cut into this depth-slice view.
+    inst.onKeyEscape();
     inst.view.depthSlice.enabled = true;
     // Both are tomography, so sinking mode (see canUseSinkingMode) applies to
     // either -- ties each one's own slice depth to the shared age via the
@@ -339,14 +355,14 @@ async function applyPresetDepthSliceComparison(): Promise<void> {
     inst.applyDepthSlice();
     refreshGUI(inst);
   }
-  focusedInstance = instances[0];
+  host.focused = host.instances[0];
   // At age 0 the sinking rate places the slice at 0 km -- inside UU-P07's own
   // near-surface cutoff (5 km), which reads as "broken" (flat no-data grey)
   // rather than "not sunk yet". 50 Ma puts the slice in the upper mantle,
   // comfortably inside both models' valid depth range, so the very first
   // thing shown actually demonstrates the feature.
-  instances[0].applyAge(50);
-  refreshGUI(instances[0]);
+  host.instances[0].applyAge(50);
+  refreshGUI(host.instances[0]);
   // Synced AFTER both globes already have depth slice (and REVEAL's age) set:
   // setSyncAge/setSyncDepthSlice immediately broadcast the focused instance's
   // current values, so turning them on first would push a still-default
@@ -382,11 +398,11 @@ const ptr = new Vector2();
 let modifierHeld = false;
 
 function hitTest(clientX: number, clientY: number): { inst: GlobeInstance; rect: Rect } | null {
-  for (let i = 0; i < instances.length; i++) {
-    const r = layoutRects[i];
+  for (let i = 0; i < host.instances.length; i++) {
+    const r = host.layoutRects[i];
     if (r && clientX >= r.x && clientX < r.x + r.width
       && clientY >= r.y && clientY < r.y + r.height) {
-      return { inst: instances[i], rect: r };
+      return { inst: host.instances[i], rect: r };
     }
   }
   return null;
@@ -416,19 +432,19 @@ function isModifier(e: KeyboardEvent): boolean {
 
 addEventListener('keydown', (e) => {
   if (isModifier(e)) { modifierHeld = true; controls.enabled = true; }
-  if (e.key === 'Enter') focusedInstance.onKeyEnter();
-  if (e.key === 'Escape') focusedInstance.onKeyEscape();
+  if (e.key === 'Enter') host.focused!.onKeyEnter();
+  if (e.key === 'Escape') host.focused!.onKeyEscape();
 });
 addEventListener('keyup', (e) => {
   if (isModifier(e)) {
     modifierHeld = false;
-    controls.enabled = !focusedInstance.toolActive(modifierHeld);
+    controls.enabled = !host.focused!.toolActive(modifierHeld);
   }
 });
 // Holding a modifier and switching apps can swallow the keyup.
 addEventListener('blur', () => {
   modifierHeld = false;
-  controls.enabled = !focusedInstance.toolActive(modifierHeld);
+  controls.enabled = !host.focused!.toolActive(modifierHeld);
 });
 
 /**
@@ -449,7 +465,7 @@ renderer.domElement.addEventListener('pointerdown', (ev: PointerEvent) => {
 
   const hit = hitTest(ev.clientX, ev.clientY);
   if (hit) {
-    focusedInstance = hit.inst;
+    host.focused = hit.inst;
     controls.enabled = !hit.inst.toolActive(modifierHeld);
   }
 
@@ -524,9 +540,7 @@ async function boot(): Promise<void> {
   defaultModelId = archive.models.find((m) => m.id === 'reveal')?.id ?? archive.models[0].id;
 
   const first = createInstance('Globe 1');
-  instances.push(first);
-  focusedInstance = first;
-  relayout();
+  host.add(first);
   await first.boot(defaultModelId);
 
   if (window.__geode) window.__geode.ready = true;
@@ -547,7 +561,7 @@ declare global {
   interface Window { __geode?: Record<string, unknown> }
 }
 
-function primary(): GlobeInstance { return instances[0]; }
+function primary(): GlobeInstance { return host.instances[0]; }
 
 function setCamera(o: { lon: number; lat: number; dist: number }): void {
   const [x, y, z] = lonLatToVec3(o.lon, o.lat, o.dist);
@@ -666,7 +680,7 @@ window.__geode = {
    *  (e.g. convection) model when testing that the sync broadcast doesn't
    *  override a follower's own tomography/convection guard. */
   setModelOn: async (index: number, id: string) => {
-    const inst = instances[index];
+    const inst = host.instances[index];
     await inst.selectModel(id);
     refreshGUI(inst);
   },
@@ -899,20 +913,20 @@ window.__geode = {
     };
   },
   addGlobe: () => addInstance(),
-  removeGlobe: (index = instances.length - 1) => {
-    const inst = instances[index];
+  removeGlobe: (index = host.instances.length - 1) => {
+    const inst = host.instances[index];
     if (inst) removeInstance(inst);
   },
-  globeCount: () => instances.length,
+  globeCount: () => host.instances.length,
   setSyncAge,
   setSyncDepthSlice,
-  getSyncState: () => ({ syncAge, syncDepthSlice }),
+  getSyncState: () => ({ syncAge: host.isSynced('age'), syncDepthSlice: host.isSynced('depthSlice') }),
   /** Apply age to a SPECIFIC instance, not just primary() -- needed to test
    *  whether an edit on globe 2 does/doesn't propagate to globe 1. Broadcasts
    *  exactly like a real slider drag would, via the same broadcastAge() the
    *  UI callback uses. */
   setAgeOn: async (index: number, a: number) => {
-    const inst = instances[index];
+    const inst = host.instances[index];
     inst.applyAge(a);
     await inst.settleAge(a);
     await inst.boundaries.setAge(a);
@@ -921,7 +935,7 @@ window.__geode = {
     broadcastAge(inst);
   },
   setDepthSliceOn: (index: number, o: Partial<DepthSliceState>) => {
-    const inst = instances[index];
+    const inst = host.instances[index];
     Object.assign(inst.view.depthSlice, o);
     inst.applyDepthSlice();
     refreshGUI(inst);
@@ -929,7 +943,7 @@ window.__geode = {
     return { ...inst.view.depthSlice };
   },
   instanceState: (index: number) => {
-    const inst = instances[index];
+    const inst = host.instances[index];
     return { age: inst.view.reconstructionAge, depthSlice: { ...inst.view.depthSlice } };
   },
   stats: () => {
@@ -943,7 +957,7 @@ window.__geode = {
       vertices: inst.cut.vertices.length,
       coastlineSegments:
         (inst.coastlines?.lines.geometry.drawRange.count ?? 0) / 2,
-      globeCount: instances.length,
+      globeCount: host.instances.length,
     };
   },
 };
@@ -952,9 +966,9 @@ function animate(): void {
   requestAnimationFrame(animate);
   controls.update();
 
-  renderer.setScissorTest(instances.length > 1);
-  for (let i = 0; i < instances.length; i++) {
-    const rect = layoutRects[i];
+  renderer.setScissorTest(host.instances.length > 1);
+  for (let i = 0; i < host.instances.length; i++) {
+    const rect = host.layoutRects[i];
     if (!rect) continue;
     camera.aspect = rect.width / rect.height;
     camera.updateProjectionMatrix();
@@ -963,7 +977,7 @@ function animate(): void {
     const glY = innerHeight - rect.y - rect.height;
     renderer.setViewport(rect.x, glY, rect.width, rect.height);
     renderer.setScissor(rect.x, glY, rect.width, rect.height);
-    instances[i].render(renderer);
+    host.instances[i].render(renderer);
   }
   renderer.setScissorTest(false);
 }

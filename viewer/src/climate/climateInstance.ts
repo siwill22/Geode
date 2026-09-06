@@ -227,6 +227,7 @@ export class ClimateInstance {
     private readonly deps: ClimateInstanceDeps,
     private readonly hooks: ClimateInstanceHooks,
     label: string,
+    startCollapsed = false,
   ) {
     this.field.mesh.visible = true;
     this.field.setDepthKm(0); // month 0, until applyMonth() picks a real one
@@ -268,7 +269,7 @@ export class ClimateInstance {
       onWindScale: (v) => this.setWindScale(v),
       onWindDensity: (v) => this.setWindDensity(v),
       onExpandTimeSeries: () => this.onExpandTimeSeries(),
-    }, label, () => this.hooks.onRemove(this));
+    }, label, () => this.hooks.onRemove(this), startCollapsed);
   }
 
   /** Which `sources` entry a layer means RIGHT NOW -- 'paleogeography' is
@@ -767,6 +768,7 @@ export class ClimateInstance {
     // already in hand -- see refreshWindGlyphs().
     if (this.hasWind) this.refreshWindGlyphs();
     this.ui.setMonth(month);
+    this.ui.updateQueryMonth(month);
   }
 
   /** `layer`'s own default resolution for a climate source (exactly one

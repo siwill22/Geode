@@ -5,7 +5,8 @@ import { lonLatToVec3 } from '../core/constants';
 import { PALETTE } from '../core/palette';
 import { fetchCoastlineData } from '../core/coastlines';
 import { loadArchive, loadColormaps } from '../core/volume';
-import { tileGrid, type Rect } from '../core/layout';
+import type { Rect } from '../core/layout';
+import { MultiInstanceHost } from '../core/multiInstanceHost';
 import {
   createProjectionCamera, createProjectionControls, updateProjectionCameraAspect,
   type ProjectionMode,
@@ -57,13 +58,19 @@ function setProjection(mode: ProjectionMode): void {
   camera = createProjectionCamera(mode, innerWidth / innerHeight);
   controls = createProjectionControls(mode, camera, renderer.domElement);
 
-  for (const inst of instances) inst.setProjection(mode, camera);
+  for (const inst of host.instances) inst.setProjection(mode, camera);
 }
 
 // --- globe instances ---------------------------------------------------
+//
+// Instance bookkeeping (the array, tileGrid() relayout, focus, and the
+// Synced Field broadcast registry) lives in core/multiInstanceHost.ts --
+// see docs/adr/0022. What's left here is climate-specific: which fields
+// are actually syncable (age, month -- see below), and side effects that
+// only make sense for a Layer/Variable-bearing viewer (legend visibility,
+// the projection toggle's single mount point).
 
-const instances: ClimateInstance[] = [];
-let layoutRects: Rect[] = [];
+const host = new MultiInstanceHost<ClimateInstance>(() => ({ width: innerWidth, height: innerHeight }));
 let deps: ClimateInstanceDeps;
 // Every registered model of type 'climate' (plural: unlike a single fixed
 // climate simulation, `view.climateModelId` now lets each instance pick
@@ -71,70 +78,33 @@ let deps: ClimateInstanceDeps;
 let climateModelIds: string[] = [];
 let paleogeographyModelId = '';
 
-/** Whichever globe was most recently clicked -- used only as the
- *  sync-broadcast fallback source when a sync toggle turns on with no prior
- *  edit yet (see setSyncAge/setSyncMonth). Climate has no per-instance tool
- *  state, so unlike tomography's focusedInstance this drives nothing else:
- *  no OrbitControls enable/disable, no keyboard-shortcut target. */
-let focusedInstance: ClimateInstance;
-
 // --- cross-globe sync ---------------------------------------------------
 //
 // Rotation/zoom are locked across every globe for free (one shared camera).
-// Age and month are not -- each instance owns its own view state -- so
-// linking them is an explicit broadcast, mirroring tomography/main.ts's
-// broadcastAge/broadcastDepthSlice exactly. Layer, variable, clip range and
-// wind style are deliberately NOT synced (no toggle exists for them): the
-// point of multiple globes is as much "compare two different things at the
-// same time" (Temperature vs. Precipitation) as "compare the same thing at
-// two different times," and only the latter needs linking.
-
-let syncAge = false;
-let syncMonth = false;
-
-/**
- * Whichever instance most recently had its age / month edited -- separate
- * from focusedInstance on purpose. focusedInstance is set by clicking a
- * globe's canvas tile; a user configuring a globe's age or month typically
- * does that entirely through that globe's OWN panel, without ever clicking
- * its canvas tile, so focusedInstance can easily still be some OTHER globe.
- * Snapping from the wrong one when a sync toggle switches on would silently
- * clobber whatever was just configured. Falls back to focusedInstance until
- * an edit has actually happened. See tomography/main.ts's
- * lastAgeEdit/lastDepthSliceEdit for the identical reasoning.
- */
-let lastAgeEdit: ClimateInstance | null = null;
-let lastMonthEdit: ClimateInstance | null = null;
+// Age and month are Synced Fields (see CONTEXT.md) -- each instance owns
+// its own view state, so linking them is an explicit broadcast through the
+// host. Layer, variable, clip range and wind style are deliberately NOT
+// syncable (no toggle exists for them): the point of multiple globes is as
+// much "compare two different things at the same time" (Temperature vs.
+// Precipitation) as "compare the same thing at a different time," and only
+// the latter needs linking.
 
 /** Push `source`'s current age into every OTHER instance's own state. The
  *  one place this logic lives -- called from the UI callback (a real slider
  *  drag), from the test hook, from turning a sync flag on, and from a globe
  *  being added while a sync is active. */
 function broadcastAge(source: ClimateInstance): void {
-  lastAgeEdit = source;
-  if (!syncAge) return;
-  const age = source.view.age;
-  for (const inst of instances) {
-    if (inst === source) continue;
+  host.broadcast('age', source, source.view.age, (inst, age) => {
     inst.applyAge(age);
     inst.ui.refreshDisplay();
-  }
+  });
 }
 
 function broadcastMonth(source: ClimateInstance): void {
-  lastMonthEdit = source;
-  if (!syncMonth) return;
-  const month = source.view.month;
-  for (const inst of instances) {
-    if (inst === source) continue;
+  host.broadcast('month', source, source.view.month, (inst, month) => {
     inst.applyMonth(month);
     inst.ui.refreshDisplay();
-  }
-}
-
-function relayout(): void {
-  layoutRects = tileGrid(instances.length, innerWidth, innerHeight);
-  instances.forEach((inst, i) => inst.applyLayout(layoutRects[i]));
+  });
 }
 
 /** When two or more globes show the SAME categorical variable at once
@@ -153,7 +123,7 @@ function relayout(): void {
  *  itself changed). */
 function refreshLegendVisibility(): void {
   let shownCategorical = false;
-  for (const inst of instances) {
+  for (const inst of host.instances) {
     const isCategorical = !!inst.variable?.categorical;
     const visible = !isCategorical || !shownCategorical;
     inst.ui.setLegendVisible(visible);
@@ -161,13 +131,13 @@ function refreshLegendVisibility(): void {
   }
 }
 
-function createInstance(label: string): ClimateInstance {
+function createInstance(label: string, startCollapsed = false): ClimateInstance {
   const inst = new ClimateInstance(camera, deps, {
     onRemove: (self) => removeInstance(self),
     onAgeChange: (self) => broadcastAge(self),
     onMonthChange: (self) => broadcastMonth(self),
     onDisplayChange: () => refreshLegendVisibility(),
-  }, label);
+  }, label, startCollapsed);
   // A new instance always starts in ClimateInstance's own default (Globe) --
   // sync it to whichever Projection is currently active so a globe added
   // mid-Plate-Carrée-session doesn't boot as a mismatched sphere under the
@@ -179,17 +149,17 @@ function createInstance(label: string): ClimateInstance {
 /** Used by both the toolbar checkbox and the test hook, so "snap every other
  *  globe to the focused one's value" lives in exactly one place. */
 function setSyncAge(on: boolean): void {
-  syncAge = on;
+  host.setSync('age', on);
   const cb = document.getElementById('sync-age') as HTMLInputElement | null;
   if (cb) cb.checked = on;
-  broadcastAge(lastAgeEdit ?? focusedInstance);
+  broadcastAge(host.lastEditOrFocused('age')!);
 }
 
 function setSyncMonth(on: boolean): void {
-  syncMonth = on;
+  host.setSync('month', on);
   const cb = document.getElementById('sync-month') as HTMLInputElement | null;
   if (cb) cb.checked = on;
-  broadcastMonth(lastMonthEdit ?? focusedInstance);
+  broadcastMonth(host.lastEditOrFocused('month')!);
 }
 
 document.getElementById('sync-age')?.addEventListener('change', (e) => {
@@ -200,9 +170,9 @@ document.getElementById('sync-month')?.addEventListener('change', (e) => {
 });
 
 async function addInstance(): Promise<void> {
-  const inst = createInstance(`Globe ${instances.length + 1}`);
-  instances.push(inst);
-  relayout();
+  // Collapsed by default -- see ClimateUI's own startCollapsed doc comment.
+  const inst = createInstance(`Globe ${host.instances.length + 1}`, true);
+  host.add(inst);
   try {
     await inst.boot(climateModelIds, paleogeographyModelId);
   } catch (e) {
@@ -220,20 +190,12 @@ async function addInstance(): Promise<void> {
   // A globe added while a sync is active joins the synced group immediately,
   // rather than booting at age 0 / month 0 and waiting for the next drag
   // elsewhere to catch it up.
-  broadcastAge(lastAgeEdit ?? focusedInstance);
-  broadcastMonth(lastMonthEdit ?? focusedInstance);
+  broadcastAge(host.lastEditOrFocused('age')!);
+  broadcastMonth(host.lastEditOrFocused('month')!);
 }
 
 function removeInstance(inst: ClimateInstance): void {
-  if (instances.length <= 1) return; // always leave one globe on screen
-  const idx = instances.indexOf(inst);
-  if (idx < 0) return;
-  instances.splice(idx, 1);
-  inst.dispose();
-  if (focusedInstance === inst) focusedInstance = instances[0];
-  if (lastAgeEdit === inst) lastAgeEdit = null;
-  if (lastMonthEdit === inst) lastMonthEdit = null;
-  relayout();
+  if (!host.remove(inst)) return; // always leave one globe on screen
   // The removed globe fires no hook of its own -- if it was the one keeping
   // a categorical legend visible, the next-first categorical globe (if any)
   // needs to pick it back up explicitly.
@@ -247,11 +209,22 @@ function removeInstance(inst: ClimateInstance): void {
 
 addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
-  relayout();
+  host.relayout();
 });
 
 document.getElementById('add-globe')?.addEventListener('click', () => {
   void addInstance();
+});
+
+// Collapsed by default -- see climate.html's own #globe-menu-toggle/
+// #globe-menu CSS doc comment. Toggle-only (no outside-click auto-close):
+// unlike index.html's "Start Here" presets menu, which closes itself the
+// moment a preset is picked (a one-shot action), this menu's own controls
+// (sync checkboxes) are meant to stay adjustable, so slamming it shut after
+// every click would fight the user rather than help them.
+document.getElementById('globe-menu-toggle')?.addEventListener('click', () => {
+  const menu = document.getElementById('globe-menu');
+  if (menu) menu.hidden = !menu.hidden;
 });
 
 // --- projection toggle -----------------------------------------------------
@@ -321,11 +294,11 @@ projectionToggle?.addEventListener('click', () => {
 // click-just-to-focus-a-tile behaviour, which only needed the former.
 
 function hitTest(clientX: number, clientY: number): { inst: ClimateInstance; rect: Rect } | null {
-  for (let i = 0; i < instances.length; i++) {
-    const r = layoutRects[i];
+  for (let i = 0; i < host.instances.length; i++) {
+    const r = host.layoutRects[i];
     if (r && clientX >= r.x && clientX < r.x + r.width
       && clientY >= r.y && clientY < r.y + r.height) {
-      return { inst: instances[i], rect: r };
+      return { inst: host.instances[i], rect: r };
     }
   }
   return null;
@@ -342,7 +315,7 @@ function ndcFor(rect: Rect, clientX: number, clientY: number): Vector2 {
 
 renderer.domElement.addEventListener('pointerdown', (ev) => {
   const hit = hitTest(ev.clientX, ev.clientY);
-  if (hit) focusedInstance = hit.inst;
+  if (hit) host.focused = hit.inst;
   // Shift owns this gesture entirely -- disable orbiting for its duration
   // so a shift-drag can't ALSO spin the globe underneath the query. No
   // movement threshold needed to tell a shift-click from a shift-drag: with
@@ -383,7 +356,19 @@ async function boot(): Promise<void> {
     archiveBase: ARCHIVE, archive, colormaps, coastlineData,
   };
 
-  const climateModels = archive.models.filter((m) => m.type === 'climate').map((m) => m.id);
+  // 'climate-monthly' (Valdes/BRIDGE's Atmosphere Layer -- see docs/adr/0008)
+  // is included here alongside the plain 'climate' type: that ADR moved
+  // Valdes/BRIDGE to its own dedicated instance (valdes.html) specifically
+  // because its NEW ocean-depth fields don't fit this viewer's month axis --
+  // but its ORIGINAL month-indexed atmosphere fields (T, P, MSLP, sea ice,
+  // wind) always did, and removing them from here entirely (rather than just
+  // the genuinely incompatible ocean-depth Layer) went further than that
+  // ADR's own reasoning required. 'climate-ocean-depth' stays valdes.html-only
+  // -- annual-mean, real-depth data has no Month axis for THIS viewer's UI to
+  // drive at all.
+  const climateModels = archive.models
+    .filter((m) => m.type === 'climate' || m.type === 'climate-monthly')
+    .map((m) => m.id);
   const paleogeographyModel = archive.models.find((m) => m.type === 'paleogeography')?.id;
   if (climateModels.length === 0) throw new Error('archive.json has no model of type "climate"');
   if (!paleogeographyModel) throw new Error('archive.json has no model of type "paleogeography"');
@@ -391,9 +376,7 @@ async function boot(): Promise<void> {
   paleogeographyModelId = paleogeographyModel;
 
   const first = createInstance('Globe 1');
-  instances.push(first);
-  focusedInstance = first;
-  relayout();
+  host.add(first);
   if (projectionToggle) first.ui.mountProjectionToggle(projectionToggle);
   await first.boot(climateModelIds, paleogeographyModelId);
 
@@ -416,7 +399,7 @@ declare global {
   interface Window { __climate?: Record<string, unknown> }
 }
 
-function primary(): ClimateInstance { return instances[0]; }
+function primary(): ClimateInstance { return host.instances[0]; }
 
 window.__climate = {
   ready: false,
@@ -490,43 +473,43 @@ window.__climate = {
     return { x, y, rgb: [px[0], px[1], px[2]] };
   },
   addGlobe: () => addInstance(),
-  removeGlobe: (index = instances.length - 1) => {
-    const inst = instances[index];
+  removeGlobe: (index = host.instances.length - 1) => {
+    const inst = host.instances[index];
     if (inst) removeInstance(inst);
   },
-  globeCount: () => instances.length,
+  globeCount: () => host.instances.length,
   setSyncAge,
   setSyncMonth,
-  getSyncState: () => ({ syncAge, syncMonth }),
+  getSyncState: () => ({ syncAge: host.isSynced('age'), syncMonth: host.isSynced('month') }),
   /** Apply age/month to a SPECIFIC instance, not just primary() -- needed to
    *  test whether an edit on globe 2 does/doesn't propagate to globe 1.
    *  Broadcasts exactly like a real slider drag would, via the same
    *  broadcastAge()/broadcastMonth() the UI callback uses. */
   setAgeOn: (index: number, age: number) => {
-    const inst = instances[index];
+    const inst = host.instances[index];
     inst.applyAge(age);
     inst.ui.refreshDisplay();
     broadcastAge(inst);
   },
   setMonthOn: (index: number, month: number) => {
-    const inst = instances[index];
+    const inst = host.instances[index];
     inst.applyMonth(month);
     inst.ui.refreshDisplay();
     broadcastMonth(inst);
   },
   setClimateModelOn: async (index: number, id: string) => {
-    const inst = instances[index];
+    const inst = host.instances[index];
     await inst.setClimateModel(id);
     inst.ui.refreshDisplay();
   },
   setVariableOn: async (index: number, id: string) => {
-    const inst = instances[index];
+    const inst = host.instances[index];
     await inst.setVariable(id);
     inst.ui.refreshDisplay();
   },
   climateModelIds: () => climateModelIds,
   instanceState: (index: number) => {
-    const inst = instances[index];
+    const inst = host.instances[index];
     return {
       age: inst.view.age, month: inst.view.month, layer: inst.view.layer,
       climateModelId: inst.view.climateModelId,
@@ -547,7 +530,7 @@ window.__climate = {
       windStyle: inst.view.windStyle,
       windScale: inst.view.windScale,
       windDensity: inst.view.windDensity,
-      globeCount: instances.length,
+      globeCount: host.instances.length,
     };
   },
 };
@@ -558,10 +541,10 @@ function animate(): void {
   requestAnimationFrame(animate);
   controls.update();
 
-  renderer.setScissorTest(instances.length > 1);
+  renderer.setScissorTest(host.instances.length > 1);
   const dt = clock.getDelta();
-  for (let i = 0; i < instances.length; i++) {
-    const rect = layoutRects[i];
+  for (let i = 0; i < host.instances.length; i++) {
+    const rect = host.layoutRects[i];
     if (!rect) continue;
     updateProjectionCameraAspect(camera, rect.width / rect.height);
     // three.js scales viewport/scissor by devicePixelRatio itself, the same
@@ -569,8 +552,8 @@ function animate(): void {
     const glY = innerHeight - rect.y - rect.height;
     renderer.setViewport(rect.x, glY, rect.width, rect.height);
     renderer.setScissor(rect.x, glY, rect.width, rect.height);
-    instances[i].tick(dt);
-    instances[i].render(renderer);
+    host.instances[i].tick(dt);
+    host.instances[i].render(renderer);
   }
   renderer.setScissorTest(false);
 }

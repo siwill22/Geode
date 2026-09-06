@@ -18,7 +18,7 @@ import {
 import {
   FrameCache, loadManifest, makeColormapTexture, nearestFrame, physicalToEncoded,
 } from '../core/volume';
-import { BoundaryOverlay } from './boundaries';
+import { BoundaryOverlay } from '../core/boundaries';
 import { DEFAULT_ISOSURFACE, Isosurface } from './isosurface';
 import type { Rect } from '../core/layout';
 import { UI, type SurfaceMode, type ViewState } from './ui';
@@ -105,6 +105,7 @@ export class GlobeInstance {
     private readonly deps: GlobeInstanceDeps,
     private readonly hooks: GlobeInstanceHooks,
     label: string,
+    startCollapsed = false,
   ) {
     this.frames = new FrameCache(deps.archiveBase);
     this.boundaries = new BoundaryOverlay(camera);
@@ -137,7 +138,7 @@ export class GlobeInstance {
       onExportPNG: () => this.exportPNG(),
       onExportPolygon: () => this.exportPolygon(),
       onImportPolygon: () => this.importPolygon(),
-    }, label, () => this.hooks.onRemove(this));
+    }, label, () => this.hooks.onRemove(this), startCollapsed);
 
     this.ui.setAgeRange(deps.archive.coastlines.age_min, deps.archive.coastlines.age_max);
   }
