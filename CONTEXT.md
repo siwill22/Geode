@@ -1,18 +1,71 @@
 # Geode — Domain Glossary
 
-Vocabulary for Geode's viewers (mantle tomography and paleoclimate). Glossary
+Vocabulary for Geode's viewers (mantle tomography, paleoclimate, crustal
+deformation, and the generated globe viewers built from the catalog). Glossary
 only — no implementation detail, no spec content. The tomography viewer's
 spec lives in `tomography-globe-viewer-spec.md`.
 
 ## Model
 
-A single named 3D field over the mantle, from one published source. Two kinds,
-distinguished by whether they vary in time:
+A single named field from one published source, gridded as one or more
+Frames — a *numerical* Model is a simulation's or inversion's output (mantle
+tomography, mantle convection, paleoclimate, crustal deformation); a Model is
+never itself a Reconstruction Model, ore-deposit/fossil-occurrence dataset,
+or other non-gridded catalog resource (see below). Two independent axes
+distinguish Models from each other — do not conflate them:
 
-- **Tomography Model** — one static volume representing the present day.
-  REVEAL, SEMUCB-WM1, S40RTS. Always exactly one Frame.
-- **Convection Model** — a sequence of volumes representing a simulation
-  evolving through geological time. Müller 2022 OPT1 and siblings. Many Frames.
+- **Time-variance**: a **Tomography Model** is one static volume representing
+  the present day (REVEAL, SEMUCB-WM1, S40RTS — always exactly one Frame); a
+  **Convection Model** is a sequence of volumes evolving through geological
+  time (Müller 2022 OPT1 and siblings — many Frames). Paleoclimate and
+  crustal deformation Models are also usually many-Frame.
+- **Reconstruction-dependence** (see Reconstruction Model): a **reconstruction-
+  dependent** Model (convection, paleoclimate, crustal deformation) MUST
+  declare exactly one Reconstruction Model (never inferred from the Model's
+  id/name — see ADR-0004), and the viewer must show it only under that
+  Reconstruction Model's own coastlines/Boundary Frames — showing it under a
+  different one silently misplaces continents relative to where the Model's
+  own data says they are. A **reconstruction-independent** Model (Tomography
+  today) has no such constraint, but for the opposite reason from "doesn't
+  need one": its own data represents the present day only, and every
+  Reconstruction Model agrees on where continents are at present day, so it
+  may be shown under ANY Reconstruction Model's coastlines validly, not none
+  of them. A Reconstruction Age slider offered alongside a reconstruction-
+  independent Model, if present, drives only that reconstruction's coastline
+  scrubbing and (for Tomography) the sinking-rate depth calculation — never
+  which Frame is loaded, since a reconstruction-independent Model always has
+  exactly one.
+
+## Reconstruction Model
+
+A named plate-tectonic reconstruction — rotation files, coastline geometry,
+and Boundary Frames (resolved topologies) — independent of any one numerical
+Model. Cao2024, Müller 2019, Müller 2022, and the Scotese plate model are
+each one Reconstruction Model. Many numerical Models may declare the same
+Reconstruction Model (Cao2024's own Deformation and Age & Heat Flux Models
+both declare Cao2024; OPT1 declares Müller 2022) so the underlying
+rotation/geometry data is stored once, not duplicated per Model — see
+Reconstruction-dependence above for the rule this makes possible to enforce.
+
+Not yet a first-class catalog entity in its own right: today it is a bare
+name on each reconstruction-dependent Model's manifest
+(`reconstruction_model`), matched by lowercase key against a
+directory-discovered bucket of coastline files with no declared display
+name or citation of its own. Formalizing it as a real, independently-listed
+catalog section (its own id, name, citation, age range) is real follow-up
+work, not yet done.
+
+A Reconstruction Model's two assets — coastline geometry and Boundary
+Frames — are independently optional. Every Reconstruction Model that
+reaches the catalog has coastline geometry; Boundary Frames are a separate,
+sometimes-permanent absence, not a "not yet exported" gap in general.
+Checked directly, not assumed: Scotese's own reconstruction resolves no
+topological plates at all (only present-day continents, rotated back
+through time by absolute rotation), so it can never gain Boundary Frames no
+matter how much more prep work runs, while Müller 2019 genuinely has them
+and simply hasn't been exported yet. See `docs/adr/0019` for the full
+reasoning and the rule this implies for any catalog metadata or UI that
+lists Reconstruction Models.
 
 ## Frame
 
@@ -203,6 +256,32 @@ More Projections
 (Robinson, Mollweide, Spilhaus) are expected later; Plate Carrée is the
 first.
 
+## Multi-Globe
+
+Two or more globe instances tiled on one shared canvas and camera, so
+rotation and zoom stay locked together for free — each instance still owns
+its own Model, Variable, and view state independently (see Synced Field for
+what, if anything, is deliberately shared instead). Distinct from Layer,
+which switches what one instance shows; Multi-Globe changes how many
+instances exist. Available uniformly wherever the underlying instance type
+exists, never restricted to a subset of Models/Reconstruction Models on the
+grounds that a particular pairing seems less useful (see docs/adr/0017) —
+the only thing that can prevent it is a genuine technical conflict (see
+docs/adr/0022).
+
+## Synced Field
+
+Which of a globe instance's own state, in a Multi-Globe layout, broadcasts
+to every other instance when a "sync" toggle is on, versus stays
+independent by default. Reconstruction Age is the canonical Synced Field. A
+field that defines what is being compared — Layer, Variable, Model or
+Reconstruction Model choice — is never syncable: the point of a second
+globe is as much "show something different at the same age" as "show the
+same thing at a different age," and syncing those away would remove that
+option rather than add one. Projection is not a Synced Field at all — it
+has no independent per-instance value to sync in the first place; every
+tiled instance shares one unconditionally (see Projection).
+
 ## Vector Field
 
 A named pair of Variables (u, v) a Model declares for arrow/streak-style
@@ -246,19 +325,42 @@ position on expiry — without this, particles drift into convergence zones
 divergent regions empty out, so coverage would visibly degrade the longer
 the animation runs.
 
-## Time Series (climate)
+## Time Series
 
-One area-weighted global-mean point per Frame, for a single Variable of the
-active layer/model — a different axis from Reconstruction Age's "what does
-the surface look like at this one age": this is "how does the whole-globe
-mean of this Variable move across every age at once." Read from the Annual
-layer (or the only layer, for a Variable with no month axis), never
-whichever month the Reconstruction Age view currently shows — a long-term
-overview is a different question from an instantaneous snapshot, and tying
-it to the scrubbable month would mean recomputing on every drag for a chart
-meant to be computed once and left alone. Undefined (not zero) for a Frame
-where the model's own validity mask covers every texel; never computed for a
-categorical Variable (Koppen), whose class indices have no meaningful mean.
+A named scalar plotted against Reconstruction Age, computed once (never
+recomputed on every age-slider drag) — a different axis from Reconstruction
+Age's "what does the surface look like at this one age": this is "how does
+some summary number move across every age at once." What can supply one
+depends on the catalog entry, named by **Series Source**: a Model may
+declare a **Field Aggregate** series for one of its own Variables (see Field
+Aggregate below — the only Series Source implemented today); a
+Reconstruction Model may one day declare a **Plate Kinematics** series (RMS
+plate velocity, boundary length by type, net rotation — derived from its
+rotation model and Boundary Frames, with no Variable involved at all).
+Plate Kinematics is named here, not designed or built, specifically so the
+concept is never assumed to require a Variable — that assumption would
+repeat the mistake ADR-0017 exists to prevent, treating "the only thing
+built so far" as if it were a domain constraint (see docs/adr/0023). A
+recipe may only request a series its chosen catalog entry actually
+declares, the same "derive from the catalog, never invent" rule coastline
+pairing already follows (ADR-0004).
+
+## Field Aggregate
+
+The Series Source (see Time Series) implemented today: one area-weighted
+global-mean point per Frame, for a single Variable of the active model.
+Read from the Annual layer (or the only layer, for a Variable with no month
+axis) where the model has one, never whichever month the Reconstruction Age
+view currently shows — a long-term overview is a different question from an
+instantaneous snapshot, and tying it to the scrubbable month would mean
+recomputing on every drag for a chart meant to be computed once and left
+alone. Undefined (not zero) for a Frame where the model's own validity mask
+covers every texel; never computed for a categorical Variable (Koppen),
+whose class indices have no meaningful mean. Originally built only for the
+paleoclimate viewer (hence Model+Variable rather than a curated per-source
+allowlist); also available on the generator's `single-model-globe`/
+`model-group-globe` wrapper types, offered via the `time-series` UI tool
+(see docs/adr/0023).
 
 ## Month (climate)
 
@@ -313,11 +415,11 @@ A Query Point whose grid cell is held fixed in the Volume's own grid frame
 across every Frame — the same cell is read regardless of age, with no plate
 machinery involved. Honours the Model's own validity mask, reporting no
 value (never a fabricated one) for a Frame where the cell is masked — the
-same rule Time Series (climate) already follows, applied per cell instead
+same rule Field Aggregate already follows, applied per cell instead
 of per globe. Snaps to the nearest grid cell using the same convention
 Vector Glyph and Vector Streak already sample by, and reports that cell's own centre
 back to the caller rather than only the raw click coordinate, since at 1°
-resolution the two can visibly disagree. Unlike Time Series (climate), an
+resolution the two can visibly disagree. Unlike Field Aggregate, an
 Anchored Point never reduces multiple cells together, so nothing stops a
 categorical Variable (Köppen) from being queried this way — the mean-of-
 class-indices problem that excludes Köppen from Time Series doesn't exist
@@ -343,10 +445,10 @@ showing that Frame already paid for.
 An Anchored Point query answering "how has this cell changed across
 geological time": one value per Frame of the active Model, Annual layer
 only — never whichever Month is currently selected, for the same reason
-Time Series (climate) reads Annual only. _Avoid_: "Time Series" alone for
-this — that term already names the area-weighted global mean; qualify as
-"Age Series" to keep the two apart, since they answer different questions
-from what looks like the same axis.
+Field Aggregate reads Annual only. _Avoid_: "Time Series" alone for
+this — that term already names the whole-globe summary-per-age concept
+(see Time Series); qualify as "Age Series" to keep the two apart, since
+they answer different questions from what looks like the same axis.
 
 ## Plate-Frame Point
 
@@ -371,3 +473,15 @@ reference — a second sense of the word that coexists with Frame's other
 meaning (one volume within a Model, tagged with an age) without replacing
 it: a Plate-Frame Point's grid position is recomputed once per per-age
 Frame.
+
+Several GPlates-style features are this same primitive, not separate
+concepts: a velocity arrow is a Plate-Frame Point's trajectory expressed as
+a derivative instead of a series of positions; a motion path or tectonic
+flowline is that trajectory drawn as a line instead of read back as a
+Variable value; loading an arbitrary point dataset and reconstructing it
+consistently with whatever Reconstruction Model is on screen is the same
+per-point assignment-and-rotation applied to many points instead of one,
+under the same discipline ADR-0004 already requires (never a rotation/
+polygon pair from a different Reconstruction Model than what's displayed).
+None of these are separately scheduled; all wait on the same blocked
+dependency (see docs/plans/plate-frame-point.md, docs/adr/0024).
