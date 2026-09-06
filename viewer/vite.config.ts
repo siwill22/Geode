@@ -16,6 +16,13 @@ export default defineConfig({
   server: { port: 5173 },
   build: {
     target: 'es2022',
+    // three.js alone accounts for most of this and isn't meaningfully
+    // tree-shakeable here -- every viewer uses the whole rendering pipeline
+    // (Scene/Camera/Renderer/OrbitControls/geometries/materials), and there's
+    // no route-based split point in a single-view WebGL app. Raised rather
+    // than chased: Vite's default 500 kB warning assumes a splittable app,
+    // which this genuinely isn't.
+    chunkSizeWarningLimit: 700,
     // Vite's implicit single-entry build only picks up index.html; climate.html
     // needs to be named explicitly or `vite build` never emits it.
     rollupOptions: {
@@ -25,6 +32,20 @@ export default defineConfig({
         valdes: fileURLToPath(new URL('valdes.html', import.meta.url)),
         globe: fileURLToPath(new URL('globe.html', import.meta.url)),
         groupGlobe: fileURLToPath(new URL('groupGlobe.html', import.meta.url)),
+        reconstruction: fileURLToPath(new URL('reconstruction.html', import.meta.url)),
+        reconstructionGroup: fileURLToPath(new URL('reconstructionGroup.html', import.meta.url)),
+      },
+      output: {
+        // Every entry point shares three/lil-gui -- name that shared chunk
+        // 'vendor' explicitly rather than letting Rollup pick one of the
+        // app modules bundled alongside it (it previously came out as
+        // e.g. "clipRange-[hash].js", which reads like a bug report
+        // waiting to happen). Splitting vendor out from app code also means
+        // a code-only redeploy doesn't invalidate the browser's cached copy
+        // of three.js.
+        manualChunks(id) {
+          if (id.includes('node_modules')) return 'vendor';
+        },
       },
     },
   },

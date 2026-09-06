@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Geode Reconstruction Comparison</title>
+    <style>
+      :root { color-scheme: dark; }
+      html, body {
+        margin: 0; height: 100%; overflow: hidden;
+        background: #0b0d10;
+        font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, sans-serif;
+        color: #d8dee4;
+      }
+      canvas { display: block; }
+      /* Multi-Globe toolbar (see docs/adr/0022) -- hidden by main.ts unless
+         the recipe declared `multiGlobe`. Mirrors globe.html's identical
+         #toolbar styling. */
+      #toolbar {
+        position: fixed; left: 50%; top: 8px; transform: translateX(-50%);
+        display: flex; gap: 8px; z-index: 20;
+      }
+      #toolbar button {
+        font: inherit; color: #d8dee4; background: #1b1f24;
+        border: 1px solid #3a4048; border-radius: 4px;
+        padding: 6px 12px; cursor: pointer;
+      }
+      #toolbar button:hover { background: #262b32; }
+      .sync-toggle {
+        display: flex; align-items: center; gap: 5px;
+        font: inherit; color: #d8dee4; background: #1b1f24;
+        border: 1px solid #3a4048; border-radius: 4px;
+        padding: 6px 12px; cursor: pointer;
+      }
+      .status {
+        position: fixed; left: 12px; top: 12px;
+        padding: 6px 10px; border-radius: 4px;
+        background: rgba(0, 0, 0, 0.6); color: #cfd6dd;
+      }
+      .credit {
+        position: fixed; right: 12px; bottom: 12px;
+        color: #5d6873; font-size: 11px; max-width: 40ch; text-align: right;
+      }
+      #error {
+        position: fixed; left: 12px; top: 90px; max-width: 60ch;
+        padding: 10px; border-radius: 4px; white-space: pre-wrap;
+        background: #3a1416; color: #ffb4b4;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="toolbar" hidden>
+      <button id="add-globe">+ Add globe</button>
+      <label class="sync-toggle"><input type="checkbox" id="sync-age" /> sync time</label>
+    </div>
+    <script type="module" src="/src/reconstructionGroup/main.ts"></script>
+  </body>
+</html>

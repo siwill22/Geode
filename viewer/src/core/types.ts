@@ -211,6 +211,50 @@ export interface ArchiveIndex {
    *  core/coastlines.ts's resolveCoastlineSet(). Absent for an archive with
    *  no per-run coastline exports. */
   native_coastlines?: Record<string, CoastlineSet>;
+  /** Reconstruction Models as a first-class catalog section -- see
+   *  docs/adr/0021-reconstruction-models-get-their-own-catalog-section.md.
+   *  Purely additive: none of the coastline buckets above change meaning,
+   *  and this array's entries may point at files living in any of them (no
+   *  data is duplicated just to appear here). `has_boundaries` is mirrored
+   *  up from the entry's own manifest.json (see ReconstructionManifest) so
+   *  a consumer can filter without a second fetch -- the same reason
+   *  `reconstruction_model`/`comparison_role` are mirrored onto `models[]`
+   *  entries above. Absent for an archive with no exported Reconstruction
+   *  Models. */
+  reconstruction_models?: ReconstructionEntry[];
+}
+
+/** One `ArchiveIndex.reconstruction_models[]` entry -- see
+ *  docs/adr/0021-reconstruction-models-get-their-own-catalog-section.md. */
+export interface ReconstructionEntry {
+  id: string;
+  name: string;
+  source: string;
+  path: string;
+  has_boundaries: boolean;
+}
+
+/** A Reconstruction Model's own manifest.json (path from
+ *  `ArchiveIndex.reconstruction_models[].path`) -- coastline geometry is
+ *  mandatory (every Reconstruction Model has present-day geometry to
+ *  reconstruct); Boundary Frames are independently optional and sometimes
+ *  permanently absent (see docs/adr/0019 -- Scotese resolves no
+ *  topological plates at all, not merely "not yet exported"). */
+export interface ReconstructionManifest {
+  id: string;
+  name: string;
+  citation: string;
+  /** The gprm.datasets.Reconstructions fetch function this was derived
+   *  from (e.g. "fetch_Muller2019") -- provenance, and the guarantee that
+   *  coastlines and boundaries below came from the SAME fetch call, never
+   *  independently hand-picked files (see docs/adr/0021). */
+  source_fetch: string;
+  age_min: number;
+  age_max: number;
+  has_boundaries: boolean;
+  coastlines: CoastlineSet;
+  /** deep-time-map series manifest path, present only if has_boundaries. */
+  boundaries?: string;
 }
 
 export interface ColormapData {

@@ -23,11 +23,28 @@ import path from 'node:path';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_ARCHIVE_DIR = path.join(HERE, '..', 'archive');
 
-export const TOOL_ALLOWLIST = ['legend', 'age-slider', 'no-data-toggle', 'query-point'];
-export const WRAPPER_TYPES = ['single-model-globe', 'model-group-globe'];
+export const TOOL_ALLOWLIST = ['legend', 'age-slider', 'no-data-toggle', 'query-point', 'time-series'];
+export const MODEL_WRAPPER_TYPES = ['single-model-globe', 'model-group-globe'];
+/** Compare Reconstruction Models directly -- no numerical Model, no `ui.tools`
+ *  menu (Reconstruction Age is always on; a Boundary Frame toggle appears
+ *  automatically per docs/adr/0019/0020). */
+export const RECONSTRUCTION_WRAPPER_TYPES = ['single-reconstruction-globe', 'reconstruction-group-globe'];
+export const WRAPPER_TYPES = [...MODEL_WRAPPER_TYPES, ...RECONSTRUCTION_WRAPPER_TYPES];
 
 function loadJson(p) {
   return JSON.parse(readFileSync(p, 'utf8'));
+}
+
+/** `multiGlobe` is offered uniformly across all four wrapper types (see
+ *  docs/adr/0022) -- validated once, before the wrapper-type branch, rather
+ *  than duplicated into both the reconstruction and model branches below. */
+function validateMultiGlobe(recipe, errors) {
+  if (recipe.multiGlobe === undefined) return;
+  if (typeof recipe.multiGlobe !== 'object' || recipe.multiGlobe === null
+    || typeof recipe.multiGlobe.syncAge !== 'boolean') {
+    errors.push(`multiGlobe must be an object of the form { "syncAge": boolean }, `
+      + `got ${JSON.stringify(recipe.multiGlobe)}`);
+  }
 }
 
 /**
@@ -112,6 +129,19 @@ function resolveCoastlines(archive, manifest) {
 }
 
 /**
+ * Mirrors globe/globeInstance.ts's (and groupGlobe/groupGlobeInstance.ts's)
+ * pickableTimeSeriesVariables() exactly -- see docs/adr/0023: no curated
+ * allowlist, just the variables a Field Aggregate series can meaningfully
+ * be computed for. Duplicated for the same standalone-Node reason as
+ * resolveCoastlines() above.
+ */
+function pickableTimeSeriesVariables(manifest) {
+  return manifest.variables.filter(
+    (v) => !v.overlay_only && !v.vector_only && !v.mask_only && !v.categorical,
+  );
+}
+
+/**
  * Group a recipe's `datasets` (model ids) into a comparison grid for the
  * `model-group-globe` wrapper, driven entirely by each Model's own declared
  * `reconstruction_model` and `comparison_role` fields -- never inferred
@@ -144,6 +174,11 @@ async function resolveModelGroup(archive, source, datasets, tools, errors) {
   if (tools.includes('age-slider') && !entries.some((e) => e.manifest.frames.length > 1)) {
     errors.push("'age-slider' was requested but no dataset in this group has more than 1 "
       + 'frame -- nothing to scrub in any combination');
+  }
+  if (tools.includes('time-series') && !entries.some((e) => pickableTimeSeriesVariables(e.manifest).length > 0)) {
+    errors.push("'time-series' was requested but no dataset in this group has any variable a "
+      + 'Field Aggregate series can be computed for (every variable is '
+      + 'overlay-only/vector-only/mask-only/categorical)');
   }
 
   const axisAValues = [...new Set(entries.map((e) => e.manifest.reconstruction_model).filter(Boolean))];
@@ -229,6 +264,32 @@ async function resolveModelGroup(archive, source, datasets, tools, errors) {
 }
 
 /**
+ * Resolve `reconstructionIds` against `archive.reconstruction_models[]` --
+ * see docs/adr/0021. Unlike `resolveModelGroup()`, there is no grid to
+ * complete and no manifest to fetch per entry: `archive.json`'s own summary
+ * (id/name/source/has_boundaries) is everything a recipe needs, mirrored up
+ * from each Reconstruction Model's manifest for exactly this reason (see
+ * `ArchiveIndex.reconstruction_models`'s doc comment in core/types.ts).
+ */
+function resolveReconstructionEntries(archive, ids, errors) {
+  const known = archive.reconstruction_models ?? [];
+  const validIds = known.map((r) => r.id);
+  const entries = [];
+  for (const id of ids) {
+    const entry = known.find((r) => r.id === id);
+    if (!entry) {
+      errors.push({
+        message: `no reconstruction_models entry '${id}' in archive.json`,
+        suggestions: nearestMatches(id, validIds),
+      });
+      continue;
+    }
+    entries.push(entry);
+  }
+  return entries;
+}
+
+/**
  * @param {object} recipe
  * @param {string} [source] Local archive directory or an http(s) archive
  *   base URL -- defaults to the recipe's OWN dataHost.archiveBase (the
@@ -259,6 +320,37 @@ export async function validateRecipe(recipe, source = recipe?.dataHost?.archiveB
   }
   if (!recipe.site?.title) errors.push('site.title is required');
   if (!recipe.dataHost?.archiveBase) errors.push('dataHost.archiveBase is required');
+  validateMultiGlobe(recipe, errors);
+
+  if (RECONSTRUCTION_WRAPPER_TYPES.includes(recipe.wrapperType)) {
+    if (!Array.isArray(recipe.reconstructionIds) || recipe.reconstructionIds.length === 0) {
+      return { ok: false, errors: ['reconstructionIds must be a non-empty array'] };
+    }
+    const unique = new Set(recipe.reconstructionIds);
+    if (unique.size !== recipe.reconstructionIds.length) {
+      errors.push('reconstructionIds contains duplicates');
+    }
+    const entries = resolveReconstructionEntries(archive, recipe.reconstructionIds, errors);
+    if (errors.length > 0) return { ok: false, errors };
+
+    if (recipe.wrapperType === 'single-reconstruction-globe' && entries.length !== 1) {
+      errors.push(`'single-reconstruction-globe' takes exactly 1 reconstruction -- got `
+        + `${entries.length}. Use 'reconstruction-group-globe' to compare several.`);
+    }
+    if (recipe.wrapperType === 'reconstruction-group-globe' && entries.length < 2) {
+      errors.push(`'reconstruction-group-globe' needs at least 2 reconstructions to compare -- `
+        + `got ${entries.length}. Use 'single-reconstruction-globe' for one.`);
+    }
+    if (errors.length > 0) return { ok: false, errors };
+
+    const resolvedEntries = entries.map((e) => (
+      { id: e.id, name: e.name, source: e.source, hasBoundaries: !!e.has_boundaries }
+    ));
+    const resolved = recipe.wrapperType === 'single-reconstruction-globe'
+      ? { reconstruction: resolvedEntries[0] }
+      : { entries: resolvedEntries };
+    return { ok: true, resolved };
+  }
 
   const tools = recipe.ui?.tools ?? [];
   for (const t of tools) {
@@ -295,6 +387,11 @@ export async function validateRecipe(recipe, source = recipe?.dataHost?.archiveB
         if (tools.includes('age-slider') && manifest.frames.length <= 1) {
           errors.push(`'age-slider' was requested but '${ds.modelId}' has only `
             + `${manifest.frames.length} frame(s) -- nothing to scrub`);
+        }
+        if (tools.includes('time-series') && pickableTimeSeriesVariables(manifest).length === 0) {
+          errors.push(`'time-series' was requested but '${ds.modelId}' has no variable a Field `
+            + 'Aggregate series can be computed for (every variable is '
+            + 'overlay-only/vector-only/mask-only/categorical)');
         }
         if (errors.length === 0) {
           resolved = {

@@ -120,6 +120,30 @@ def main():
     if native_coastlines:
         index["native_coastlines"] = native_coastlines
 
+    # Reconstruction Models as a first-class catalog section -- see
+    # docs/adr/0021-reconstruction-models-get-their-own-catalog-section.md.
+    # Purely additive: none of the ad hoc buckets above change, and this
+    # array is the ONLY thing new consumers (the reconstruction-comparison
+    # wrapper) should read. Each entry's own manifest.json (under
+    # reconstructions/<id>/) may point at files living anywhere in the
+    # archive, including the legacy buckets above -- no data is duplicated
+    # just to appear in this list.
+    reconstruction_models = []
+    for manifest_path in sorted(args.archive.glob("reconstructions/*/manifest.json")):
+        rm = json.loads(manifest_path.read_text())
+        reconstruction_models.append({
+            "id": rm["id"],
+            "name": rm["name"],
+            "source": rm.get("citation", ""),
+            "path": f"reconstructions/{rm['id']}/manifest.json",
+            "has_boundaries": bool(rm.get("has_boundaries")),
+        })
+        print(f"  reconstruction {rm['id']:14s} {rm['name']:24s} "
+              f"{rm['age_min']:.0f}-{rm['age_max']:.0f} Ma  "
+              f"boundaries={'yes' if rm.get('has_boundaries') else 'no'}")
+    if reconstruction_models:
+        index["reconstruction_models"] = reconstruction_models
+
     out = args.archive / "archive.json"
     out.write_text(json.dumps(index, indent=2))
     print(f"\nwrote {out}  ({len(models)} models)")
