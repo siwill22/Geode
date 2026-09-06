@@ -17,14 +17,26 @@ cell regardless of what's there.
 
 ## What it needs that doesn't exist yet
 
-**Plate polygon data, per Model.** Coastline features get a plate id for
-free from their own source shapefile's attributes
+**Plate polygon data, per Reconstruction Model** (not per numerical Model —
+see docs/adr/0024). Coastline features get a plate id for free from their
+own source shapefile's attributes
 (`feature.get_reconstruction_plate_id()`, see `prep_coastlines.py`) — that
 works because every coastline vertex already belongs to a tagged feature.
 An arbitrary clicked point belongs to nothing until it's tested against a
-closed plate polygon covering that location at the reference age (GPlates
-"static polygons," or a resolved topology). Nothing in the archive ships
-this today.
+closed plate polygon covering that location at the reference age. Nothing
+in the archive ships this today, but see docs/adr/0024: the underlying
+`gprm` fetch already carries one or both of two independent polygon
+sources for most Reconstruction Models, this just hasn't been exported by
+`prep_reconstruction.py` yet.
+
+**Also motivates**: velocity arrows, motion paths, and tectonic flowlines
+(GPlates-style) are the same primitive rendered differently — a Plate-Frame
+Point's trajectory drawn as a path/vector rather than read back as a
+Variable value — and "load arbitrary point data, reconstruct it
+consistently with whatever's displayed" is this primitive run over a
+user-supplied point set instead of one click. None of these need new
+machinery beyond what's described here; see CONTEXT.md's Plate-Frame Point
+entry.
 
 **The same per-Model provenance discipline ADR-0004 already established for
 coastlines vs. rotations.** ADR-0004 exists because pairing the wrong
@@ -68,9 +80,29 @@ even means at an in-between age).
 
 ## Open questions for the next session
 
-- Which polygon source per existing Model (static polygons vs. resolved
+- ~~Which polygon source per existing Model (static polygons vs. resolved
   topologies) — and does this differ per Model the way rotation files
-  already do per ADR-0004?
+  already do per ADR-0004?~~ **Answered empirically, see docs/adr/0024**:
+  it differs per Reconstruction Model, and the two sources are independent
+  of each other AND of `has_boundaries` — confirmed directly against
+  `gprm`, not assumed:
+
+  | Reconstruction Model | static polygons | dynamic (resolved) polygons |
+  |---|---|---|
+  | Müller 2019 | yes | yes |
+  | Seton 2012 | yes | yes |
+  | Scotese | **yes** | no (`has_boundaries: false`, ADR-0019) |
+  | Müller 2022 | **no** | yes |
+
+  Scotese — which permanently lacks Boundary Frames — can still support
+  Plate-Frame Point via static polygons; Müller 2022 — which has Boundary
+  Frames — cannot, and would need the resolved-topology path instead. Do
+  NOT derive one from the other or from `has_boundaries`; check both
+  independently the way ADR-0019 already established for boundaries alone.
+  Still open: whether a Reconstruction Model with both sources should
+  prefer one (static polygons are continuous/rotatable like coastlines;
+  resolved topology is discontinuous but geologically more current at
+  plate reorganizations) — a real trade-off, not resolved here.
 - Is the reference age always "whatever Reconstruction Age was active at
   the moment of the click," or can a user pick a different reference age
   after the fact?
