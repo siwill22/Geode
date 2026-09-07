@@ -181,7 +181,20 @@ function polygonArea(points: Float32Array): number {
  *  the polygon's own area, whether the apex is inside or outside -- the
  *  spherical shoelace formula), so it cannot answer "is `p` inside" at all.
  *  This sums ANGLES at `p` itself instead, which is what actually
- *  distinguishes inside from outside. */
+ *  distinguishes inside from outside.
+ *
+ *  BROKEN for a `p`/polygon pair more than roughly a hemisphere apart:
+ *  projecting onto the tangent plane AT `p` (a gnomonic-style projection) has
+ *  no way to represent a vertex on the far side of the sphere from `p` --
+ *  each `dirs[i]` still comes out as SOME finite direction, so the winding
+ *  sum can still land near +-2pi purely by coincidence of how the far-side
+ *  vertices happen to project, a false "inside". Confirmed directly: a
+ *  compact North America polygon (33 degree radius from its own centroid)
+ *  reporting `true` for a Southern Ocean point 173 degrees from that same
+ *  centroid. assignPlate() below guards every call here with a cheap
+ *  centroid+radius pre-filter for exactly this reason -- never call this
+ *  directly without one unless the caller already knows `p` is plausibly
+ *  close. */
 function isPointInPolygon(p: [number, number, number], points: Float32Array): boolean {
   const n = points.length / 3;
   const pDotP = p[0] * p[0] + p[1] * p[1] + p[2] * p[2];
@@ -207,6 +220,57 @@ function isPointInPolygon(p: [number, number, number], points: Float32Array): bo
   }
   return Math.abs(total) > Math.PI;
 }
+
+function angularDistance(a: [number, number, number], b: [number, number, number]): number {
+  const dot = Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]));
+  return Math.acos(dot);
+}
+
+function polygonCentroid(points: Float32Array): [number, number, number] {
+  const n = points.length / 3;
+  let x = 0, y = 0, z = 0;
+  for (let i = 0; i < n; i++) { x += points[i * 3]; y += points[i * 3 + 1]; z += points[i * 3 + 2]; }
+  const len = Math.hypot(x, y, z) || 1;
+  return [x / len, y / len, z / len];
+}
+
+/** Largest angle from `centroid` to any of the polygon's own vertices -- a
+ *  spherical cap of this radius, centred at `centroid`, is GUARANTEED to
+ *  contain the whole polygon whenever the radius is under 90 degrees (a cap
+ *  that size is geodesically convex, so the geodesic edge between any two
+ *  vertices inside it stays inside it too). Every real static polygon is
+ *  well under this -- a continent-scale block spanning a full hemisphere
+ *  from its own centroid would be extraordinary. */
+function polygonRadius(points: Float32Array, centroid: [number, number, number]): number {
+  const n = points.length / 3;
+  let best = 0;
+  for (let i = 0; i < n; i++) {
+    const d = angularDistance(centroid, [points[i * 3], points[i * 3 + 1], points[i * 3 + 2]]);
+    if (d > best) best = d;
+  }
+  return best;
+}
+
+/** Cached per polygon object (not per call -- assignPlate() runs this
+ *  pre-filter against all ~250 candidates on every single click, and a
+ *  polygon's own centroid/radius never change). A WeakMap rather than a
+ *  field on StaticPolygon itself: that type is also the plain wire shape
+ *  test fixtures construct directly (see check_static_polygons.mjs), and
+ *  keeping these derived-only values out of it means no fixture needs to
+ *  know they exist. */
+const polygonBounds = new WeakMap<StaticPolygon, { centroid: [number, number, number]; radius: number }>();
+
+function boundsFor(poly: StaticPolygon): { centroid: [number, number, number]; radius: number } {
+  let b = polygonBounds.get(poly);
+  if (!b) {
+    const centroid = polygonCentroid(poly.points);
+    b = { centroid, radius: polygonRadius(poly.points, centroid) };
+    polygonBounds.set(poly, b);
+  }
+  return b;
+}
+
+const HALF_PI = Math.PI / 2;
 
 export interface PlateAssignment {
   plateId: number;
@@ -238,6 +302,16 @@ export interface PlateAssignment {
  * tested against that polygon's present-day ring directly -- O(1) per
  * candidate, and exactly equivalent since rotating both sides of a
  * containment test by the same rotation preserves it.
+ *
+ * Every candidate is gated by a cheap centroid+radius pre-filter
+ * (boundsFor()) before the real (but hemisphere-limited, see its own doc
+ * comment) isPointInPolygon() ever runs -- discovered directly from a real
+ * click: a Southern Ocean point at 107 Ma was assigned to North America's
+ * polygon, 173 degrees from that polygon's own 33-degree radius, because
+ * isPointInPolygon()'s tangent-plane projection produces false positives for
+ * a point/polygon pair that far apart. The pre-filter makes that regime
+ * unreachable: only polygons the point could plausibly be inside (within
+ * their own bounding cap) ever reach the real test.
  */
 export function assignPlate(
   polygons: StaticPolygon[], table: RotationTable, at: LonLat, referenceAge: number,
@@ -252,6 +326,9 @@ export function assignPlate(
 
     const qInv = conjugateQuaternion(rotationAt(table, poly.plateId, referenceAge));
     const pAtPresent = rotateVector(qInv, p[0], p[1], p[2]);
+
+    const { centroid, radius } = boundsFor(poly);
+    if (radius < HALF_PI && angularDistance(pAtPresent, centroid) > radius) continue;
     if (!isPointInPolygon(pAtPresent, poly.points)) continue;
 
     const area = polygonArea(poly.points);
