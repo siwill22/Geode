@@ -136,6 +136,11 @@ document.getElementById('add-globe')?.addEventListener('click', () => {
   void addInstance();
 });
 
+document.getElementById('globe-menu-toggle')?.addEventListener('click', () => {
+  const menu = document.getElementById('globe-menu');
+  if (menu) menu.hidden = !menu.hidden;
+});
+
 // --- projection toggle -----------------------------------------------------
 
 const projectionToggle = document.getElementById('projection-toggle');

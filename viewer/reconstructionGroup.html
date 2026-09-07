@@ -4,6 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Geode Reconstruction Comparison</title>
+    <link rel="stylesheet" href="/src/core/lilgui-theme.css" />
+    <link rel="stylesheet" href="/src/core/multiGlobeMenu.css" />
     <style>
       :root { color-scheme: dark; }
       html, body {
@@ -13,29 +15,20 @@
         color: #d8dee4;
       }
       canvas { display: block; }
-      /* Multi-Globe toolbar (see docs/adr/0022) -- hidden by main.ts unless
-         the recipe declared `multiGlobe`. Mirrors globe.html's identical
-         #toolbar styling. */
-      #toolbar {
-        position: fixed; left: 50%; top: 8px; transform: translateX(-50%);
-        display: flex; gap: 8px; z-index: 20;
-      }
-      #toolbar button {
-        font: inherit; color: #d8dee4; background: #1b1f24;
-        border: 1px solid #3a4048; border-radius: 4px;
-        padding: 6px 12px; cursor: pointer;
-      }
-      #toolbar button:hover { background: #262b32; }
-      .sync-toggle {
-        display: flex; align-items: center; gap: 5px;
-        font: inherit; color: #d8dee4; background: #1b1f24;
-        border: 1px solid #3a4048; border-radius: 4px;
-        padding: 6px 12px; cursor: pointer;
-      }
+      /* left/top set per-instance in JS (setRect) once more than one globe
+         can be on screen -- see reconstructionGroupUi.ts's applyRect(). The
+         12/12 here is only ever seen for an instant before the first
+         instance mounts. */
       .status {
-        position: fixed; left: 12px; top: 12px;
+        position: fixed; left: 12px; top: 48px;
         padding: 6px 10px; border-radius: 4px;
         background: rgba(0, 0, 0, 0.6); color: #cfd6dd;
+      }
+      .timeinfo {
+        position: fixed;
+        padding: 6px 10px; border-radius: 4px;
+        background: rgba(0, 0, 0, 0.6); color: #9fb4c8;
+        font-variant-numeric: tabular-nums;
       }
       .credit {
         position: fixed; right: 12px; bottom: 12px;
@@ -49,7 +42,15 @@
     </style>
   </head>
   <body>
-    <div id="toolbar" hidden>
+    <button id="globe-menu-toggle" aria-label="Multi-Globe options" title="Multi-Globe options" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="7" height="7" rx="1.2"/>
+        <rect x="14" y="3" width="7" height="7" rx="1.2"/>
+        <rect x="3" y="14" width="7" height="7" rx="1.2"/>
+        <rect x="14" y="14" width="7" height="7" rx="1.2"/>
+      </svg>
+    </button>
+    <div id="globe-menu" hidden>
       <button id="add-globe">+ Add globe</button>
       <label class="sync-toggle"><input type="checkbox" id="sync-age" /> sync time</label>
     </div>

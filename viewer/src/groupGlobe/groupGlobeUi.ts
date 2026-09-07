@@ -116,15 +116,19 @@ export class GroupGlobeUI {
         .onChange((v: NoDataStyle) => cb.onNoDataStyle(v));
     }
 
+    // top: 48/84, not 12/44 -- clears the page-level #globe-menu-toggle icon
+    // fixed at the screen's actual top-left corner (core/multiGlobeMenu.css),
+    // which for the top-left tile is the same screen position these would
+    // otherwise sit at.
     this.status = document.createElement('div');
     this.status.className = 'status';
-    Object.assign(this.status.style, { top: '12px', left: '12px' });
+    Object.assign(this.status.style, { top: '48px', left: '12px' });
     document.body.appendChild(this.status);
     this.setStatus('');
 
     this.timeInfo = document.createElement('div');
     this.timeInfo.className = 'timeinfo';
-    Object.assign(this.timeInfo.style, { top: '44px', left: '12px' });
+    Object.assign(this.timeInfo.style, { top: '84px', left: '12px' });
     document.body.appendChild(this.timeInfo);
     this.setTimeInfo('');
 
@@ -184,12 +188,12 @@ export class GroupGlobeUI {
     const bottomEdge = innerHeight - (y + height);
     this.panelAnchor.style.top = `${y + 8}px`;
     this.panelAnchor.style.right = `${rightEdge + 8}px`;
-    this.status.style.top = `${y + 12}px`;
+    this.status.style.top = `${y + 48}px`;
     this.status.style.left = `${x + 12}px`;
-    this.timeInfo.style.top = `${y + 44}px`;
+    this.timeInfo.style.top = `${y + 80}px`;
     this.timeInfo.style.left = `${x + 12}px`;
     if (this.queryPanel) {
-      this.queryPanel.style.top = `${y + 76}px`;
+      this.queryPanel.style.top = `${y + 112}px`;
       this.queryPanel.style.left = `${x + 12}px`;
     }
     if (this.legend) {

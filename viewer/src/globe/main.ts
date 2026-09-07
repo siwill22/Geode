@@ -9,6 +9,7 @@ import {
 } from '../core/projection';
 import type { Rect } from '../core/layout';
 import { MultiInstanceHost } from '../core/multiInstanceHost';
+import { wireMultiGlobeMenu } from '../core/multiGlobeMenu';
 import { GlobeInstance, type GlobeInstanceDeps, type NoDataStyle } from './globeInstance';
 import { GLOBE_CONFIG } from '../generated/config';
 
@@ -73,30 +74,29 @@ async function addInstance(): Promise<void> {
   broadcastAge(host.lastEditOrFocused('age')!);
 }
 
-// --- Multi-Globe toolbar -------------------------------------------------
+// --- Multi-Globe menu ------------------------------------------------------
 //
-// Always present in the static HTML (see globe.html) so scaffoldRepo.mjs
-// never has to template it per recipe -- same convention `ui.tools`
-// already uses (GlobeUI shows/hides its own controls at runtime). Hidden
-// entirely when the recipe didn't ask for it.
+// Markup always present in the static HTML (see globe.html) so
+// scaffoldRepo.mjs never has to template it per recipe -- same convention
+// `ui.tools` already uses (GlobeUI shows/hides its own controls at
+// runtime). wireMultiGlobeMenu leaves it hidden entirely when the recipe
+// didn't ask for it -- see core/multiGlobeMenu.ts.
 
-const toolbar = document.getElementById('toolbar');
+// Kept as a module-level reference (not just inside wireMultiGlobeMenu)
+// because the __geode test hook's setSyncAge() below also needs to keep
+// the checkbox's visual state consistent with a change it drives directly
+// through `host`, bypassing the checkbox's own change event entirely.
 const syncAgeCheckbox = document.getElementById('sync-age') as HTMLInputElement | null;
 
-if (GLOBE_CONFIG.multiGlobe) {
-  if (toolbar) toolbar.hidden = false;
-  document.getElementById('add-globe')?.addEventListener('click', () => {
-    void addInstance();
-  });
-  if (syncAgeCheckbox) {
-    syncAgeCheckbox.checked = GLOBE_CONFIG.multiGlobe.syncAge;
-    host.setSync('age', GLOBE_CONFIG.multiGlobe.syncAge);
-    syncAgeCheckbox.addEventListener('change', (e) => {
-      host.setSync('age', (e.target as HTMLInputElement).checked);
-      broadcastAge(host.lastEditOrFocused('age')!);
-    });
-  }
-}
+wireMultiGlobeMenu(
+  GLOBE_CONFIG.multiGlobe,
+  () => { void addInstance(); },
+  (enabled) => { host.setSync('age', enabled); },
+  (enabled) => {
+    host.setSync('age', enabled);
+    broadcastAge(host.lastEditOrFocused('age')!);
+  },
+);
 
 addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);

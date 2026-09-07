@@ -462,7 +462,11 @@ export class ValdesUI {
     this.legend.style.height = `${matchedHeight}px`;
     this.ageSliderWrap.style.height = `${matchedHeight}px`;
 
-    this.status.style.top = `${y + 8}px`;
+    // y + 44, not + 8: clears the page-level #globe-menu-toggle icon fixed
+    // at the screen's actual top-left corner (see core/multiGlobeMenu.css),
+    // which for the top-left tile is the same screen position .status
+    // would otherwise sit at.
+    this.status.style.top = `${y + 44}px`;
     this.status.style.left = `${x + 12}px`;
   }
 

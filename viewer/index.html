@@ -4,6 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Geode</title>
+    <link rel="stylesheet" href="/src/core/lilgui-theme.css" />
+    <link rel="stylesheet" href="/src/core/multiGlobeMenu.css" />
     <style>
       :root { color-scheme: dark; }
       html, body {
@@ -13,36 +15,6 @@
         color: #d8dee4;
       }
       canvas { display: block; }
-      /* lil-gui injects its own stylesheet at runtime, inserted before any
-         <style> already in <head> (see its _injectStyles) specifically so
-         a page's own overrides win the cascade -- these rules rely on
-         that ordering rather than on !important. */
-      .lil-gui .lil-controller.lil-number .lil-slider {
-        --slider-knob-width: 8px;
-      }
-      .lil-gui .lil-controller.lil-number .lil-fill {
-        background: #565d66;
-        border-right: none;
-        position: relative;
-      }
-      /* Knob rendered as its own capsule rather than a plain border, so it
-         reads as a fader cap (gloss + grip line) instead of a flat tick --
-         positioned to sit exactly where the border used to, in the padding
-         .lil-slider reserves via --slider-knob-width. */
-      .lil-gui .lil-controller.lil-number .lil-fill::after {
-        content: '';
-        position: absolute;
-        top: 0; right: calc(-1 * var(--slider-knob-width));
-        width: var(--slider-knob-width); height: 100%;
-        border-radius: 1.5px;
-        background:
-          linear-gradient(rgba(0, 0, 0, 0.35), rgba(0, 0, 0, 0.35)) center / 100% 2px no-repeat,
-          linear-gradient(180deg, #a83232 0%, #8f2626 50%, #7a1f1f 100%);
-        box-shadow:
-          inset 0 1px 0 rgba(255, 255, 255, 0.12),
-          0 0 0 1px rgba(0, 0, 0, 0.5),
-          0 1px 2px rgba(0, 0, 0, 0.5);
-      }
       /*
        * Positioned per-instance in JS (GlobeInstance/UI.setRect), since each
        * globe tile gets its own status/timeinfo element -- these rules only
@@ -107,37 +79,23 @@
         background: rgba(0, 0, 0, 0.6); color: #9fb4c8;
         font-variant-numeric: tabular-nums;
       }
-      /* Third icon in the top-left row, after #hint-toggle (left:12) and
-         #preset-toggle (left:44) -- same 32px stride, same 24x24 circle
-         style. Expands #globe-menu into the same below-the-row slot
-         #hint/#presets already share (left:12, top:44); only one flyout is
-         ever opened at a time in practice, so the shared slot (an existing
-         convention, not new) is fine. */
+      /* #globe-menu-toggle/#globe-menu's colours/layout come from
+         core/multiGlobeMenu.css -- this page only overrides position/size,
+         since it's the THIRD icon in a row shared with #hint-toggle
+         (left:12) and #preset-toggle (left:44), same 32px stride, same
+         24x24 circle style, rather than multiGlobeMenu.css's own default
+         standalone 32x32 top-left circle. Expands #globe-menu into the
+         same below-the-row slot #hint/#presets already share (left:12,
+         top:44); only one flyout is ever opened at a time in practice, so
+         the shared slot (an existing convention, not new) is fine. */
       #globe-menu-toggle {
-        position: fixed; left: 76px; top: 12px; z-index: 20;
-        width: 24px; height: 24px; padding: 0;
-        display: flex; align-items: center; justify-content: center;
-        font: inherit; color: #d8dee4; background: #1b1f24;
-        border: 1px solid #3a4048; border-radius: 50%; cursor: pointer;
+        left: 76px; top: 12px;
+        width: 24px; height: 24px;
       }
-      #globe-menu-toggle:hover { background: #262b32; }
-      #globe-menu-toggle svg { display: block; width: 14px; height: 14px; }
+      #globe-menu-toggle svg { width: 14px; height: 14px; }
       #globe-menu {
-        position: fixed; left: 12px; top: 44px; z-index: 20;
-        width: 200px; padding: 8px; border-radius: 6px;
-        background: #1b1f24; border: 1px solid #3a4048;
-        display: flex; flex-direction: column; gap: 6px;
-      }
-      #globe-menu[hidden] { display: none; }
-      #globe-menu button, .sync-toggle {
-        font: inherit; color: #d8dee4; background: #262b32;
-        border: 1px solid #3a4048; border-radius: 4px;
-        padding: 6px 10px; cursor: pointer;
-      }
-      #globe-menu button { text-align: left; }
-      #globe-menu button:hover { background: #2f353d; }
-      .sync-toggle {
-        display: flex; align-items: center; gap: 5px;
+        top: 44px;
+        width: 200px;
       }
       #credit {
         position: fixed; right: 12px; bottom: 8px;

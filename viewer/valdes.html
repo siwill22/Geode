@@ -4,6 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Geode Valdes/BRIDGE</title>
+    <link rel="stylesheet" href="/src/core/lilgui-theme.css" />
+    <link rel="stylesheet" href="/src/core/multiGlobeMenu.css" />
     <style>
       :root { color-scheme: dark; }
       html, body {
@@ -13,30 +15,6 @@
         color: #d8dee4;
       }
       canvas { display: block; }
-      /* See climate.html for why these lil-gui slider-knob overrides exist --
-         identical here, same library, same look. */
-      .lil-gui .lil-controller.lil-number .lil-slider {
-        --slider-knob-width: 8px;
-      }
-      .lil-gui .lil-controller.lil-number .lil-fill {
-        background: #565d66;
-        border-right: none;
-        position: relative;
-      }
-      .lil-gui .lil-controller.lil-number .lil-fill::after {
-        content: '';
-        position: absolute;
-        top: 0; right: calc(-1 * var(--slider-knob-width));
-        width: var(--slider-knob-width); height: 100%;
-        border-radius: 1.5px;
-        background:
-          linear-gradient(rgba(0, 0, 0, 0.35), rgba(0, 0, 0, 0.35)) center / 100% 2px no-repeat,
-          linear-gradient(180deg, #a83232 0%, #8f2626 50%, #7a1f1f 100%);
-        box-shadow:
-          inset 0 1px 0 rgba(255, 255, 255, 0.12),
-          0 0 0 1px rgba(0, 0, 0, 0.5),
-          0 1px 2px rgba(0, 0, 0, 0.5);
-      }
       #projection-toggle {
         flex: none; align-self: center;
         width: 40px; height: 40px; padding: 0;
@@ -108,23 +86,6 @@
       .legend-key-swatch {
         flex: none; width: 10px; height: 10px; border-radius: 2px;
       }
-      #toolbar {
-        position: fixed; left: 50%; top: 8px; transform: translateX(-50%);
-        display: flex; align-items: center; gap: 8px;
-        z-index: 20;
-      }
-      #toolbar button {
-        font: inherit; color: #d8dee4; background: #1b1f24;
-        border: 1px solid #3a4048; border-radius: 4px;
-        padding: 6px 12px; cursor: pointer;
-      }
-      #toolbar button:hover { background: #262b32; }
-      .sync-toggle {
-        display: flex; align-items: center; gap: 5px;
-        font: inherit; color: #d8dee4; background: #1b1f24;
-        border: 1px solid #3a4048; border-radius: 4px;
-        padding: 6px 12px; cursor: pointer;
-      }
       .credit {
         grid-column: 3; justify-self: end;
         color: #5d6873; font-size: 11px; max-width: 40ch; text-align: right;
@@ -138,7 +99,15 @@
   </head>
   <body>
     <button id="projection-toggle" aria-label="Switch to Plate Carrée projection" title="Switch to Plate Carrée projection">&#9645;</button>
-    <div id="toolbar">
+    <button id="globe-menu-toggle" aria-label="Multi-Globe options" title="Multi-Globe options">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="7" height="7" rx="1.2"/>
+        <rect x="14" y="3" width="7" height="7" rx="1.2"/>
+        <rect x="3" y="14" width="7" height="7" rx="1.2"/>
+        <rect x="14" y="14" width="7" height="7" rx="1.2"/>
+      </svg>
+    </button>
+    <div id="globe-menu" hidden>
       <button id="add-globe">+ Add globe</button>
       <label class="sync-toggle"><input type="checkbox" id="sync-age" /> sync time</label>
     </div>

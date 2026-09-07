@@ -5,6 +5,7 @@ import { PALETTE } from '../core/palette';
 import { loadArchive } from '../core/volume';
 import { createProjectionCamera, createProjectionControls, updateProjectionCameraAspect } from '../core/projection';
 import { MultiInstanceHost } from '../core/multiInstanceHost';
+import { wireMultiGlobeMenu } from '../core/multiGlobeMenu';
 import { ReconstructionGroupInstance, type ReconstructionGroupInstanceDeps } from './reconstructionGroupInstance';
 import { RECONSTRUCTION_GROUP_CONFIG } from '../generated/reconstructionGroupConfig';
 
@@ -55,25 +56,21 @@ async function addInstance(): Promise<void> {
   broadcastAge(host.lastEditOrFocused('age')!);
 }
 
-// --- Multi-Globe toolbar -- see globe/main.ts's identical section -------
+// --- Multi-Globe menu -- see globe/main.ts's identical section -----------
 
-const toolbar = document.getElementById('toolbar');
+// See globe/main.ts's identical comment: kept module-level for the
+// __geode test hook's setSyncAge() below.
 const syncAgeCheckbox = document.getElementById('sync-age') as HTMLInputElement | null;
 
-if (RECONSTRUCTION_GROUP_CONFIG.multiGlobe) {
-  if (toolbar) toolbar.hidden = false;
-  document.getElementById('add-globe')?.addEventListener('click', () => {
-    void addInstance();
-  });
-  if (syncAgeCheckbox) {
-    syncAgeCheckbox.checked = RECONSTRUCTION_GROUP_CONFIG.multiGlobe.syncAge;
-    host.setSync('age', RECONSTRUCTION_GROUP_CONFIG.multiGlobe.syncAge);
-    syncAgeCheckbox.addEventListener('change', (e) => {
-      host.setSync('age', (e.target as HTMLInputElement).checked);
-      broadcastAge(host.lastEditOrFocused('age')!);
-    });
-  }
-}
+wireMultiGlobeMenu(
+  RECONSTRUCTION_GROUP_CONFIG.multiGlobe,
+  () => { void addInstance(); },
+  (enabled) => { host.setSync('age', enabled); },
+  (enabled) => {
+    host.setSync('age', enabled);
+    broadcastAge(host.lastEditOrFocused('age')!);
+  },
+);
 
 addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);

@@ -4,6 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Geode Paleoclimate</title>
+    <link rel="stylesheet" href="/src/core/lilgui-theme.css" />
+    <link rel="stylesheet" href="/src/core/multiGlobeMenu.css" />
     <style>
       :root { color-scheme: dark; }
       html, body {
@@ -13,36 +15,6 @@
         color: #d8dee4;
       }
       canvas { display: block; }
-      /* lil-gui injects its own stylesheet at runtime, inserted before any
-         <style> already in <head> (see its _injectStyles) specifically so
-         a page's own overrides win the cascade -- these rules rely on
-         that ordering rather than on !important. */
-      .lil-gui .lil-controller.lil-number .lil-slider {
-        --slider-knob-width: 8px;
-      }
-      .lil-gui .lil-controller.lil-number .lil-fill {
-        background: #565d66;
-        border-right: none;
-        position: relative;
-      }
-      /* Knob rendered as its own capsule rather than a plain border, so it
-         reads as a fader cap (gloss + grip line) instead of a flat tick --
-         positioned to sit exactly where the border used to, in the padding
-         .lil-slider reserves via --slider-knob-width. */
-      .lil-gui .lil-controller.lil-number .lil-fill::after {
-        content: '';
-        position: absolute;
-        top: 0; right: calc(-1 * var(--slider-knob-width));
-        width: var(--slider-knob-width); height: 100%;
-        border-radius: 1.5px;
-        background:
-          linear-gradient(rgba(0, 0, 0, 0.35), rgba(0, 0, 0, 0.35)) center / 100% 2px no-repeat,
-          linear-gradient(180deg, #a83232 0%, #8f2626 50%, #7a1f1f 100%);
-        box-shadow:
-          inset 0 1px 0 rgba(255, 255, 255, 0.12),
-          0 0 0 1px rgba(0, 0, 0, 0.5),
-          0 1px 2px rgba(0, 0, 0, 0.5);
-      }
       /* NOT independently positioned -- this single global control
          (Projection applies to every globe at once, see docs/adr/0003) is
          mounted as its own standalone circle, a sibling of ageSliderWrap
@@ -266,37 +238,10 @@
       .query-point-panel .qp-class {
         margin-top: 4px; font-size: 13px; font-weight: 600; color: #e7ebef;
       }
-      /* Collapsed by default -- see docs/adr/0022's discussion of Multi-Globe
-         crowding the screen once several instances each have their own
-         top-right panel. A single icon (top-LEFT, clear of every instance's
-         own panelAnchor) expands #globe-menu below it, same collapsed-until-
-         asked-for convention as index.html's #preset-toggle/#presets. */
-      #globe-menu-toggle {
-        position: fixed; left: 12px; top: 8px; z-index: 20;
-        width: 32px; height: 32px; padding: 0;
-        display: flex; align-items: center; justify-content: center;
-        font: inherit; color: #d8dee4; background: #1b1f24;
-        border: 1px solid #3a4048; border-radius: 50%; cursor: pointer;
-      }
-      #globe-menu-toggle:hover { background: #262b32; }
-      #globe-menu-toggle svg { display: block; width: 18px; height: 18px; }
-      #globe-menu {
-        position: fixed; left: 12px; top: 48px; z-index: 20;
-        width: 160px; padding: 8px; border-radius: 6px;
-        background: #1b1f24; border: 1px solid #3a4048;
-        display: flex; flex-direction: column; gap: 6px;
-      }
-      #globe-menu[hidden] { display: none; }
-      #globe-menu button, .sync-toggle {
-        font: inherit; color: #d8dee4; background: #262b32;
-        border: 1px solid #3a4048; border-radius: 4px;
-        padding: 6px 10px; cursor: pointer;
-      }
-      #globe-menu button { text-align: left; }
-      #globe-menu button:hover { background: #2f353d; }
-      .sync-toggle {
-        display: flex; align-items: center; gap: 5px;
-      }
+      /* #globe-menu-toggle/#globe-menu styling lives in
+         core/multiGlobeMenu.css, shared by every HTML entry -- see that
+         file's own doc comment for why (docs/adr/0022's Multi-Globe
+         crowding discussion). */
       /* The 3rd column of .bottom-bar's grid (see ClimateUI.setCredit()),
        * not independently positioned. */
       .credit {
