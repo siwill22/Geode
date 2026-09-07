@@ -18,4 +18,5 @@ export const GLOBE_CONFIG: GlobeConfig = {
   modelId: 'cao2024-deformation',
   title: 'Geode Globe',
   tools: ['legend', 'age-slider', 'no-data-toggle', 'query-point'],
+  multiGlobe: { syncAge: false },
 };

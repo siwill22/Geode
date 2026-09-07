@@ -21,4 +21,5 @@ export interface ReconstructionGroupConfig {
 export const RECONSTRUCTION_GROUP_CONFIG: ReconstructionGroupConfig = {
   title: 'Reconstruction Comparison',
   reconstructionIds: ['muller2019', 'seton2012'],
+  multiGlobe: { syncAge: false },
 };

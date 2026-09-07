@@ -40,4 +40,5 @@ export const GROUP_GLOBE_CONFIG: GroupGlobeConfig = {
   },
   defaultAxisA: 'Cao2024',
   defaultAxisB: 'Deformation',
+  multiGlobe: { syncAge: false },
 };

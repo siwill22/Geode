@@ -16,4 +16,5 @@ export interface ReconstructionConfig {
 export const RECONSTRUCTION_CONFIG: ReconstructionConfig = {
   reconstructionId: 'muller2019',
   title: 'Müller et al. 2019',
+  multiGlobe: { syncAge: false },
 };
