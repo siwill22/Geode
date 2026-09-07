@@ -4,6 +4,7 @@ import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { lonLatToVec3 } from '../core/constants';
 import { PALETTE } from '../core/palette';
 import { fetchCoastlineData } from '../core/coastlines';
+import { loadStaticPolygonDataFor } from '../core/staticPolygons';
 import { loadArchive, loadColormaps } from '../core/volume';
 import type { Rect } from '../core/layout';
 import { MultiInstanceHost } from '../core/multiInstanceHost';
@@ -288,10 +289,13 @@ projectionToggle?.addEventListener('click', () => {
 // per-instance TOOL state competing with OrbitControls for the same drag
 // gesture (no cutaway drawing here) -- OrbitControls owns ordinary pointer
 // interaction with nothing to fight it EXCEPT the one exception below:
-// shift-click, Anchored Point's Month Profile query (see
-// ClimateInstance.queryMonthProfileAt(), docs/plans/anchored-point-query.md).
-// That gesture needs a tile hit AND that tile's own NDC, unlike the old
-// click-just-to-focus-a-tile behaviour, which only needed the former.
+// shift-click, dispatched by ClimateInstance.queryAt() to either Anchored
+// Point's Month Profile query (queryMonthProfileAt(),
+// docs/plans/anchored-point-query.md) or Plate-Frame Point
+// (queryPlateFramePointAt(), docs/adr/0025, docs/adr/0026) depending on the
+// instance's own `view.queryMode`. That gesture needs a tile hit AND that
+// tile's own NDC, unlike the old click-just-to-focus-a-tile behaviour, which
+// only needed the former.
 
 function hitTest(clientX: number, clientY: number): { inst: ClimateInstance; rect: Rect } | null {
   for (let i = 0; i < host.instances.length; i++) {
@@ -332,7 +336,7 @@ renderer.domElement.addEventListener('pointerup', (ev) => {
   // The shared camera's aspect is left matching whichever tile animate()
   // rendered last -- same reasoning as tomography's own focusCameraOn().
   updateProjectionCameraAspect(camera, hit.rect.width / hit.rect.height);
-  void hit.inst.queryMonthProfileAt(ndcFor(hit.rect, ev.clientX, ev.clientY), ev.clientX, ev.clientY);
+  void hit.inst.queryAt(ndcFor(hit.rect, ev.clientX, ev.clientY));
 });
 
 // --- boot -------------------------------------------------------------------
@@ -352,8 +356,23 @@ async function boot(): Promise<void> {
     }
   }
 
+  // Plate-Frame Point's data source (docs/adr/0025/0026) -- every
+  // climate-family Manifest type resolves to the same Scotese Reconstruction
+  // Model, so a single lookup keyed on `type: 'climate'` covers every
+  // instance and every registered climate model alike; see
+  // resolveStaticPolygonReconstructionId()'s own doc comment for why this is
+  // a type-based switch rather than a per-Model declared field. A mode, not
+  // a prerequisite -- Plate-Frame Point just stays unavailable if this fails.
+  let staticPolygonData = null;
+  try {
+    staticPolygonData = await loadStaticPolygonDataFor(ARCHIVE, archive, { type: 'climate' });
+  } catch (e) {
+    console.error(e);
+    staticPolygonData = null;
+  }
+
   deps = {
-    archiveBase: ARCHIVE, archive, colormaps, coastlineData,
+    archiveBase: ARCHIVE, archive, colormaps, coastlineData, staticPolygonData,
   };
 
   // 'climate-monthly' (Valdes/BRIDGE's Atmosphere Layer -- see docs/adr/0008)

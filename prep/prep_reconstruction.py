@@ -15,13 +15,19 @@ object, never by a human picking a file.
 
 Outputs, under --out (default archive/reconstructions/<id>/):
   manifest.json                     id, name, citation, source_fetch,
-                                     age_min, age_max, has_boundaries
+                                     age_min, age_max, has_boundaries,
+                                     has_static_polygons
   coastlines/geometry.bin           see prep_coastlines.py
-  coastlines/rotations.json
+  coastlines/rotations.json         shared by coastlines AND static polygons
+                                     -- covers the union of both sources'
+                                     plate ids, not just coastlines' own
   boundaries/boundaries.json        only if the model has resolvable
   boundaries/frames/*.geojson       topologies -- see docs/adr/0019 (some
                                      Reconstruction Models, e.g. Scotese,
                                      never have this, permanently)
+  staticpolygons/geometry.bin       only if the model has static polygons --
+                                     see prep_staticpolygons.py and
+                                     docs/adr/0025 (Plate-Frame Point)
 
 Usage:
   conda run -n pygmt17 python prep/prep_reconstruction.py \\
@@ -38,6 +44,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
 from prep_coastlines import export_geometry, export_rotations  # noqa: E402
+from prep_staticpolygons import export_static_polygons  # noqa: E402
 
 DEEP_TIME_MAP_PY = Path(__file__).parent.parent / "viewer" / "vendor" / "deep-time-map" / "python"
 sys.path.insert(0, str(DEEP_TIME_MAP_PY))
@@ -62,6 +69,8 @@ def main():
                     help="default: archive/reconstructions/<id>/")
     ap.add_argument("--skip-boundaries", action="store_true",
                     help="don't export topology even if the model has it")
+    ap.add_argument("--skip-static-polygons", action="store_true",
+                    help="don't export static polygons even if the model has them")
     args = ap.parse_args()
 
     from gprm.datasets import Reconstructions
@@ -86,14 +95,26 @@ def main():
     source_kind = "coastlines" if m.coastlines_files else "continent_polygons"
     rotation_files = list(m.rotation_files)
     has_boundaries = bool(m.dynamic_polygon_files) and not args.skip_boundaries
+    has_static_polygons = bool(m.static_polygon_files) and not args.skip_static_polygons
 
     print(f"  geometry source : {source_kind} ({len(geometry_files)} file(s))")
     print(f"  rotation files  : {len(rotation_files)} file(s)")
     print(f"  boundaries      : "
           f"{'yes' if has_boundaries else 'no (no dynamic polygons in this model)'}")
+    print(f"  static polygons : "
+          f"{'yes' if has_static_polygons else 'no (no static polygons in this model)'}")
 
     plate_ids, line_counts = export_geometry(
         geometry_files, out / "coastlines" / "geometry.bin", args.fill_spacing_deg)
+
+    if has_static_polygons:
+        static_plate_ids, static_counts = export_static_polygons(
+            args.model, m.static_polygon_files, out / "staticpolygons" / "geometry.bin")
+        plate_ids = sorted(set(plate_ids) | set(static_plate_ids))
+        for pid, (n, npts) in static_counts.items():
+            ln, lp = line_counts.get(pid, (0, 0))
+            line_counts[pid] = (ln + n, lp + npts)
+
     ages = np.arange(args.age_min, args.age_max + args.age_step / 2, args.age_step)
     export_rotations(rotation_files, plate_ids, ages, args.anchor,
                       out / "coastlines" / "rotations.json", line_counts)
@@ -114,6 +135,7 @@ def main():
         "age_min": float(args.age_min),
         "age_max": float(args.age_max),
         "has_boundaries": has_boundaries,
+        "has_static_polygons": has_static_polygons,
         "coastlines": {
             "geometry": "coastlines/geometry.bin",
             "rotations": "coastlines/rotations.json",
@@ -123,6 +145,13 @@ def main():
     }
     if has_boundaries:
         manifest["boundaries"] = "boundaries/boundaries.json"
+    if has_static_polygons:
+        manifest["static_polygons"] = {
+            "geometry": "staticpolygons/geometry.bin",
+            # Same rotation table as coastlines (see prep_staticpolygons.py) --
+            # plate ids from both sources were unioned before it was written.
+            "rotations": "coastlines/rotations.json",
+        }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2))
     print(f"\nwrote {out}/manifest.json")
 

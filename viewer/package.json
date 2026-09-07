@@ -11,6 +11,7 @@
     "pack:deploy": "node ../prep/pack_deploy.mjs",
     "check:mask": "node scripts/dump_masks.mjs /tmp/geode-masks.json && conda run -n pygmt17 python ../test-data/check_mask.py /tmp/geode-masks.json",
     "check:query-point": "node scripts/check_query_point.mjs",
+    "check:static-polygons": "node scripts/check_static_polygons.mjs",
     "check:render": "node scripts/shoot.mjs shots",
     "check:boundaries": "cd .. && PYTHONPATH=\"$PYTHONPATH:$PWD/viewer/vendor/deep-time-map/python\" conda run -n pygmt17 python prep/check_boundaries.py"
   },

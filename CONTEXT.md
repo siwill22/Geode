@@ -442,13 +442,27 @@ showing that Frame already paid for.
 
 ## Age Series (point)
 
-An Anchored Point query answering "how has this cell changed across
-geological time": one value per Frame of the active Model, Annual layer
-only — never whichever Month is currently selected, for the same reason
-Field Aggregate reads Annual only. _Avoid_: "Time Series" alone for
-this — that term already names the whole-globe summary-per-age concept
-(see Time Series); qualify as "Age Series" to keep the two apart, since
-they answer different questions from what looks like the same axis.
+A Query Point query answering "how has this cell changed across geological
+time": one value per Frame of the active Model, Annual layer only — never
+whichever Month is currently selected, for the same reason Field Aggregate
+reads Annual only. _Avoid_: "Time Series" alone for this — that term
+already names the whole-globe summary-per-age concept (see Time Series);
+qualify as "Age Series" to keep the two apart, since they answer different
+questions from what looks like the same axis.
+
+Answerable by either query mode (ADR-0027): for an Anchored Point, one
+value per Frame with nothing filtered out — the grid cell never moves, so
+every Frame has something to report. For a Plate-Frame Point, the same
+question but following the assigned material point instead of a fixed
+cell — and per Plate-Frame Point's own "cannot answer" resolution, the
+series simply stops at the assigned polygon feature's own `beginAge`
+rather than reporting a value for a Frame the crust hadn't formed by; no
+per-entry outcome needed, since the caller already holds that cutoff and
+can render it as a series boundary (a shorter line on the full Model age
+range) rather than a gap inside one. In the climate viewer's query panel,
+this renders stacked below Month Profile, computed once per assigned point
+(a new click, or a layer/variable/climate-model switch) rather than
+re-fetched on every age-slider tick — see ADR-0027 for the full reasoning.
 
 ## Plate-Frame Point
 
@@ -457,16 +471,29 @@ a reference age, then re-expressed in grid space at every other Frame via
 that plate's absolute rotation — the same rotation mechanism the coastline
 pipeline already supplies (see ADR-0001's rotation table), applied to an
 arbitrary point instead of a coastline vertex. Assigning the reference
-Plate itself requires point-in-polygon testing against plate polygon data
-the archive does not yet carry — nothing today gives an arbitrary clicked
-point a plate id the way coastline features already carry one from their
-own source shapefile. Not yet implemented; see
-`docs/plans/plate-frame-point.md`.
+Plate itself requires point-in-polygon testing against plate polygon data —
+exported per Reconstruction Model since ADR-0025 (`staticpolygons/geometry.bin`,
+via `prep_staticpolygons.py`); a coastline feature, by contrast, already
+carries a plate id from its own source shapefile with no separate
+assignment step needed. Built and live in the climate viewer
+(`core/staticPolygons.ts`, `ClimateInstance.queryPlateFramePointAt()`) as a
+"query mode" toggle alongside Anchored Point (ADR-0026); see
+`docs/plans/plate-frame-point.md` and ADR-0025/0026/0027 for the resolved
+design.
 
-"No plate contains this point at this age" is an expected outcome of the
-query, not an error condition — a point on crust that has since subducted,
-or outside reconstructed polygon coverage, simply cannot answer for some
-ages in a series and must say so per-age, not fail the whole query.
+Assignment tests against a Reconstruction Model's **static** polygons only
+(ADR-0025) — dynamic/resolved-topology assignment is a distinct, deferred
+feature, not an alternate path this primitive picks per Model. That choice
+makes "cannot answer" simpler than it first looked: a static polygon is
+always crust that survives to present (digitized in present-day space,
+then rotated backward), so it can never represent "existed, then was
+subducted" — that scenario is structurally impossible here, not merely
+unhandled. The only real failure modes are (1) no static polygon covers the
+point at the reference age at all — assignment fails outright, once, at
+click time, no retry — or (2) an age older than the assigned polygon
+feature's own begin age, which needs no per-age re-test: point-in-polygon
+containment is invariant under the shared rigid rotation, so the one
+assignment made at click time bounds every age in the series at once.
 
 The word "Frame" here means reference frame, as in a plate's own frame of
 reference — a second sense of the word that coexists with Frame's other
@@ -483,5 +510,8 @@ consistently with whatever Reconstruction Model is on screen is the same
 per-point assignment-and-rotation applied to many points instead of one,
 under the same discipline ADR-0004 already requires (never a rotation/
 polygon pair from a different Reconstruction Model than what's displayed).
-None of these are separately scheduled; all wait on the same blocked
-dependency (see docs/plans/plate-frame-point.md, docs/adr/0024).
+None of these is built or separately scheduled — the underlying primitive
+they'd all be built from (assignment + rotation) is no longer a blocked
+dependency now that it exists, just not yet extended past a single click's
+Month Profile / Age Series (see docs/plans/plate-frame-point.md,
+docs/adr/0024, docs/adr/0025).

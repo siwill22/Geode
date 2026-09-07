@@ -176,6 +176,18 @@ export interface CoastlineSet {
   age_max: number;
 }
 
+/** One reconstructable static-polygon set: present-day geometry plus a
+ *  rotation table -- the shape core/staticPolygons.ts's
+ *  fetchStaticPolygonData() expects. See docs/adr/0025 (Plate-Frame Point).
+ *  Unlike CoastlineSet, no archive-wide age_min/age_max: each polygon
+ *  feature carries its own begin age (StaticPolygon.beginAge), which is what
+ *  bounds a Plate-Frame Point's validity, not a shared range spanning every
+ *  feature. */
+export interface StaticPolygonSet {
+  geometry: string;
+  rotations: string;
+}
+
 export interface ArchiveIndex {
   models: Array<{
     id: string;
@@ -232,6 +244,10 @@ export interface ReconstructionEntry {
   source: string;
   path: string;
   has_boundaries: boolean;
+  /** Mirrors the same Reconstruction Model's own manifest.json field --
+   *  see ReconstructionManifest and docs/adr/0025. Independent of
+   *  has_boundaries (docs/adr/0024): never derive one from the other. */
+  has_static_polygons: boolean;
 }
 
 /** A Reconstruction Model's own manifest.json (path from
@@ -252,9 +268,17 @@ export interface ReconstructionManifest {
   age_min: number;
   age_max: number;
   has_boundaries: boolean;
+  /** Independent of has_boundaries -- see docs/adr/0024 and docs/adr/0025.
+   *  Never derive one from the other. */
+  has_static_polygons: boolean;
   coastlines: CoastlineSet;
   /** deep-time-map series manifest path, present only if has_boundaries. */
   boundaries?: string;
+  /** present only if has_static_polygons -- see docs/adr/0025 (Plate-Frame
+   *  Point). Shares its rotations with `coastlines` above (same file: the
+   *  two sources' plate ids are unioned before it's written, see
+   *  prep_reconstruction.py), not a separate rotation table. */
+  static_polygons?: StaticPolygonSet;
 }
 
 export interface ColormapData {
@@ -315,4 +339,29 @@ export interface RotationTable {
   ages: number[];
   anchor: number;
   plates: Record<string, [number, number, number, number][]>;
+}
+
+/** One static-polygon feature in present-day, geographic-frame coordinates
+ *  -- see docs/adr/0025 (Plate-Frame Point) and prep_staticpolygons.py. */
+export interface StaticPolygon {
+  plateId: number;
+  /** Derived from a feature-type value that differs per Reconstruction
+   *  Model, checked directly -- never a separate geometry export, see
+   *  docs/adr/0025. */
+  continental: boolean;
+  /** Larger Ma value: when this crust appeared. Every age older than this is
+   *  "no plate here yet" for a point assigned to this feature -- see
+   *  docs/adr/0025's "cannot answer" resolution. Named to match the plan
+   *  doc/ADR's own vocabulary; semantically the same appear/begin-of-life
+   *  concept as CoastlineLine.appearAge. */
+  beginAge: number;
+  /** Smaller Ma value. Expected to always be ~0/-1e9 by construction --
+   *  static polygons are digitized present-day and rotated backward, so they
+   *  persist to present (see docs/adr/0025) -- exported anyway so the rare
+   *  shapefile exception degrades gracefully instead of being silently
+   *  assumed away. */
+  endAge: number;
+  /** Unit vectors in the geographic frame, present-day, open ring (last
+   *  vertex connects back to the first; not repeated in storage). */
+  points: Float32Array;
 }

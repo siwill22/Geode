@@ -137,10 +137,12 @@ def main():
             "source": rm.get("citation", ""),
             "path": f"reconstructions/{rm['id']}/manifest.json",
             "has_boundaries": bool(rm.get("has_boundaries")),
+            "has_static_polygons": bool(rm.get("has_static_polygons")),
         })
         print(f"  reconstruction {rm['id']:14s} {rm['name']:24s} "
               f"{rm['age_min']:.0f}-{rm['age_max']:.0f} Ma  "
-              f"boundaries={'yes' if rm.get('has_boundaries') else 'no'}")
+              f"boundaries={'yes' if rm.get('has_boundaries') else 'no'}  "
+              f"static_polygons={'yes' if rm.get('has_static_polygons') else 'no'}")
     if reconstruction_models:
         index["reconstruction_models"] = reconstruction_models
 

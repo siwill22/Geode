@@ -7,6 +7,7 @@ import { GEOGRAPHIC_GLSL } from './glsl/geographic';
 import { R_SURFACE, LIGHT_DIR } from './constants';
 import { PALETTE } from './palette';
 import { fetchVolumeBytes } from './volume';
+import { rotationAt } from './rotation';
 import type { ArchiveIndex, CoastlineLine, CoastlineSet, Manifest, RotationTable } from './types';
 
 const LAND_R = R_SURFACE * 1.0006;      // just clear of the surface sphere
@@ -56,42 +57,6 @@ export function parseGeometry(buf: ArrayBuffer): CoastlineLine[] {
     lines.push({ plateId, appearAge, disappearAge, points, landPoints, triangles });
   }
   return lines;
-}
-
-/** Slerp a plate's rotation between the bracketing 1 Ma samples. */
-function rotationAt(
-  table: RotationTable,
-  plateId: number,
-  age: number,
-): [number, number, number, number] {
-  const quats = table.plates[String(plateId)];
-  if (!quats) return [0, 0, 0, 1];
-
-  const ages = table.ages;
-  const lo = Math.max(0, Math.min(ages.length - 2,
-    Math.floor((age - ages[0]) / (ages[1] - ages[0]))));
-  const t = Math.max(0, Math.min(1, (age - ages[lo]) / (ages[lo + 1] - ages[lo])));
-
-  let [ax, ay, az, aw] = quats[lo];
-  const [bx, by, bz, bw] = quats[lo + 1];
-
-  let d = ax * bx + ay * by + az * bz + aw * bw;
-  if (d < 0) { ax = -ax; ay = -ay; az = -az; aw = -aw; d = -d; }
-
-  if (d > 0.9995) {
-    const x = ax + t * (bx - ax), y = ay + t * (by - ay);
-    const z = az + t * (bz - az), w = aw + t * (bw - aw);
-    const n = Math.hypot(x, y, z, w) || 1;
-    return [x / n, y / n, z / n, w / n];
-  }
-  const theta = Math.acos(Math.min(1, d));
-  const s = Math.sin(theta);
-  const w0 = Math.sin((1 - t) * theta) / s;
-  const w1 = Math.sin(t * theta) / s;
-  return [
-    w0 * ax + w1 * bx, w0 * ay + w1 * by,
-    w0 * az + w1 * bz, w0 * aw + w1 * bw,
-  ];
 }
 
 const VERT = /* glsl */ `

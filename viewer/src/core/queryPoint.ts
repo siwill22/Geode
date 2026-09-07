@@ -3,7 +3,8 @@ import type { LonLat } from './constants';
 import type { FrameByteCache } from './frameByteCache';
 import { CONCURRENCY, mapPool } from './timeSeries';
 import { cellCenter, texelIndex, texelToPhysical } from './volume';
-import type { Manifest, ResolutionInfo, VariableInfo } from './types';
+import { positionAt, type PlateFramePoint } from './staticPolygons';
+import type { Manifest, ResolutionInfo, RotationTable, VariableInfo } from './types';
 
 /**
  * One cell's value at one Frame -- the unit both Anchored Point query shapes
@@ -102,4 +103,67 @@ export async function ageSeries(
     const invalid = isInvalid(idx, byte, { maskBytes, sentinel });
     return { age: frame.age_ma, cell, value: invalid ? NaN : texelToPhysical(variable, byte) };
   });
+}
+
+/**
+ * Age Series for a Plate-Frame Point (docs/adr/0025): the same "how has this
+ * cell changed across geological time" question as ageSeries() above, except
+ * the grid cell moves with the point's assigned Plate instead of staying
+ * fixed. Frames older than `point.beginAge` are left out entirely rather
+ * than padded with a per-entry "no plate" marker -- the ADR's resolution was
+ * that the cutoff applies uniformly, once, not per age, so a caller already
+ * holding `point.beginAge` needs no per-entry outcome to act on it (e.g. to
+ * show "no plate before X Ma" as a series boundary, not a gap inside it).
+ */
+export async function plateFrameAgeSeries(
+  cache: FrameByteCache, manifest: Manifest, variable: VariableInfo,
+  point: PlateFramePoint, table: RotationTable,
+  resolutionId: string = manifest.default_resolution,
+): Promise<(CellSample & { age: number })[]> {
+  const res = manifest.resolutions.find((r) => r.id === resolutionId);
+  if (!res) throw new Error(`${manifest.id}: no resolution ${resolutionId}`);
+  const { nlon, nlat, ndepth } = res;
+  const plane = nlon * nlat;
+  const layerOffset = (ndepth - 1) * plane;
+  const maskVar = manifest.mask_variable;
+  const sentinel = manifest.no_data_sentinel;
+
+  const frames = manifest.frames.filter((f) => f.age_ma <= point.beginAge);
+
+  return mapPool(frames, CONCURRENCY, async (frame) => {
+    const at = positionAt(point, table, frame.age_ma)!; // frames filtered above, so never null
+    const idx = texelIndex(nlon, nlat, at.lon, at.lat);
+    const cell = cellCenter(nlon, nlat, idx % nlon, Math.floor(idx / nlon));
+
+    const [valueBytes, maskBytes] = await Promise.all([
+      cache.get(manifest, variable.id, frame.id, resolutionId),
+      maskVar ? cache.get(manifest, maskVar, frame.id, resolutionId) : Promise.resolve(null),
+    ]);
+    const byte = valueBytes[layerOffset + idx];
+    const invalid = isInvalid(idx, byte, { maskBytes, sentinel });
+    return { age: frame.age_ma, cell, value: invalid ? NaN : texelToPhysical(variable, byte) };
+  });
+}
+
+/**
+ * Month Profile for a Plate-Frame Point (docs/adr/0025). Month Profile is
+ * inherently single-Frame, so the plate machinery engages only trivially: one
+ * rotation from the point's reference age to whichever Frame `tex`/`res`
+ * currently hold, to find the grid cell -- then it's exactly monthProfile()
+ * from there. Reading the point's raw reference-age LonLat against a
+ * different Frame's age instead would silently reintroduce the
+ * mismatched-provenance bug ADR-0004 already guards against, just in a new
+ * dimension. Returns null if the given Frame's age is older than
+ * `point.beginAge` -- "no plate here yet", the same outcome
+ * plateFrameAgeSeries() applies per-Frame, here applied to the single
+ * requested one.
+ */
+export function plateFrameMonthProfile(
+  tex: Data3DTexture, res: ResolutionInfo, variable: VariableInfo,
+  point: PlateFramePoint, table: RotationTable, frameAge: number,
+  rule?: NoDataRule,
+): CellSample[] | null {
+  const at = positionAt(point, table, frameAge);
+  if (!at) return null;
+  return monthProfile(tex, res, variable, at, rule);
 }

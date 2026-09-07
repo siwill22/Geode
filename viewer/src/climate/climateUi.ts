@@ -1,5 +1,7 @@
 import GUI, { type Controller } from 'lil-gui';
-import { TIME_SERIES_VARIABLE_IDS, type ClimateLayer, type WindStyle } from './climateInstance';
+import {
+  TIME_SERIES_VARIABLE_IDS, type AgeSeriesPanelData, type ClimateLayer, type QueryMode, type WindStyle,
+} from './climateInstance';
 import { clampClipOrder, clipSliderStep } from '../core/clipRange';
 import { classNameFor } from '../core/volume';
 import type { Rect } from '../core/layout';
@@ -10,6 +12,9 @@ import type { ColormapData, ResolutionInfo, VariableInfo } from '../core/types';
 
 export interface ClimateViewState {
   layer: ClimateLayer;
+  /** Which query gesture shift-click currently performs -- see
+   *  ClimateInstance.setQueryMode() and docs/adr/0026. */
+  queryMode: QueryMode;
   /** Which registered model of type 'climate' backs the 'climate' layer --
    *  see ClimateInstance's `activeClimateModelId`/setClimateModel(). Only
    *  meaningful while `layer === 'climate'`; a dropdown of one (today: just
@@ -35,6 +40,7 @@ export interface ClimateViewState {
 
 export interface ClimateUICallbacks {
   onLayer(layer: ClimateLayer): void;
+  onQueryMode(mode: QueryMode): void;
   onClimateModel(id: string): void;
   onVariable(id: string): void;
   onResolution(id: string): void;
@@ -50,6 +56,14 @@ export interface ClimateUICallbacks {
    *  own doc comment for why every open fires this rather than ClimateUI
    *  tracking "already requested" itself. */
   onExpandTimeSeries(): void;
+  /** The query-result panel (`queryPanel`) was just closed via
+   *  hideQueryPanel() -- today that's only the close button. ClimateInstance
+   *  uses this to know when to stop treating either mode's result as "open"
+   *  (see its own `queryOpen`, docs/adr/0026's "no plate here" messaging for
+   *  Plate-Frame Point specifically) -- the marker itself keeps tracking the
+   *  point regardless; only the panel's own open/closed state is this
+   *  narrow. */
+  onQueryPanelClose?(): void;
 }
 
 const N_REAL_MONTHS = 12; // the calendar months -- must match prep_climate.py's N_MONTHS
@@ -66,6 +80,10 @@ const MONTH_NAMES = [
   'July', 'August', 'September', 'October', 'November', 'December',
   'Annual',
 ];
+// A little taller than the original 56px -- easier to read the Age Series
+// line against, still clearly the panel's secondary chart next to Month
+// Profile's own 72px.
+const AGE_SERIES_CANVAS_HEIGHT = 80;
 
 /**
  * A deliberately small panel: layer choice, variable choice, age, month
@@ -79,6 +97,7 @@ const MONTH_NAMES = [
 export class ClimateUI {
   readonly gui: GUI;
   private layerCtrl: Controller;
+  private queryModeCtrl: Controller;
   private climateModelCtrl: Controller;
   private resolutionCtrl: Controller;
   private variableCtrl: Controller;
@@ -171,6 +190,7 @@ export class ClimateUI {
    *  why that's the signal used, not a separately threaded flag. */
   private queryMonthProfile: {
     profile: CellSample[]; canvas: HTMLCanvasElement; caption: HTMLDivElement;
+    clipMin: number; clipMax: number; colors: [number, number, number][];
   } | null = null;
   /** The Frame age range to plot the X axis over -- the manifest's own full
    *  range (see setAgeRange()), NOT the span of whichever points happen to
@@ -228,6 +248,20 @@ export class ClimateUI {
       .add(this.state, 'layer', { Climate: 'climate', Paleogeography: 'paleogeography' })
       .name('layer')
       .onChange((v: ClimateLayer) => cb.onLayer(v));
+    // What a shift-click DOES -- Plate-Frame Point (docs/adr/0025/0026) or
+    // Anchored Point (the original gesture, ADR-0016). Plate-Frame listed
+    // (and defaulted, see ClimateViewState's own `queryMode`) first: it's
+    // the more useful of the two for a paleoclimate viewer, since it follows
+    // the actual piece of crust rather than a fixed grid cell as the age
+    // changes. Deliberately a mode toggle rather than a second modifier
+    // combination: shift-click stays the one query gesture in the app.
+    // Placed right after `layer`, alongside it, since both are "what kind of
+    // thing is on screen/what a click means" rather than data-selection
+    // controls like variable/month.
+    this.queryModeCtrl = this.gui
+      .add(this.state, 'queryMode', { 'Plate-Frame': 'plateFrame', Anchored: 'anchored' })
+      .name('query mode')
+      .onChange((v: QueryMode) => cb.onQueryMode(v));
     // Options populated once boot() knows every registered climate-type
     // model -- see setClimateModels(). Layer-gated (unlike resolutionCtrl
     // below): which CLIMATE model is selected is meaningless while
@@ -649,14 +683,17 @@ export class ClimateUI {
    * a shorter profile falls back to a plain index so this never mislabels a
    * Layer this wasn't written for.
    *
-   * Positioned/clamped exactly like showTooltip(), but left open rather than
-   * hidden on pointer-leave (see hideQueryPanel(), wired to its own close
-   * button) -- a click result is something to read at leisure, not a hover
-   * hint that should vanish the moment the cursor moves.
+   * Positioned by positionQueryPanel() (a fixed tile-left, vertically
+   * centred spot, not click-relative -- see its own doc comment), but left
+   * open rather than hidden on pointer-leave (see hideQueryPanel(), wired to
+   * its own close button) -- a click result is something to read at
+   * leisure, not a hover hint that should vanish the moment the cursor
+   * moves.
    */
   showQueryPanel(
-    clientX: number, clientY: number, variable: VariableInfo, at: LonLat, cell: LonLat,
-    ageMa: number, profile: CellSample[], currentIndex?: number,
+    variable: VariableInfo, at: LonLat, cell: LonLat, ageMa: number, profile: CellSample[],
+    colormap: ColormapData[string], clipMin: number, clipMax: number,
+    currentIndex?: number, plateId?: number, ageSeries?: AgeSeriesPanelData,
   ): void {
     this.queryPanel.replaceChildren();
     this.queryMonthProfile = null; // set below only for the non-categorical, month-axis case
@@ -672,8 +709,12 @@ export class ClimateUI {
     this.queryPanel.appendChild(title);
 
     const subtitle = document.createElement('div');
+    // `plateId` is present only for a Plate-Frame Point result (see
+    // ClimateInstance.refreshPlateFrameQuery()) -- an Anchored Point result
+    // never carries one, and the extra clause is simply absent for it.
     subtitle.textContent = `${at.lon.toFixed(2)}, ${at.lat.toFixed(2)} `
-      + `[cell ${cell.lon.toFixed(2)}, ${cell.lat.toFixed(2)}] · ${ageMa.toFixed(0)} Ma`;
+      + `[cell ${cell.lon.toFixed(2)}, ${cell.lat.toFixed(2)}] · ${ageMa.toFixed(0)} Ma`
+      + (plateId !== undefined ? ` · plate ${plateId}` : '');
     this.queryPanel.appendChild(subtitle);
 
     if (variable.categorical) {
@@ -682,12 +723,43 @@ export class ClimateUI {
       // prep_climate.py) -- a per-month PLOT of a flat line would be
       // pointless, and "23.0" is meaningless without a class-name lookup
       // (see classNameFor()'s own doc comment on why floor(), not round()).
-      // One word is the whole answer here, not a chart.
+      // One word is the whole answer here, not a chart -- unlike Age Series
+      // below, which DOES have a meaningful categorical rendering (a class
+      // timeline), since a location's classification genuinely can change
+      // across geological time even though it can't across a single year.
       const idx = currentIndex ?? profile.length - 1;
       const word = document.createElement('div');
       word.className = 'qp-class';
       word.textContent = Number.isNaN(profile[idx].value) ? '—' : classNameFor(variable, profile[idx].value);
       this.queryPanel.appendChild(word);
+
+      // Age Series (point) for a categorical Variable -- a class-per-age
+      // timeline (drawAgeSeriesClassChart()), not a line chart: reuses the
+      // SAME swatch-colour-per-class technique showLegendKey() already
+      // established, so a class reads the identical colour here as it does
+      // on the legend/globe. Needs `class_names` to know how many classes
+      // there are; skipped (same as before) if a categorical Variable
+      // somehow lacks them.
+      if (ageSeries && variable.class_names) {
+        const ageCaption = document.createElement('div');
+        ageCaption.className = 'qp-caption';
+        ageCaption.textContent = ageSeries.data === 'loading'
+          ? 'Age Series: computing…'
+          : `Age Series (Annual class), ${ageSeries.ageMin.toFixed(0)}–${ageSeries.ageMax.toFixed(0)} Ma`;
+        this.queryPanel.appendChild(ageCaption);
+
+        const ageCanvas = document.createElement('canvas');
+        ageCanvas.className = 'qp-canvas';
+        ageCanvas.width = 190;
+        ageCanvas.height = AGE_SERIES_CANVAS_HEIGHT;
+        this.queryPanel.appendChild(ageCanvas);
+        if (ageSeries.data !== 'loading') {
+          this.drawAgeSeriesClassChart(
+            ageCanvas, ageSeries.data, ageSeries.ageMin, ageSeries.ageMax, ageSeries.currentAge,
+            variable.class_names.length, colormap.colors,
+          );
+        }
+      }
     } else {
       const canvas = document.createElement('canvas');
       canvas.className = 'qp-canvas';
@@ -699,7 +771,7 @@ export class ClimateUI {
       caption.className = 'qp-caption';
       this.queryPanel.appendChild(caption);
 
-      this.drawQueryProfile(canvas, profile, currentIndex);
+      this.drawQueryProfile(canvas, profile, clipMin, clipMax, colormap.colors, currentIndex);
       const fmt = (v: number) => (Number.isNaN(v) ? '—' : this.formatTick(v));
       if (currentIndex !== undefined) {
         caption.textContent = `${MONTH_NAMES[currentIndex]}: ${fmt(profile[currentIndex].value)}`;
@@ -709,17 +781,105 @@ export class ClimateUI {
       }
       // Only a real month axis (13 layers) has a marker worth keeping live --
       // see updateQueryMonth(), called from ClimateInstance.applyMonth().
-      if (profile.length === 13) this.queryMonthProfile = { profile, canvas, caption };
+      if (profile.length === 13) {
+        this.queryMonthProfile = {
+          profile, canvas, caption, clipMin, clipMax, colors: colormap.colors,
+        };
+      }
+
+      // Age Series (point) -- docs/adr/0027: stacked below Month Profile,
+      // not a toggle, for both query modes. `ageSeries` is undefined only
+      // when no point is active at all. Redrawn fresh on every call, same as
+      // Month Profile's own chart -- cheap (canvas only), unlike the FETCH
+      // that produced `ageSeries.data`, which ClimateInstance.fetchAgeSeries()
+      // deliberately does not repeat here (see that method's own doc
+      // comment). Both charts share the SAME y-axis (`clipMin`/`clipMax`,
+      // the currently displayed colour range, not each chart's own data
+      // extent) and the same colormap-tinted background, so a point with
+      // little real variation reads as visibly flat instead of the axis
+      // auto-stretching to fill the chart -- and different points' charts
+      // become directly comparable to each other and to the globe's own
+      // legend/colour ramp.
+      if (ageSeries) {
+        const ageCaption = document.createElement('div');
+        ageCaption.className = 'qp-caption';
+        ageCaption.textContent = ageSeries.data === 'loading'
+          ? 'Age Series: computing…'
+          : `Age Series (Annual), ${ageSeries.ageMin.toFixed(0)}–${ageSeries.ageMax.toFixed(0)} Ma`;
+        this.queryPanel.appendChild(ageCaption);
+
+        const ageCanvas = document.createElement('canvas');
+        ageCanvas.className = 'qp-canvas';
+        ageCanvas.width = 190;
+        ageCanvas.height = AGE_SERIES_CANVAS_HEIGHT;
+        this.queryPanel.appendChild(ageCanvas);
+        if (ageSeries.data !== 'loading') {
+          this.drawAgeSeriesChart(
+            ageCanvas, ageSeries.data, ageSeries.ageMin, ageSeries.ageMax, ageSeries.currentAge,
+            clipMin, clipMax, colormap.colors,
+          );
+        }
+      }
     }
 
     this.queryPanel.style.display = 'block';
-    const { width: pw, height: ph } = this.queryPanel.getBoundingClientRect();
-    this.queryPanel.style.left = `${Math.min(clientX + 14, innerWidth - pw - 8)}px`;
-    this.queryPanel.style.top = `${Math.min(clientY + 14, innerHeight - ph - 8)}px`;
+    this.positionQueryPanel();
   }
 
   hideQueryPanel(): void {
     this.queryPanel.style.display = 'none';
+    this.cb.onQueryPanelClose?.();
+  }
+
+  /**
+   * Anchor `queryPanel` to THIS instance's own tile -- left edge, vertically
+   * centred -- rather than near wherever the triggering click/scrub
+   * happened. Fixed regardless of what triggered the (re)render (a fresh
+   * click, or refreshAnchoredQuery()/refreshPlateFrameQuery() redrawing it
+   * on a later age-slider tick): the panel should stay in the same reading
+   * spot on the tile throughout a session, not jump around to chase
+   * whatever position last mattered. Re-measures the panel's OWN height
+   * every call since it changes with content (Age Series loading vs
+   * resolved, categorical vs chart, ...); clamped to the tile's own top/
+   * bottom edge so a tall panel on a short tile never runs off it.
+   */
+  private positionQueryPanel(): void {
+    const { height: ph } = this.queryPanel.getBoundingClientRect();
+    const { x, y, height } = this.rect;
+    const top = Math.max(y + 8, Math.min(y + (height - ph) / 2, y + height - ph - 8));
+    this.queryPanel.style.left = `${x + 12}px`;
+    this.queryPanel.style.top = `${top}px`;
+  }
+
+  /**
+   * Plate-Frame Point's two "no plate" messages (docs/adr/0026): click-time
+   * assignment failure, and scrubbing the age slider past an already-
+   * assigned point's own beginAge mid-session. Both position the same way
+   * (positionQueryPanel()) -- there's no click-relative case to distinguish
+   * any more (see that method's own doc comment). Reuses `queryPanel`
+   * itself; no new engine-level outcome to model, just a plain message where
+   * a chart would otherwise go.
+   */
+  showPlateFrameMessage(message: string): void {
+    this.queryPanel.replaceChildren();
+    this.queryMonthProfile = null;
+    const close = document.createElement('span');
+    close.className = 'qp-close';
+    close.textContent = '✕';
+    close.addEventListener('click', () => this.hideQueryPanel());
+    this.queryPanel.appendChild(close);
+
+    const title = document.createElement('div');
+    title.className = 'qp-title';
+    title.textContent = 'Plate-Frame Point';
+    this.queryPanel.appendChild(title);
+
+    const body = document.createElement('div');
+    body.textContent = message;
+    this.queryPanel.appendChild(body);
+
+    this.queryPanel.style.display = 'block';
+    this.positionQueryPanel();
   }
 
   /** Move the Anchored Point query panel's orange month marker (and its
@@ -731,8 +891,10 @@ export class ClimateUI {
    *  doc comment) or the panel has since been closed. */
   updateQueryMonth(month: number): void {
     if (!this.queryMonthProfile || this.queryPanel.style.display === 'none') return;
-    const { profile, canvas, caption } = this.queryMonthProfile;
-    this.drawQueryProfile(canvas, profile, month);
+    const {
+      profile, canvas, caption, clipMin, clipMax, colors,
+    } = this.queryMonthProfile;
+    this.drawQueryProfile(canvas, profile, clipMin, clipMax, colors, month);
     const fmt = (v: number) => (Number.isNaN(v) ? '—' : this.formatTick(v));
     caption.textContent = `${MONTH_NAMES[month]}: ${fmt(profile[month].value)}`;
   }
@@ -750,19 +912,26 @@ export class ClimateUI {
    * cycle by a faint vertical divider -- it is not the next point in the
    * seasonal sequence, and drawing it as a plain continuation would imply
    * an ordering ("after December") that isn't real.
+   *
+   * `vMin`/`vMax` are the currently displayed CLIP range, not this
+   * profile's own data extent -- fixed, so a nearly-flat profile reads as
+   * visibly flat instead of the axis auto-stretching to fill the chart, and
+   * different points' charts stay comparable to each other. `colors` paints
+   * a faint colormap-tinted background behind the line (paintColormapBackground()),
+   * linking the chart directly to the same ramp the globe's own legend
+   * uses.
    */
-  private drawQueryProfile(canvas: HTMLCanvasElement, profile: CellSample[], currentIndex?: number): void {
+  private drawQueryProfile(
+    canvas: HTMLCanvasElement, profile: CellSample[], vMin: number, vMax: number,
+    colors: [number, number, number][], currentIndex?: number,
+  ): void {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const w = canvas.width;
     const h = canvas.height;
     ctx.clearRect(0, 0, w, h);
-
-    const values = profile.map((p) => p.value).filter((v) => !Number.isNaN(v));
-    if (values.length === 0) return;
-    let vMin = Math.min(...values);
-    let vMax = Math.max(...values);
     if (vMin === vMax) { vMin -= 1; vMax += 1; }
+    this.paintColormapBackground(ctx, w, h, colors);
 
     const padX = 4;
     const padY = 4;
@@ -817,6 +986,168 @@ export class ClimateUI {
       ctx.lineTo(markerX, h);
       ctx.stroke();
     }
+  }
+
+  /**
+   * A faint vertical gradient sampled from a colormap's own 256-entry ramp
+   * (bottom = low value, top = high value -- matching toY()'s own
+   * orientation in both drawQueryProfile() and drawAgeSeriesChart()),
+   * painted at low opacity behind a chart's line/dots so it reads as a
+   * background tint, not competing with the data itself. This is the
+   * "link the chart to the colormap" piece both charts share -- a value's
+   * VERTICAL position in the chart now visually matches the COLOUR it
+   * would paint on the globe at that value, the same ramp the legend below
+   * the globe already shows horizontally.
+   */
+  private paintColormapBackground(
+    ctx: CanvasRenderingContext2D, w: number, h: number, colors: [number, number, number][],
+  ): void {
+    if (colors.length === 0) return;
+    const gradient = ctx.createLinearGradient(0, h, 0, 0);
+    const stops = 8;
+    for (let i = 0; i <= stops; i++) {
+      const t = i / stops;
+      const [r, g, b] = colors[Math.min(colors.length - 1, Math.round(t * (colors.length - 1)))];
+      gradient.addColorStop(t, `rgb(${r}, ${g}, ${b})`);
+    }
+    ctx.save();
+    ctx.globalAlpha = 0.28;
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
+  }
+
+  /**
+   * Age Series (point) -- docs/adr/0027. Same visual language as
+   * drawQueryProfile() above (line + dots, a NaN value breaks the line
+   * rather than bridging across it, a vertical marker at the current
+   * position) but continuous AGE on the x-axis instead of a fixed set of
+   * month indices, and spanning `ageMin`..`ageMax` -- the full Model age
+   * range -- rather than auto-scaled to just `series`' own extent. That
+   * matters specifically for a Plate-Frame Point: its series already stops
+   * at the assigned point's own beginAge (plateFrameAgeSeries() never
+   * returns entries past it), so plotted against the full range it reads as
+   * a short line on a wider axis -- a visible boundary, not a silently
+   * shorter chart. An Anchored Point's own series always spans the full
+   * range already (one entry per Frame, nothing filtered), so this is a
+   * no-op distinction for that mode.
+   *
+   * `vMin`/`vMax` are the currently displayed CLIP range, same reasoning as
+   * drawQueryProfile()'s own fixed axis -- a nearly-flat series across 540
+   * Myr should read as flat, not fill the whole chart height the way
+   * auto-scaling to the series' own (possibly tiny) range would.
+   */
+  private drawAgeSeriesChart(
+    canvas: HTMLCanvasElement, series: (CellSample & { age: number })[],
+    ageMin: number, ageMax: number, currentAge: number,
+    vMin: number, vMax: number, colors: [number, number, number][],
+  ): void {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    if (vMin === vMax) { vMin -= 1; vMax += 1; }
+    this.paintColormapBackground(ctx, w, h, colors);
+    if (series.length === 0) return;
+
+    const padX = 4;
+    const padY = 4;
+    const ageSpan = (ageMax - ageMin) || 1;
+    const toX = (age: number) => padX + ((age - ageMin) / ageSpan) * (w - 2 * padX);
+    const toY = (v: number) => h - padY - ((v - vMin) / (vMax - vMin)) * (h - 2 * padY);
+
+    // Contiguous non-NaN runs, same reasoning as drawQueryProfile()/
+    // drawTimeSeriesRow(): a masked/sentinel cell breaks the line rather
+    // than bridging over it.
+    const runs: (CellSample & { age: number })[][] = [];
+    let current: (CellSample & { age: number })[] = [];
+    for (const p of series) {
+      if (Number.isNaN(p.value)) { if (current.length) runs.push(current); current = []; continue; }
+      current.push(p);
+    }
+    if (current.length) runs.push(current);
+
+    ctx.strokeStyle = '#7fd0ff';
+    ctx.fillStyle = '#7fd0ff';
+    ctx.lineWidth = 1.25;
+    for (const run of runs) {
+      ctx.beginPath();
+      run.forEach((p, i) => {
+        const x = toX(p.age);
+        const y = toY(p.value);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      for (const p of run) {
+        ctx.beginPath();
+        ctx.arc(toX(p.age), toY(p.value), 1.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    const markerX = toX(currentAge);
+    ctx.strokeStyle = '#ffb454';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(markerX, 0);
+    ctx.lineTo(markerX, h);
+    ctx.stroke();
+  }
+
+  /**
+   * Age Series (point) for a CATEGORICAL Variable (e.g. Koppen) -- a class
+   * timeline instead of a line chart: each Frame's own class fills a band
+   * spanning to the next Frame's age, coloured with the SAME swatch-colour-
+   * per-class sampling showLegendKey() already uses (band centre, (i+0.5)/N
+   * of the way across the 256-texel ramp), so a class reads identically
+   * here, on the legend, and on the globe itself. A class index is a
+   * discrete step function of age, not a continuous quantity -- there is no
+   * "vertical position" to plot, so this has no y-axis at all, unlike
+   * drawAgeSeriesChart(). The "band extends to the next Frame's age" fill
+   * needs ascending age order to know which edge a boundary-less end (the
+   * very first or last band) should extend to -- `series` itself is NOT
+   * ascending (it's manifest.frames' own order, oldest first: 540..0), so a
+   * local ascending copy is sorted here rather than trusting the input
+   * order (a real bug this shipped with once: the last, PRESENT-DAY band
+   * had no "next" entry and fell back to the canvas's right edge assuming
+   * ascending order, silently painting over every earlier band with
+   * whatever class happened to be current at Age 0). NaN entries (masked)
+   * are simply skipped, leaving a gap.
+   */
+  private drawAgeSeriesClassChart(
+    canvas: HTMLCanvasElement, series: (CellSample & { age: number })[],
+    ageMin: number, ageMax: number, currentAge: number, nClasses: number, colors: [number, number, number][],
+  ): void {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    if (series.length === 0 || nClasses === 0 || colors.length === 0) return;
+    const ascending = [...series].sort((a, b) => a.age - b.age);
+
+    const ageSpan = (ageMax - ageMin) || 1;
+    const toX = (age: number) => ((age - ageMin) / ageSpan) * w;
+
+    for (let i = 0; i < ascending.length; i++) {
+      const p = ascending[i];
+      if (Number.isNaN(p.value)) continue;
+      const classIdx = Math.min(nClasses - 1, Math.max(0, Math.floor(p.value)));
+      const [r, g, b] = colors[Math.min(colors.length - 1, Math.floor(((classIdx + 0.5) * colors.length) / nClasses))];
+      const x0 = toX(p.age);
+      const x1 = i + 1 < ascending.length ? toX(ascending[i + 1].age) : w;
+      ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+      ctx.fillRect(Math.min(x0, x1), 0, Math.max(1, Math.abs(x1 - x0)), h);
+    }
+
+    const markerX = toX(currentAge);
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(markerX, 0);
+    ctx.lineTo(markerX, h);
+    ctx.stroke();
   }
 
   setTimeSeriesLoading(variableId: string): void {

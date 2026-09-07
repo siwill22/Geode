@@ -1,31 +1,67 @@
 import {
-  Raycaster, Scene, Vector3, type Camera, type Data3DTexture, type ShaderMaterial,
-  type Texture, type Vector2, type WebGLRenderer,
+  CanvasTexture, Raycaster, Scene, Sprite, SpriteMaterial, Vector3,
+  type Camera, type Data3DTexture, type ShaderMaterial, type Texture, type Vector2, type WebGLRenderer,
 } from 'three';
 
 import { DepthSlice } from '../core/depthSlice';
 import { setMaskMode, setValidMask } from '../core/material';
 import { createMaskTexture } from '../core/mask';
 import { Coastlines, type CoastlineData } from '../core/coastlines';
-import { R_SURFACE, vec3ToLonLat } from '../core/constants';
+import { R_SURFACE, lonLatToVec3, vec3ToLonLat, type LonLat } from '../core/constants';
 import type { ProjectionMode } from '../core/projection';
 import type { Rect } from '../core/layout';
 import { WindGlyphs } from '../core/windGlyphs';
 import { WindStreaks } from '../core/windStreaks';
 import { computeTimeSeries, type TimeSeriesPoint } from '../core/timeSeries';
 import { FrameByteCache } from '../core/frameByteCache';
-import { monthProfile, type NoDataRule } from '../core/queryPoint';
+import {
+  ageSeries, monthProfile, plateFrameAgeSeries, plateFrameMonthProfile, type CellSample, type NoDataRule,
+} from '../core/queryPoint';
+import {
+  assignPlate, createPlateFramePoint, positionAt, type PlateFramePoint, type StaticPolygonData,
+} from '../core/staticPolygons';
 import {
   FrameCache, loadManifest, loadMask2D, makeColormapTexture, nearestFrame, physicalToEncoded,
 } from '../core/volume';
 import { ClimateUI, type ClimateViewState } from './climateUi';
-import type { ArchiveIndex, ColormapData, Manifest, VariableInfo } from '../core/types';
+import type {
+  ArchiveIndex, ColormapData, FrameInfo, Manifest, VariableInfo,
+} from '../core/types';
 
 export interface ClimateInstanceDeps {
   archiveBase: string;
   archive: ArchiveIndex;
   colormaps: ColormapData;
   coastlineData: CoastlineData | null;
+  /** Scotese's static polygons (docs/adr/0025/0026), resolved and fetched
+   *  once at boot -- see climate/main.ts's boot() and
+   *  core/staticPolygons.ts's loadStaticPolygonDataFor(). Null when
+   *  unavailable (fetch failure, or an archive predating this export):
+   *  Plate-Frame Point mode just stays unusable, the same "a layer, not a
+   *  prerequisite" tolerance `coastlineData` already gets. */
+  staticPolygonData: StaticPolygonData | null;
+}
+
+/** Which of the two query gestures shift-click currently performs -- see
+ *  ClimateUI's `queryMode` toggle and docs/adr/0026. 'anchored' was the
+ *  original behaviour (queryMonthProfileAt), predating Plate-Frame Point
+ *  (queryPlateFramePointAt) -- but Plate-Frame Point is now the DEFAULT
+ *  (see ClimateViewState's own `queryMode: 'plateFrame'`), the more useful
+ *  of the two for a paleoclimate viewer where the ground itself has moved. */
+export type QueryMode = 'anchored' | 'plateFrame';
+
+/** What ClimateUI needs to draw the Age Series (point) chart -- docs/adr/0027.
+ *  `'loading'` while the fetch is in flight (see
+ *  ClimateInstance.fetchAgeSeries()); `ageMin`/`ageMax` are the ACTIVE
+ *  Model's full age range, not just `data`'s own extent -- see
+ *  ClimateUI.drawAgeSeriesChart()'s doc comment for why that distinction
+ *  matters for a Plate-Frame Point. `currentAge` positions the chart's own
+ *  marker, same idea as Month Profile's `currentIndex`. */
+export interface AgeSeriesPanelData {
+  data: 'loading' | (CellSample & { age: number })[];
+  ageMin: number;
+  ageMax: number;
+  currentAge: number;
 }
 
 /**
@@ -65,6 +101,42 @@ export interface ClimateInstanceHooks {
 // coastline LAND fill is permanently hidden here, only its outline at a
 // larger radius still is drawn), so there's no third thing to collide with.
 const OVERLAY_R = R_SURFACE * 1.0006;
+// Just clear of coastlines.ts's own COASTLINE_R (1.0014, private to that
+// module) -- the marker must sit above the outline it's meant to be seen
+// against, not under it.
+const QUERY_MARKER_R = R_SURFACE * 1.002;
+// World-space marker glyph size -- a touch bigger than the original solid
+// sphere's own diameter (0.024), since a flat billboard reads slightly
+// smaller than a lit 3D ball did at the same size.
+const QUERY_MARKER_SIZE = R_SURFACE * 0.03;
+
+/** Builds the query marker's glyph once, shared by every ClimateInstance --
+ *  a black dot with a white outline, canvas-drawn so it's crisp at any
+ *  zoom. Used on a Sprite (always camera-facing) rather than a lit 3D Mesh:
+ *  the original solid-sphere marker (an accent orange, `#ffb454`, matching
+ *  the query panel's own chart-marker lines) was hard to pick out against
+ *  light colormap regions and shaded unevenly depending on viewing angle --
+ *  a flat, high-contrast glyph reads the same everywhere regardless of
+ *  lighting or which side of the globe it's on. */
+function createQueryMarkerTexture(): CanvasTexture {
+  const size = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  ctx.beginPath();
+  ctx.arc(size / 2, size / 2, size / 2 - 4, 0, Math.PI * 2);
+  ctx.fillStyle = '#000000';
+  ctx.fill();
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = '#ffffff';
+  ctx.stroke();
+  const texture = new CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  return texture;
+}
+const QUERY_MARKER_TEXTURE = createQueryMarkerTexture();
+
 export const DEFAULT_OVERLAY_OPACITY = 0.4;
 const HILLSHADE_VARIABLE_ID = 'hillshade';
 /** Deliberately curated, not derived from grid shape like the main variable
@@ -162,7 +234,7 @@ export class ClimateInstance {
    *  class doc comment. Defaults mirror what climate/main.ts used to
    *  construct externally before this instance owned its own panel. */
   readonly view: ClimateViewState = {
-    layer: 'climate', variable: 'T', climateModelId: '', resolution: '', age: 0, month: 0,
+    layer: 'climate', queryMode: 'plateFrame', variable: 'T', climateModelId: '', resolution: '', age: 0, month: 0,
     clipMin: 0, clipMax: 1, overlayOpacity: DEFAULT_OVERLAY_OPACITY, showWind: DEFAULT_WIND_VISIBLE,
     windStyle: DEFAULT_WIND_STYLE, windScale: DEFAULT_WIND_SCALE, windDensity: DEFAULT_WIND_DENSITY,
   };
@@ -212,6 +284,75 @@ export class ClimateInstance {
   /** Anchored Point (shift-click), see queryMonthProfileAt() -- a plain
    *  console.log first slice, see docs/plans/anchored-point-query.md. */
   private readonly queryRaycaster = new Raycaster();
+  /** Query result's on-globe position indicator -- shared by BOTH Anchored
+   *  Point and Plate-Frame Point (docs/adr/0026), since only one mode is
+   *  ever active at a time (setQueryMode() clears the other's state before
+   *  the marker could show two things at once). Anchored's own use is the
+   *  simpler of the two: positioned once at click time and never moved
+   *  again (a grid cell doesn't move) -- only Plate-Frame's
+   *  refreshPlateFrameQuery() repositions it as the age changes, and only
+   *  Plate-Frame ever hides it again before a new click (past the assigned
+   *  point's own beginAge). Built once and reused for this instance's whole
+   *  lifetime, same "own base geometry, not worth per-toggle rebuilding"
+   *  precedent as `field`/`overlay`/`wind`. A Sprite (see
+   *  createQueryMarkerTexture()), not a lit Mesh -- always faces the
+   *  camera, so the black-dot-white-outline glyph reads identically from
+   *  any angle instead of shading like a 3D ball. */
+  private readonly queryMarker = new Sprite(
+    // depthTest off: a flat billboard doesn't depth-test correctly against
+    // the curved globe surface it sits just above (see updateQueryMarkerVisibility()'s
+    // own doc comment) -- far-side hiding is decided manually instead.
+    new SpriteMaterial({ map: QUERY_MARKER_TEXTURE, transparent: true, depthTest: false, depthWrite: false }),
+  );
+  /** Whether `queryMarker` has a position worth showing at all -- distinct
+   *  from `queryMarker.visible`, which additionally goes false whenever the
+   *  placed point is currently on the globe's far side (see
+   *  updateQueryMarkerVisibility(), recomputed every render() since orbiting
+   *  the camera can change this without any call to setQueryMarker()). */
+  private queryMarkerActive = false;
+  /** The Plate-Frame Point currently assigned by a shift-click in
+   *  `queryMode: 'plateFrame'` -- null until one succeeds, and cleared by
+   *  setQueryMode() on switching away. Independent of whether the query
+   *  RESULT panel is currently open (`queryOpen` below): the marker keeps
+   *  tracking this point even after the panel is closed. */
+  private activePlateFramePoint: PlateFramePoint | null = null;
+  /** The Anchored Point currently shown by a shift-click in
+   *  `queryMode: 'anchored'` -- the clicked LonLat itself (a grid cell,
+   *  never repositioned the way a Plate-Frame Point is). Same
+   *  open/independent-of-panel relationship to `queryOpen` as
+   *  `activePlateFramePoint`, and the same reasons for it: the marker
+   *  should keep showing WHERE the last click landed even once its panel is
+   *  closed. */
+  private activeAnchoredPoint: LonLat | null = null;
+  /** Whether `queryPanel` is currently showing THIS instance's query result
+   *  (a value panel or a "no plate" message), for whichever mode is active
+   *  -- distinct from `activePlateFramePoint`/`activeAnchoredPoint`
+   *  themselves, see their own doc comments. Sourced from ClimateUI's
+   *  onQueryPanelClose hook, so a panel closed via its own close button
+   *  stops refreshPlateFrameQuery()/refreshAnchoredQuery() from redrawing it
+   *  on the next Frame load. */
+  private queryOpen = false;
+  /** Guards a slow Plate-Frame Point value fetch landing after a newer one
+   *  already applied -- same pattern as ageToken/overlayToken/maskToken. */
+  private plateFrameQueryToken = 0;
+  /** Same idea as `plateFrameQueryToken`, for Anchored Point's own
+   *  refreshAnchoredQuery(). Kept separate (not shared) since the two modes'
+   *  refreshes are conceptually independent operations that just happen to
+   *  never run concurrently in practice. */
+  private anchoredQueryToken = 0;
+  /** Age Series (point) for whichever point is currently active -- docs/
+   *  adr/0027. `null` when no point is active (or its panel isn't open);
+   *  `'loading'` while fetchAgeSeries()'s own request is in flight; the
+   *  resolved array once it lands. Deliberately NOT refetched by
+   *  refreshAnchoredQuery()/refreshPlateFrameQuery() (those run on every
+   *  age tick) -- only fetchAgeSeries() itself writes here, from a new
+   *  click or a layer/variable/climate-model switch, per the ADR's own
+   *  "once per point" cost reasoning. */
+  private activeAgeSeries: 'loading' | (CellSample & { age: number })[] | null = null;
+  /** Guards a slow Age Series fetch landing after a newer point/variable/
+   *  layer already applied -- same pattern as plateFrameQueryToken/
+   *  anchoredQueryToken. */
+  private ageSeriesToken = 0;
   /** Keyed by `${manifest.id}/${resolutionId}/${variable.id}`, caching the
    *  PROMISE (not just the resolved points) so two expands racing (or one
    *  expand of a layer/model already computed earlier in the session) share
@@ -255,8 +396,18 @@ export class ClimateInstance {
     this.windStreaks.mesh.renderOrder = 4;
     this.scene.add(this.windStreaks.mesh);
 
+    // After everything else, same ordering reasoning as `wind`'s own
+    // comment -- far-side hiding is NOT GPU depth-testing (see the
+    // SpriteMaterial's own comment above); hidden until a query result
+    // actually exists.
+    this.queryMarker.renderOrder = 5;
+    this.queryMarker.scale.set(QUERY_MARKER_SIZE, QUERY_MARKER_SIZE, 1);
+    this.queryMarker.visible = false;
+    this.scene.add(this.queryMarker);
+
     this.ui = new ClimateUI(this.view, {
       onLayer: (l) => void this.setLayer(l),
+      onQueryMode: (m) => this.setQueryMode(m),
       onClimateModel: (id) => void this.setClimateModel(id),
       onVariable: (id) => void this.setVariable(id),
       onResolution: (id) => void this.setResolution(id),
@@ -269,6 +420,7 @@ export class ClimateInstance {
       onWindScale: (v) => this.setWindScale(v),
       onWindDensity: (v) => this.setWindDensity(v),
       onExpandTimeSeries: () => this.onExpandTimeSeries(),
+      onQueryPanelClose: () => { this.queryOpen = false; },
     }, label, () => this.hooks.onRemove(this), startCollapsed);
   }
 
@@ -451,28 +603,25 @@ export class ClimateInstance {
 
   /**
    * Anchored Point, Month Profile shape (see CONTEXT.md, ADR-0011,
-   * docs/plans/anchored-point-query.md) -- shift-click on the globe to log
+   * docs/plans/anchored-point-query.md) -- shift-click on the globe to show
    * the CURRENTLY DISPLAYED variable's value at every layer (Months +
    * Annual, or whichever single layer paleogeography has) of the clicked
-   * cell. Console.log only, deliberately: this is the first slice through
-   * the whole click -> LonLat -> engine-call pipeline, kept separate from
-   * any on-screen display so the two can be debugged independently.
+   * cell, and drop a marker there. The marker never moves again (a grid
+   * cell doesn't move the way a Plate-Frame Point does) -- only the VALUE
+   * shown keeps following whichever Frame is on screen, refreshed by
+   * refreshAnchoredQuery() on every subsequent Frame load (age/layer/
+   * variable/climate-model switch), same mechanism Plate-Frame Point uses.
    *
    * Restricted to Globe: `field.mesh` is a sphere, and `vec3ToLonLat`
    * assumes a hit point ON that sphere -- Plate Carrée's flat plane needs
    * its own UV-to-LonLat mapping, not attempted here.
    *
-   * Re-fetches the current Frame's texture via `src.frames.get()` rather
-   * than reading the material's own uVolume uniform -- FrameCache already
-   * has it cached (this IS the texture on screen), so this costs no new
-   * network request, and it avoids reaching into the material's internals.
-   *
-   * `clientX`/`clientY` are unrelated to `ndc` (already tile-relative) --
-   * they're the raw event coordinates, passed through only to position
-   * ClimateUI's floating result panel near the click, the same way
-   * showTooltip() positions itself off clientX/clientY rather than NDC.
+   * The result panel positions itself at a fixed tile-relative spot
+   * (ClimateUI.positionQueryPanel()), not near the click -- so unlike
+   * showTooltip() (a genuine hover follower), nothing here needs the raw
+   * event coordinates, only `ndc` for the raycast itself.
    */
-  async queryMonthProfileAt(ndc: Vector2, clientX: number, clientY: number): Promise<void> {
+  async queryMonthProfileAt(ndc: Vector2): Promise<void> {
     if (this.projectionMode !== 'globe') return;
 
     this.queryRaycaster.setFromCamera(ndc, this.camera);
@@ -480,37 +629,284 @@ export class ClimateInstance {
     if (!hit) return;
     const at = vec3ToLonLat(hit.point.x, hit.point.y, hit.point.z);
 
+    this.activeAnchoredPoint = at;
+    this.queryOpen = true;
+    this.setQueryMarker(at);
+    this.fetchAgeSeries(); // kicked off alongside, not awaited -- see its own doc comment
+
     const src = this.sources[this.sourceKey(this.view.layer)];
-    const variable = this.variable;
     const resolutionId = this.resolutionFor(this.view.layer);
     const frame = nearestFrame(src.manifest, this.view.age);
-    const res = src.manifest.resolutions.find((r) => r.id === resolutionId)!;
+    await this.refreshAnchoredQuery(src, resolutionId, frame);
+  }
 
+  /**
+   * Recompute the active Anchored Point's queried value for `frame` --
+   * called from loadFrame() so this always reads the SAME texture/Frame the
+   * field itself just displayed, no extra fetch beyond the query's own
+   * current-variable lookup (FrameCache already has it cached -- this IS
+   * the texture on screen). A no-op unless an Anchored Point is actually
+   * assigned or its result panel isn't open (`queryOpen`). Unlike
+   * refreshPlateFrameQuery(), never repositions the marker or reports "no
+   * plate here" -- a grid cell always has SOME value to show (possibly NaN
+   * under a mask, which showQueryPanel already renders as "--").
+   */
+  private async refreshAnchoredQuery(
+    src: LayerSource, resolutionId: string, frame: FrameInfo,
+  ): Promise<void> {
+    const at = this.activeAnchoredPoint;
+    if (!at || !this.queryOpen) return;
+    const token = ++this.anchoredQueryToken;
+
+    const variable = this.variable;
+    const res = src.manifest.resolutions.find((r) => r.id === resolutionId)!;
     const maskVar = src.manifest.mask_variable;
     const [tex, maskBytes] = await Promise.all([
       src.frames.get(src.manifest, variable.id, frame.id, resolutionId),
       maskVar ? src.bytes.get(src.manifest, maskVar, frame.id, resolutionId) : Promise.resolve(undefined),
     ]);
+    if (token !== this.anchoredQueryToken || at !== this.activeAnchoredPoint) return;
     const rule: NoDataRule = { maskBytes, sentinel: src.manifest.no_data_sentinel };
     const profile = monthProfile(tex, res, variable, at, rule);
 
-    const labels = profile.length === 13
-      ? [...Array(12).keys()].map((i) => `month ${i}`).concat('annual')
-      : profile.map((_, i) => `layer ${i}`);
-    console.log(
-      `Anchored Point -- ${variable.name} at (${at.lon.toFixed(2)}, ${at.lat.toFixed(2)}) `
-      + `[cell ${profile[0].cell.lon.toFixed(2)}, ${profile[0].cell.lat.toFixed(2)}], `
-      + `${frame.age_ma} Ma:`,
-      Object.fromEntries(labels.map((l, i) => [l, profile[i].value])),
-    );
     // Highlight whichever layer the month slider currently shows -- only
     // meaningful when this profile actually HAS a month axis (res.ndepth
     // === 13, see Month (climate) in CONTEXT.md); paleogeography's
     // single-layer profile has nothing for view.month to index into.
     const currentIndex = res.ndepth === 13 ? this.view.month : undefined;
     this.ui.showQueryPanel(
-      clientX, clientY, variable, at, profile[0].cell, frame.age_ma, profile, currentIndex,
+      variable, at, profile[0].cell, frame.age_ma, profile,
+      this.deps.colormaps[variable.default_colormap], this.view.clipMin, this.view.clipMax,
+      currentIndex, undefined, this.ageSeriesPanelData(src, frame.age_ma),
     );
+  }
+
+  /** Dispatch shift-click to whichever query gesture `view.queryMode`
+   *  currently means (docs/adr/0026) -- the one entry point main.ts's
+   *  pointerup handler calls, so it never needs to know the mode itself. */
+  async queryAt(ndc: Vector2): Promise<void> {
+    if (this.view.queryMode === 'plateFrame') {
+      await this.queryPlateFramePointAt(ndc);
+    } else {
+      await this.queryMonthProfileAt(ndc);
+    }
+  }
+
+  /** Switch the shift-click gesture's meaning -- discards whichever point
+   *  (either mode) was assigned under the OLD mode: switching modes
+   *  shouldn't leave a stale marker orphaned on screen with no way to clear
+   *  it short of clicking again in the new mode first. Closes the query
+   *  panel too, via the same hideQueryPanel() a real close-button click
+   *  would use (which is also what flips queryOpen off, see ClimateUI's
+   *  onQueryPanelClose). */
+  private setQueryMode(mode: QueryMode): void {
+    this.view.queryMode = mode;
+    this.activePlateFramePoint = null;
+    this.activeAnchoredPoint = null;
+    this.activeAgeSeries = null;
+    this.ageSeriesToken++; // invalidate any in-flight fetch from the old point
+    this.setQueryMarker(null);
+    this.ui.hideQueryPanel();
+  }
+
+  /**
+   * Plate-Frame Point (docs/adr/0025, docs/adr/0026): shift-click while
+   * `queryMode === 'plateFrame'` assigns the clicked location to a static
+   * polygon at the CURRENT age (assignPlate) and pins a marker to that piece
+   * of crust (createPlateFramePoint) -- moved and re-queried on every
+   * subsequent age change by refreshPlateFrameQuery(), called from
+   * loadFrame(). Mirrors queryMonthProfileAt()'s own raycast/Globe-only
+   * restriction rather than a second convention.
+   */
+  private async queryPlateFramePointAt(ndc: Vector2): Promise<void> {
+    if (this.projectionMode !== 'globe') return;
+    const data = this.deps.staticPolygonData;
+    if (!data) {
+      this.ui.showPlateFrameMessage('static polygon data is unavailable for this model');
+      return;
+    }
+
+    this.queryRaycaster.setFromCamera(ndc, this.camera);
+    const hit = this.queryRaycaster.intersectObject(this.field.mesh, false)[0];
+    if (!hit) return;
+    const at = vec3ToLonLat(hit.point.x, hit.point.y, hit.point.z);
+
+    this.queryOpen = true;
+
+    const assignment = assignPlate(data.polygons, data.table, at, this.view.age);
+    if (!assignment) {
+      this.activePlateFramePoint = null;
+      this.activeAgeSeries = null;
+      this.ageSeriesToken++;
+      this.setQueryMarker(null);
+      this.ui.showPlateFrameMessage('no plate found here at this age');
+      return;
+    }
+
+    this.activePlateFramePoint = createPlateFramePoint(assignment, data.table, at, this.view.age);
+    this.setQueryMarker(at); // immediate feedback -- refreshPlateFrameQuery below fills in the value
+    this.fetchAgeSeries(); // kicked off alongside, not awaited -- see its own doc comment
+
+    const src = this.sources[this.sourceKey(this.view.layer)];
+    const resolutionId = this.resolutionFor(this.view.layer);
+    const frame = nearestFrame(src.manifest, this.view.age);
+    await this.refreshPlateFrameQuery(src, resolutionId, frame);
+  }
+
+  /** Move (or hide) the query marker to `at` -- for Plate-Frame Point,
+   *  geographic-frame LonLat from staticPolygons.ts's positionAt(); for
+   *  Anchored Point, the raw click. Same interchange type
+   *  vec3ToLonLat()/lonLatToVec3() already use elsewhere in this file in
+   *  both cases, just sometimes produced by a different pair of frame
+   *  converters (see core/staticPolygons.ts's own doc comment). `null`
+   *  hides it -- past a Plate-Frame Point's own beginAge, or once cleared by
+   *  setQueryMode(). */
+  private setQueryMarker(at: LonLat | null): void {
+    if (!at) {
+      this.queryMarkerActive = false;
+      this.queryMarker.visible = false;
+      return;
+    }
+    const [x, y, z] = lonLatToVec3(at.lon, at.lat, QUERY_MARKER_R);
+    this.queryMarker.position.set(x, y, z);
+    this.queryMarkerActive = true;
+    this.updateQueryMarkerVisibility(); // don't wait a frame to hide it if placed on the far side
+  }
+
+  /** A billboard Sprite's own flat quad doesn't depth-test correctly against
+   *  the curved globe it's meant to sit just above (see queryMarker's own
+   *  doc comment) -- SpriteMaterial has depthTest disabled entirely instead,
+   *  and visibility on the far side is decided here, once per render, from
+   *  the exact sphere self-occlusion horizon: a point at the marker's own
+   *  radius is behind the R_SURFACE sphere from `camera`'s viewpoint iff
+   *  dot(position, camera.position) < R_SURFACE * QUERY_MARKER_R (the sphere
+   *  radius times the marker's own radius, both measured from the globe's
+   *  centre at the origin) -- exact regardless of how close the camera
+   *  zooms in, unlike a naive "camera is far away" direction-only test. */
+  private updateQueryMarkerVisibility(): void {
+    if (!this.queryMarkerActive) { this.queryMarker.visible = false; return; }
+    const p = this.queryMarker.position;
+    const c = this.camera.position;
+    this.queryMarker.visible = (p.x * c.x + p.y * c.y + p.z * c.z) >= R_SURFACE * QUERY_MARKER_R;
+  }
+
+  /**
+   * Recompute the active Plate-Frame Point's marker position and (if its
+   * result panel is open) queried value for `frame` -- called from
+   * loadFrame() so this always reads the SAME texture/Frame the field itself
+   * just displayed, no extra fetch beyond the query's own current-variable
+   * lookup (mirrors queryMonthProfileAt()'s own "FrameCache already has it
+   * cached" reasoning). A no-op unless a Plate-Frame Point is actually
+   * assigned.
+   *
+   * Two "no plate" outcomes collapse into the same message call
+   * (docs/adr/0026): `positionAt` returning null here IS "scrubbed past the
+   * point's own beginAge" -- the click-time "assignPlate found nothing"
+   * outcome never reaches this method, it's handled inline in
+   * queryPlateFramePointAt().
+   */
+  private async refreshPlateFrameQuery(
+    src: LayerSource, resolutionId: string, frame: FrameInfo,
+  ): Promise<void> {
+    const point = this.activePlateFramePoint;
+    if (!point) return;
+    const table = this.deps.staticPolygonData!.table; // non-null: activePlateFramePoint is only ever set alongside it
+    const token = ++this.plateFrameQueryToken;
+
+    const at = positionAt(point, table, frame.age_ma);
+    this.setQueryMarker(at);
+    if (!this.queryOpen) return;
+    if (!at) {
+      this.ui.showPlateFrameMessage(`no plate here before ${point.beginAge.toFixed(0)} Ma`);
+      return;
+    }
+
+    const variable = this.variable;
+    const res = src.manifest.resolutions.find((r) => r.id === resolutionId)!;
+    const maskVar = src.manifest.mask_variable;
+    const [tex, maskBytes] = await Promise.all([
+      src.frames.get(src.manifest, variable.id, frame.id, resolutionId),
+      maskVar ? src.bytes.get(src.manifest, maskVar, frame.id, resolutionId) : Promise.resolve(undefined),
+    ]);
+    // A newer refresh (age/layer/variable change, or the point being
+    // cleared entirely) landed first -- same staleness pattern as
+    // loadFrame()'s own ageToken guard.
+    if (token !== this.plateFrameQueryToken || point !== this.activePlateFramePoint) return;
+    const rule: NoDataRule = { maskBytes, sentinel: src.manifest.no_data_sentinel };
+    const profile = plateFrameMonthProfile(tex, res, variable, point, table, frame.age_ma, rule);
+    if (!profile) { // positionAt() above already agreed `at` exists, so this is only a defensive mirror
+      this.ui.showPlateFrameMessage(`no plate here before ${point.beginAge.toFixed(0)} Ma`);
+      return;
+    }
+    const currentIndex = res.ndepth === 13 ? this.view.month : undefined;
+    this.ui.showQueryPanel(
+      variable, at, profile[0].cell, frame.age_ma, profile,
+      this.deps.colormaps[variable.default_colormap], this.view.clipMin, this.view.clipMax,
+      currentIndex, point.plateId, this.ageSeriesPanelData(src, frame.age_ma),
+    );
+  }
+
+  /** Build the `AgeSeriesPanelData` argument for showQueryPanel() from
+   *  whichever Age Series is currently held (`activeAgeSeries`) --
+   *  undefined when none is active at all (no point, or fetchAgeSeries()
+   *  hasn't run for it yet). `ageMin`/`ageMax` come from `src.manifest.frames`
+   *  -- the ACTIVE Model's own full age range -- read fresh on every call
+   *  rather than cached alongside the series, since the active layer/model
+   *  can change independently of when the series itself was last fetched. */
+  private ageSeriesPanelData(src: LayerSource, currentAge: number): AgeSeriesPanelData | undefined {
+    if (this.activeAgeSeries === null) return undefined;
+    const ages = src.manifest.frames.map((f) => f.age_ma);
+    return {
+      data: this.activeAgeSeries, ageMin: Math.min(...ages), ageMax: Math.max(...ages), currentAge,
+    };
+  }
+
+  /**
+   * Kick off (or re-kick-off) the Age Series (point) fetch for whichever
+   * point is currently active -- docs/adr/0027. Called once per point (a
+   * new click) and again whenever the layer/variable/climate-model changes
+   * while a point is active (a different quantity needs a different
+   * series), but deliberately NEVER from loadFrame()/applyAge(): those run
+   * on every age-slider tick, and re-fetching every Frame's bytes on every
+   * tick would be exactly the perf problem the ADR calls out. Once the
+   * series lands, this re-triggers whichever mode's refresh method is
+   * active for the CURRENT Frame, so it renders immediately rather than
+   * waiting for the next age change -- cheap, since that refresh's own
+   * value fetch is FrameCache-cached by then. A no-op if no point is
+   * active or its panel isn't open.
+   */
+  private fetchAgeSeries(): void {
+    if (!this.queryOpen) { this.activeAgeSeries = null; return; }
+    const src = this.sources[this.sourceKey(this.view.layer)];
+    const variable = this.variable;
+    const resolutionId = this.resolutionFor(this.view.layer);
+    const token = ++this.ageSeriesToken;
+    this.activeAgeSeries = 'loading';
+
+    let promise: Promise<(CellSample & { age: number })[]>;
+    if (this.activePlateFramePoint) {
+      const point = this.activePlateFramePoint;
+      const table = this.deps.staticPolygonData!.table; // non-null: activePlateFramePoint only ever set alongside it
+      promise = plateFrameAgeSeries(src.bytes, src.manifest, variable, point, table, resolutionId);
+    } else if (this.activeAnchoredPoint) {
+      promise = ageSeries(src.bytes, src.manifest, variable, this.activeAnchoredPoint, resolutionId);
+    } else {
+      this.activeAgeSeries = null;
+      return;
+    }
+
+    void promise.then((result) => {
+      if (token !== this.ageSeriesToken) return; // a newer point/variable/layer landed first
+      this.activeAgeSeries = result;
+      const rSrc = this.sources[this.sourceKey(this.view.layer)];
+      const rResolutionId = this.resolutionFor(this.view.layer);
+      const rFrame = nearestFrame(rSrc.manifest, this.view.age);
+      if (this.activePlateFramePoint) void this.refreshPlateFrameQuery(rSrc, rResolutionId, rFrame);
+      else if (this.activeAnchoredPoint) void this.refreshAnchoredQuery(rSrc, rResolutionId, rFrame);
+    }).catch((e: unknown) => {
+      console.error(e);
+      if (token === this.ageSeriesToken) this.activeAgeSeries = null;
+    });
   }
 
   /** Switch this globe's Projection -- always called from main.ts for every
@@ -573,6 +969,11 @@ export class ClimateInstance {
     this.ui.setVariable(this.variable, this.deps.colormaps[this.variable.default_colormap]);
     this.ui.refreshDisplay();
     this.updateCredit();
+    // A different layer means a different Model/manifest -- Age Series
+    // (point) needs a fresh fetch, unlike Month Profile's own live value,
+    // which switchLayer()'s loadFrame() already refreshed above. See
+    // fetchAgeSeries()'s own doc comment (docs/adr/0027).
+    this.fetchAgeSeries();
     this.hooks.onDisplayChange?.(this);
   }
 
@@ -615,6 +1016,9 @@ export class ClimateInstance {
     this.applyClip(this.variable.default_clip_min, this.variable.default_clip_max);
     await this.loadFrame(this.view.layer, this.view.age);
     this.ui.setVariable(this.variable, this.deps.colormaps[this.variable.default_colormap]);
+    // A different variable needs a different Age Series -- see setLayer()'s
+    // matching comment and fetchAgeSeries() (docs/adr/0027).
+    this.fetchAgeSeries();
     this.hooks.onDisplayChange?.(this);
   }
 
@@ -633,6 +1037,10 @@ export class ClimateInstance {
     if (this.view.layer === 'paleogeography') work.push(this.loadFrame('paleogeography', this.view.age));
     await Promise.all(work);
     this.ui.refreshDisplay();
+    // Same condition loadFrame() above is gated on -- a resolution switch
+    // only changes what's actually displayed (and therefore queryable) while
+    // paleogeography is the active layer. See fetchAgeSeries() (docs/adr/0027).
+    if (this.view.layer === 'paleogeography') this.fetchAgeSeries();
   }
 
   /** Switch which registered climate-type model backs the 'climate' layer.
@@ -665,6 +1073,10 @@ export class ClimateInstance {
       this.view.variable = this.variable.id;
       this.ui.setLayerVariables(this.manifest.variables, this.view.layer);
       this.ui.setVariable(this.variable, this.deps.colormaps[this.variable.default_colormap]);
+      // Same condition switchLayer() above is gated on -- a climate-model
+      // switch only changes what's displayed while 'climate' is the active
+      // layer. See fetchAgeSeries() (docs/adr/0027).
+      this.fetchAgeSeries();
     }
     this.ui.refreshDisplay();
     this.updateCredit();
@@ -695,6 +1107,20 @@ export class ClimateInstance {
     // prep_colormaps.py's build_categorical_colormap(). 0 = continuous,
     // the default for every ordinary variable.
     this.field.material.uniforms.uSteps.value = v.categorical ? (v.class_names?.length ?? 0) : 0;
+
+    // Keeps whichever query result is currently shown in step with the new
+    // clip range -- both charts render against `view.clipMin`/`clipMax` as a
+    // fixed y-axis and colormap-background source (see drawQueryProfile()/
+    // drawAgeSeriesChart()'s own doc comments), which a lil-gui clip-slider
+    // drag changes without going through loadFrame() at all -- the value
+    // itself hasn't changed, so nothing re-fetches, only the redraw. Same
+    // "call both, each self-guards on its own active point" pattern as
+    // loadFrame()'s own call site.
+    const src = this.sources[this.sourceKey(this.view.layer)];
+    const resolutionId = this.resolutionFor(this.view.layer);
+    const frame = nearestFrame(src.manifest, this.view.age);
+    void this.refreshPlateFrameQuery(src, resolutionId, frame);
+    void this.refreshAnchoredQuery(src, resolutionId, frame);
   }
 
   applyAge(age: number): void {
@@ -794,6 +1220,13 @@ export class ClimateInstance {
     this.applyVolume(src.manifest, tex, resolutionId);
     src.frames.prefetchNeighbours(src.manifest, variableId, frame.id, resolutionId);
     void this.applyValidMask(src, key, frame.id, resolutionId);
+    // Keeps whichever query result is currently shown (either mode) in step
+    // with whichever Frame just landed on screen -- each a no-op unless ITS
+    // OWN mode's point is actually assigned (see refreshPlateFrameQuery()/
+    // refreshAnchoredQuery()'s own doc comments); only one is ever active at
+    // once, since setQueryMode() clears the other on every mode switch.
+    void this.refreshPlateFrameQuery(src, resolutionId, frame);
+    void this.refreshAnchoredQuery(src, resolutionId, frame);
   }
 
   private applyVolume(
@@ -916,6 +1349,7 @@ export class ClimateInstance {
   }
 
   render(renderer: WebGLRenderer): void {
+    this.updateQueryMarkerVisibility(); // camera may have orbited since the last call, with no other hook
     renderer.render(this.scene, this.camera);
   }
 
