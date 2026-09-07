@@ -6,6 +6,7 @@ import { passthroughColor } from './material';
 import { GEOGRAPHIC_GLSL } from './glsl/geographic';
 import { R_SURFACE, LIGHT_DIR } from './constants';
 import { PALETTE } from './palette';
+import { fetchVolumeBytes } from './volume';
 import type { ArchiveIndex, CoastlineLine, CoastlineSet, Manifest, RotationTable } from './types';
 
 const LAND_R = R_SURFACE * 1.0006;      // just clear of the surface sphere
@@ -393,14 +394,12 @@ export async function fetchCoastlineData(
   geometryPath: string,
   rotationsPath: string,
 ): Promise<CoastlineData> {
-  const [gRes, rRes] = await Promise.all([
-    fetch(`${base}/${geometryPath}`),
-    fetch(`${base}/${rotationsPath}`),
+  const [gBytes, rBytes] = await Promise.all([
+    fetchVolumeBytes(`${base}/${geometryPath}`),
+    fetchVolumeBytes(`${base}/${rotationsPath}`),
   ]);
-  if (!gRes.ok) throw new Error(`${geometryPath}: ${gRes.status}`);
-  if (!rRes.ok) throw new Error(`${rotationsPath}: ${rRes.status}`);
-  const lines = parseGeometry(await gRes.arrayBuffer());
-  const table: RotationTable = await rRes.json();
+  const lines = parseGeometry(gBytes.buffer.slice(gBytes.byteOffset, gBytes.byteOffset + gBytes.byteLength) as ArrayBuffer);
+  const table: RotationTable = JSON.parse(new TextDecoder().decode(rBytes));
   return { lines, table };
 }
 

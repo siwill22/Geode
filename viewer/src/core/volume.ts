@@ -61,11 +61,16 @@ export function resolvePath(
 }
 
 /**
- * Fetch a volume's bytes, transparently un-gzipping a `.bin.gz` frame.
+ * Fetch a URL's bytes, transparently un-gzipping a `.gz` file.
  *
- * The deployed archive stores volumes gzipped (prep/pack_deploy.mjs) because a
- * CDN will not compress application/octet-stream for us, and these files halve.
- * The manifest's path_template carries the `.gz`, so nothing else has to know.
+ * The deployed archive gzips volumes AND, per prep/pack_deploy.mjs, the
+ * larger coastline/boundary assets (a static host will not compress
+ * application/octet-stream for us, and these files roughly halve) --
+ * despite the name, this is the one gzip-aware fetch every asset type
+ * routes through (core/coastlines.ts's fetchCoastlineData() included), so
+ * there is exactly one place that knows how to tell a gzipped response
+ * from a plain one. The referencing manifest field carries the `.gz`, so
+ * nothing else has to know.
  *
  * The extension alone is NOT enough to decide whether to decompress. A server
  * may serve a .gz file with `Content-Encoding: gzip`, in which case the browser

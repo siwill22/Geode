@@ -172,8 +172,28 @@ check('Pacific LLSVP is hot at 2600 km', llsvp.value > 0,
 // a hardcoded lon/lat tests the tester, not the data. It is also the one check
 // that would catch the surface and the volume being in different reference
 // frames, which is invisible in either layer alone.
-const bframe = await (await fetch(
-  'http://localhost:5173/archive/boundaries/frames/boundaries_100Ma.geojson')).json();
+// The deployed (but not the dev) archive gzips this frame -- see
+// prep/pack_deploy.mjs -- so try the plain path first and fall back to
+// `.gz`, decompressing the same way core/volume.ts's fetchVolumeBytes does,
+// rather than hardcoding which one this run's archive happens to have.
+async function fetchMaybeGzippedJSON(url) {
+  let res = await fetch(url);
+  // A missing static file 404s against a static host, but Vite's dev server
+  // falls back to serving index.html (200, text/html) for anything it
+  // doesn't recognise -- so "not ok" alone isn't enough to detect a miss.
+  if (!res.ok || (res.headers.get('content-type') ?? '').includes('html')) {
+    res = await fetch(`${url}.gz`);
+  }
+  if (!res.ok) throw new Error(`${url}(.gz): ${res.status}`);
+  const raw = new Uint8Array(await res.arrayBuffer());
+  const gzipped = raw.length > 2 && raw[0] === 0x1f && raw[1] === 0x8b;
+  if (!gzipped) return JSON.parse(new TextDecoder().decode(raw));
+  const stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream('gzip'));
+  return JSON.parse(await new Response(stream).text());
+}
+
+const bframe = await fetchMaybeGzippedJSON(
+  'http://localhost:5173/archive/boundaries/frames/boundaries_100Ma.geojson');
 const trench = [];
 for (const f of bframe.features) {
   if (f.properties.boundary_type !== 'subduction') continue;
