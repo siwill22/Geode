@@ -1,9 +1,13 @@
 # Anchored Point query
 
-**Status: designed, not yet implemented.** See ADR-0011 for the two
-architectural decisions and their consequences; this doc is the
-implementation shape. Terms (Query Point, Anchored Point, Month Profile,
-Age Series) are defined in `CONTEXT.md`.
+**Status: implemented.** `core/queryPoint.ts`'s `monthProfile()`/`ageSeries()`
+are the engine-level primitives this doc specifies, shift-click-driven in
+both the mantle/generic globe viewer (`globe/globeInstance.ts`) and the
+climate viewer (`climate/climateInstance.ts`, which also layers Plate-Frame
+Point on top — see `docs/plans/plate-frame-point.md`). See ADR-0011 for the
+two architectural decisions and their consequences; this doc is the
+implementation shape it was built from. Terms (Query Point, Anchored Point,
+Month Profile, Age Series) are defined in `CONTEXT.md`.
 
 ## What it is
 

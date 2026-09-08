@@ -3,7 +3,8 @@
 *Crack the Earth open and look at the structure inside.*
 
 A shared three.js/Vite engine for browsing 3D Earth-science volumes on a
-reconstructed spherical globe, with two viewers built on it so far:
+reconstructed spherical globe. Three bespoke viewers are built directly on
+it, each with its own domain-specific UI:
 
 - **[the mantle viewer](viewer/index.html)** — static seismic tomography or a
   mantle convection run scrubbed through 200 Myr, with reconstructable
@@ -11,21 +12,46 @@ reconstructed spherical globe, with two viewers built on it so far:
   cutaway whose walls and floor are textured with the model interpolated onto
   the cut surface.
 - **[the paleoclimate viewer](viewer/climate.html)** — monthly-resolved
-  surface temperature, precipitation, albedo and land fraction from a 540 Myr
-  climate simulation, with a paleogeography layer and reconstructed continent
-  outlines consistent with the same underlying plate model the climate run
-  used.
+  surface temperature, precipitation and other fields from two 540 Myr
+  climate simulations (Li et al. 2022, Pohl et al. 2022), a paleogeography
+  layer, wind glyphs/streaks, and a Query Point (Anchored or Plate-Frame) for
+  reading a cell's — or a moving piece of crust's — value across time. See
+  *The paleoclimate viewer* below.
+- **[the Valdes/BRIDGE viewer](viewer/valdes.html)** — the Valdes et al. 2021
+  BRIDGE simulation's own Atmosphere (monthly) and Ocean (20 depth levels,
+  annual) layers, kept separate from the main paleoclimate viewer since
+  their grids don't share a depth range (ADR-0008).
 
-Both are thin wrappers (`viewer/src/tomography/`, `viewer/src/climate/`) over
-one generic engine (`viewer/src/core/`) — the archive/manifest data format,
-volume-texture sampling, coastline reconstruction and colour-ramp machinery
-are shared, not duplicated per viewer. A new viewer is a new entry page plus a
-new wrapper directory, not a branch inside an existing one. See *Layout*
-below.
+On top of the same engine, a **generator** (`generator/`, driven by the
+`geode-globe-viewer` Claude Skill) scaffolds standalone, deployable viewer
+sites from the data catalog alone — no data-prep judgment calls, no new
+code. It produces one of four generic wrapper types, each also checked into
+this monorepo with a real working example so `npm run dev`/`typecheck`
+exercise them without running the generator first:
 
-Phases 1 and 2 of [the spec](tomography-globe-viewer-spec.md) are built for
-the mantle viewer. Design vocabulary is in [CONTEXT.md](CONTEXT.md); decisions
-with lasting consequences are in [docs/adr/](docs/adr/).
+| entry page | wrapper type | this repo's checked-in example |
+|---|---|---|
+| [`globe.html`](viewer/globe.html) | `single-model-globe` — one Model, no comparison controls | Cao 2024 crustal deformation |
+| [`groupGlobe.html`](viewer/groupGlobe.html) | `model-group-globe` — several Models from one comparison family, switched via dropdowns | Cao2024/Müller2019 × Deformation/Age & Heat Flux |
+| [`reconstruction.html`](viewer/reconstruction.html) | `single-reconstruction-globe` — one Reconstruction Model's own coastlines/boundaries, no numerical field | Müller et al. 2019 |
+| [`reconstructionGroup.html`](viewer/reconstructionGroup.html) | `reconstruction-group-globe` — several Reconstruction Models' geometry, switched via one dropdown | Müller 2019 vs Seton 2012 |
+
+All seven entry points (three bespoke, four generated) share the same
+engine (`viewer/src/core/`) — the archive/manifest data format,
+volume-texture sampling, coastline reconstruction, colour-ramp machinery,
+Multi-Globe tiling (ADR-0022), and Query Point (Anchored/Plate-Frame) are
+implemented once, not duplicated per viewer. A new bespoke viewer is a new
+entry page plus a new wrapper directory, not a branch inside an existing
+one; a new generic one is a generator recipe, not new code at all. See
+*Layout* below.
+
+Phases 1, 2, 2b and 4 of [the spec](tomography-globe-viewer-spec.md) are
+built for the mantle viewer (see the spec's own "Phasing" section for what
+Phase 3 still lacks). Design vocabulary is in [CONTEXT.md](CONTEXT.md);
+decisions with lasting consequences are in [docs/adr/](docs/adr/) — the
+generator's own four-wrapper-type design in particular is ADRs 0017, 0018,
+0020, 0021 and 0022, plus `generator/recipeTypes.ts`'s own doc comments and
+`.claude/skills/geode-globe-viewer/SKILL.md`.
 
 ## Quick start
 
@@ -33,8 +59,13 @@ with lasting consequences are in [docs/adr/](docs/adr/).
 git clone --recurse-submodules <this repo>
 cd viewer
 npm install
-npm run dev            # http://localhost:5173         mantle viewer
-                        # http://localhost:5173/climate.html   paleoclimate viewer
+npm run dev   # http://localhost:5173                        mantle viewer
+              # http://localhost:5173/climate.html            paleoclimate viewer
+              # http://localhost:5173/valdes.html              Valdes/BRIDGE viewer
+              # http://localhost:5173/globe.html                generated: single-model-globe
+              # http://localhost:5173/groupGlobe.html            generated: model-group-globe
+              # http://localhost:5173/reconstruction.html         generated: single-reconstruction-globe
+              # http://localhost:5173/reconstructionGroup.html     generated: reconstruction-group-globe
 ```
 
 Plate boundaries are drawn by [deep-time-map](https://github.com/siwill22/deep-time-map),
@@ -86,19 +117,21 @@ neighbours of the current age are prefetched.
 ## The paleoclimate viewer
 
 `climate.html` reuses the same volume-texture / archive machinery as the
-mantle viewer, aimed at variables from the Li, Hu et al. 2022 CESM
-simulation (0-540 Ma, 10 Myr steps) via `prep/prep_climate.py`: surface
-temperature, precipitation, albedo, and land fraction are switchable from a
-dropdown; zonal/meridional wind (see *Wind glyphs*, below) drive a separate
-glyph layer instead. Temperature/precipitation/albedo carry real monthly resolution in
-the source, so the volume's third axis -- the same generic "layer" axis the
-mantle viewer uses for depth, `depth_min_km`/`depth_max_km` in the manifest --
-carries a calendar month (0-11) here instead, with a slider and a play button
-to animate the seasonal cycle. Land fraction has no month axis in the source
-(CESM does not simulate a seasonal land/ocean mask) and is broadcast to all
-12 month layers so every variable in the manifest shares one grid shape,
-rather than teaching the shared engine about a per-variable grid shape for
-one static field.
+mantle viewer. A **climate model** picker switches between two independent
+CESM/FOAM simulations sharing the same Layer/Variable UI: Li, Hu et al.
+2022 (`climate-540myr`, 0-540 Ma, 10 Myr steps, via `prep/prep_climate.py`)
+and Pohl et al. 2022 (`climate-pohl2022`, via `prep/prep_pohl.py`) — surface
+temperature, precipitation and (model-dependent) other fields are
+switchable from a Variable dropdown; zonal/meridional wind (see *Wind
+glyphs*, below) drive a separate glyph layer instead. Temperature/
+precipitation carry real monthly resolution in the source, so the volume's
+third axis -- the same generic "layer" axis the mantle viewer uses for
+depth, `depth_min_km`/`depth_max_km` in the manifest -- carries a calendar
+month (0-11) here instead, with a slider and a play button to animate the
+seasonal cycle. A variable with no month axis in its own source is
+broadcast to all 12 month layers so every variable in a manifest shares one
+grid shape, rather than teaching the shared engine about a per-variable
+grid shape for one static field.
 
 A second layer, paleogeography, comes from Scotese & Wright (2018) PaleoDEM
 elevation rasters via `prep/prep_paleogeography.py`, coloured with GMT's
@@ -287,8 +320,10 @@ span, matching the climate data end to end.
 
 An "+ Add globe" toolbar button tiles an arbitrary number of globes on one
 canvas, each independently choosing its own layer/variable/age/month/clip —
-porting the mantle viewer's own multi-globe support (`tomography/main.ts`)
-rather than building a second version of it. One shared camera and
+originally ported from the mantle viewer's own multi-globe support
+(`tomography/main.ts`), since generalized into a genuinely shared
+`core/multiInstanceHost.ts` primitive (ADR-0022) all seven entry points
+build on, not a per-viewer reimplementation. One shared camera and
 `OrbitControls` instance is the whole trick: rotation and zoom stay locked
 across every globe for free, because there is only ever one camera object,
 re-aimed at each tile's own viewport/scissor rect (`core/layout.ts`'s
@@ -318,6 +353,39 @@ shape this project has hit more than once. Each instance's control panel is
 now anchored to its own tile (`ClimateUI.setRect()`) instead of lil-gui's
 single fixed top-right placement, the same trick `tomography/ui.ts` already
 uses.
+
+### Query Point: Anchored and Plate-Frame
+
+Shift-click reads a Variable's value at a point, in one of two modes (a
+"query mode" toggle, see `CONTEXT.md`'s Query Point/Anchored Point/
+Plate-Frame Point entries and ADR-0011/0025/0026):
+
+- **Anchored** — the grid cell stays fixed as the age slider moves, reading
+  whatever ends up there each Frame. Default, and the only mode in the
+  generic globe viewer (`globe.html`) too.
+- **Plate-Frame** — climate-only. The clicked point is assigned to a static
+  polygon (`core/staticPolygons.ts`, ADR-0025) at the reference age, then
+  re-expressed in grid space at every other age via that plate's own
+  rotation, so the query follows the same piece of crust rather than a
+  fixed lon/lat. Reports "no plate found" if the click misses every static
+  polygon, or once the age scrubs past the assigned polygon's own begin
+  age — a real, expected outcome, not an error.
+
+Either mode's result panel shows **Month Profile** (all months of the
+current Frame, free — the texture is already resident for display) and
+**Age Series** (one value per Frame across the whole model's age range,
+fetched once per point rather than on every age-slider tick, ADR-0027)
+stacked together, both charted against the currently active clip range and
+tinted with the active colormap so a chart's vertical position visually
+matches the colour the same value paints on the globe.
+
+### Plate Carrée projection
+
+A projection toggle switches the whole scene (field, overlay, wind,
+coastlines) between the default 3D globe and a flat equirectangular plane
+(ADR-0003) — reprojecting wind glyphs/streaks' tangent-frame math along the
+way (ADR-0006), rather than only reprojecting the base sphere and leaving
+wind glyphs pointing in globe-relative directions on a flat map.
 
 ## Regenerating the archive
 
@@ -365,27 +433,62 @@ and SEMUCB-WM1 `(depth, lat, lon)` with only `--var` changing.
 
 ### Models currently in the archive
 
+**Mantle** (`viewer/index.html`):
+
 | id | grid | valid depth | notes |
 |---|---|---|---|
 | `reveal` | 360x181x192 | 0-2735 km | Vs and Vp. Default. |
 | `semucb` | 360x181x192 | 48-2735 km | Top 12 levels dropped as >1% NaN |
 | `uup07` | 360x181x192 | 5-2816 km | Vp; basal trim correctly does nothing here |
 | `opt1` | 360x181x192 | 16-2840 km | **11 frames, 0-200 Ma.** Temperature anomaly, K |
-| `climate-540myr` | 360x181x12 | month 0-11 | **55 frames, 0-540 Ma, 4 variables** (T, P, SALB, LANDFRAC). Paleoclimate viewer. |
-| `paleogeography-scotese` | 360x181x1 | n/a | **109 frames, 0-540 Ma.** Elevation, `geo` colormap. Paleoclimate viewer. |
-| `fixture-check` | 360x181x192 | 0-2840 km | Checkerboard, sign flips at 660 and 1800 km |
-| `fixture-ramp` | 360x181x192 | 0-2840 km | Pure function of depth |
-| `fixture-drift` | 360x181x192 | 0-2840 km | 11 frames; blob at lon = age x 0.5 |
 
 OPT1 is on REVEAL's grid exactly, so the two are directly comparable — the 65
 non-uniform source levels are oversampled to 192 uniform ones, which adds no
 information but keeps one grid shape across the archive. 12 MB per frame,
 131 MB for the series.
 
-`climate-540myr` (`ndepth: 12`, the volume's layer axis carrying month) and
-`paleogeography-scotese` (`ndepth: 1`, no month axis) are built for the
-paleoclimate viewer by `prep/prep_climate.py` and `prep/prep_paleogeography.py`
-respectively:
+**Paleoclimate** (`climate.html`, `valdes.html`):
+
+| id | grid | frames | notes |
+|---|---|---|---|
+| `climate-540myr` | 360x181x13 | 55, 0-540 Ma | Li et al. 2022. T, P, SALB, LANDFRAC, U, V, T_RANGE, KOPPEN. |
+| `climate-pohl2022` | 360x181x13 | 28, 0-540 Ma | Pohl et al. 2022. T, P, EVP, RNF, PME, TOPO, LANDMASK, KOPPEN. |
+| `paleogeography-scotese` | 360x181x1 (+ hi 1440x721) | 109, 0-540 Ma | Elevation + hillshade overlay, `geo` colormap. |
+| `bridge-valdes2021-monthly` | 360x181x13 | 109, 0-541 Ma | Valdes et al. 2021 BRIDGE atmosphere: T, P, MSLP, ICECONC, U, V, SST, SSS, OCU, OCV, ICEU, ICEV, STREAMFN, MLD, KOPPEN. |
+| `bridge-valdes2021-ocean-depth` | 360x181x20 | 109, 0-541 Ma | Same run's ocean fields at 20 depth levels, annual only: OTEMP, OSAL, OCURU, OCURV, OVEL. |
+
+**Crustal deformation** (`globe.html`/`groupGlobe.html`'s checked-in example):
+
+| id | grid | frames | notes |
+|---|---|---|---|
+| `cao2024-deformation` | 720x361x1 | 1001, 0-1000 Ma | 8 strain/style variables + thickness, from the `defamation` pipeline. |
+| `cao2024-age-heatflux` | 720x361x1 | 1, present day | Tectonothermal/subduction/composite age, subduction distance, heat flux (nominal/mean/range). |
+| `muller2019-deformation` | 720x361x1 | 241, 0-240 Ma | Same 9 variables, Müller 2019 reconstruction. |
+| `muller2019-age-heatflux` | 720x361x1 | 1, present day | Same 7 variables, Müller 2019 reconstruction. |
+
+**Fixtures** (`check:render` only — dropped from the deployed archive):
+
+| id | grid | notes |
+|---|---|---|
+| `fixture-check` | 360x181x192 | Checkerboard, sign flips at 660 and 1800 km |
+| `fixture-ramp` | 360x181x192 | Pure function of depth |
+| `fixture-drift` | 360x181x192 | 11 frames; blob at lon = age x 0.5 |
+
+`climate-540myr`/`climate-pohl2022`/the BRIDGE monthly model (`ndepth: 13`,
+the volume's layer axis carrying month + Annual) and `paleogeography-scotese`/
+the BRIDGE ocean-depth model (no month axis) are built by `prep/prep_climate.py`,
+`prep/prep_pohl.py`, `prep/prep_bridge.py` and `prep/prep_paleogeography.py`
+respectively — each script's own module docstring has its exact invocation.
+The two deformation models per Reconstruction Model come from
+`prep/prep_deformation.py`, converting a sibling `defamation` pipeline run
+(see `docs/plans/deformation-viewer.md`); Reconstruction Model coastlines/
+boundaries/static-polygons themselves (Müller 2019, Seton 2012, Scotese) come
+from `prep/prep_reconstruction.py` and `prep/prep_staticpolygons.py` (ADR-0021,
+ADR-0025), one `gprm.datasets.Reconstructions.fetch_<model>()` call each so
+rotations/geometry/topology can never come from mismatched sources
+(ADR-0004). The worked example below shows the pattern (`prep_climate.py` +
+`prep_paleogeography.py` + `prep_coastlines.py`, Scotese's own coastlines);
+every other prep script above follows the same shape.
 
 ```bash
 conda run -n pygmt17 python prep/prep_climate.py \
@@ -403,10 +506,26 @@ conda run -n pygmt17 python prep/prep_coastlines.py \
 conda run -n pygmt17 python prep/build_archive_index.py
 ```
 
-Both fetch their source data through `gprm` — but only the parts that need
-`pooch`/`xarray`/`pygplates`, loaded by file path rather than `import gprm`,
-since the package `__init__` unconditionally pulls in `ptt`
-(PlateTectonicTools), which is not part of the `pygmt17` environment.
+`prep_paleogeography.py` and `prep_coastlines.py` fetch their source data
+through `gprm` — but only the parts that need `pooch`/`xarray`/`pygplates`,
+loaded by file path rather than `import gprm`, since the package `__init__`
+unconditionally pulls in `ptt` (PlateTectonicTools), which is not part of
+the `pygmt17` environment. `prep_climate.py` reads a local netCDF instead
+(`--input`), unrelated to `gprm`.
+
+### Reconstruction Models currently in the archive
+
+A first-class catalog section of their own (ADR-0021,
+`archive.json`'s `reconstruction_models[]`), independent of any numerical
+Model — Müller 2022 is used too (mantle viewer coastlines/boundaries,
+OPT1's own reference frame) but predates this catalog section and isn't in
+it, still resolved the original way (`archive/coastlines`, `archive/boundaries`).
+
+| id | coastlines | boundaries | static polygons |
+|---|---|---|---|
+| `muller2019` | yes | yes | yes |
+| `seton2012` | yes | yes | yes |
+| `scotese` | yes | **no, permanently** (ADR-0019 — resolves no topological plates at all) | yes |
 
 A single-layer field (`paleogeography-scotese`; `climate-540myr` before Phase 2
 added the month axis) needs `depth_min_km`/`depth_max_km` set to a
@@ -537,9 +656,11 @@ it.
 ```bash
 cd viewer
 npm run typecheck
-npm run check:mask        # spherical scanline vs pygplates
-npm run check:boundaries  # subduction polarity vs resolved plate polygons
-npm run check:render      # headless render of the visual criteria
+npm run check:mask             # spherical scanline vs pygplates
+npm run check:boundaries       # subduction polarity vs resolved plate polygons
+npm run check:render           # headless render of the visual criteria
+npm run check:query-point      # Anchored Point / Month Profile / Age Series arithmetic
+npm run check:static-polygons  # Plate-Frame Point assignment + trajectory
 ```
 
 **Always run `check:boundaries` through the wrapper, never
@@ -592,12 +713,14 @@ render:
 ## Deploying
 
 The site is static, so GitHub Pages serves it whole — but the data must not go
-through git. `archive/` is ~400 MB of derived binary, and binary does not delta
-compress, so committing it would add a fresh several-hundred-MB copy to history
-on every regeneration, permanently. Instead the data is a **release asset** and
-`.github/workflows/deploy.yml` pulls it in at build time. The Pages artifact
-carries the bytes to Pages storage without them entering the repo, which is what
-lets code deploy as often as it likes against data uploaded once.
+through git. `archive/` is **~6.3 GB** of derived binary (grown a lot as more
+models joined the catalog — it was ~400 MB when this section was first
+written), and binary does not delta compress, so committing it would add a
+fresh multi-GB copy to history on every regeneration, permanently. Instead
+the data is a **release asset** and `.github/workflows/deploy.yml` pulls it
+in at build time. The Pages artifact carries the bytes to Pages storage
+without them entering the repo, which is what lets code deploy as often as
+it likes against data uploaded once.
 
 `prep/pack_deploy.mjs` turns the generated archive into the deployable one:
 
@@ -607,11 +730,17 @@ node prep/pack_deploy.mjs          # archive/ -> archive-deploy/
 
 Two changes, both about the 1 GB Pages cap and the bandwidth budget. It **drops
 the fixture models** — they exist for `check:render` and are ~160 MB of that —
-and it **gzips the volumes**, rewriting each manifest's `path_template` to
-`.bin.gz` so nothing else needs a flag. ~200 MB of volumes becomes ~92 MB; the
-whole deployable archive is **~170 MB**. Pre-compressing is worth the trouble
-because a CDN will not compress `application/octet-stream` for you. The JSON is
-deliberately left alone, since `application/json` *is* compressed on the wire.
+and it **gzips the volumes** (rewriting each manifest's `path_template` to
+`.bin.gz`) as well as each Reconstruction Model's own vector data
+(coastlines, boundaries, static polygons — rewriting those manifest fields
+too, sharing one rotation file between coastlines and static polygons
+rather than gzipping it twice) so nothing else needs a flag. The whole
+deployable archive is **~836 MB** — over four-fifths of the 1 GB cap now
+(see *The limits, and when they bite*, below; issue #9 tracks moving to
+object storage before this runs out). Pre-compressing is worth the trouble
+because a CDN will not compress `application/octet-stream` for you. The JSON
+is deliberately left alone, since `application/json` *is* compressed on the
+wire.
 
 Deployed at **<https://siwill22.github.io/Geode/>**. The repo is private; a
 Pages *site* is public regardless, since access-controlled Pages is Enterprise
@@ -674,15 +803,19 @@ site.
 
 | | |
 |---|---|
-| Published Pages site | **1 GB hard** — currently ~170 MB |
+| Published Pages site | **1 GB hard** — currently **~836 MB** |
 | Bandwidth | 100 GB/month soft |
 | Repo | unaffected; stays ~1 MB |
 
 Dataset *count* is cheap; what costs is **frames x variables x resolution**. A
 static tomography model is one frame-variable, ~6 MB packed. OPT1 is eleven, ~70
-MB. So the headroom is roughly a dozen more convection series, or a hundred more
-static models — but doubling the grid resolution is 8x the bytes and would spend
-it fast.
+MB; the deformation series (1001 Frames x 9 variables at 720x361) is the
+single biggest line item in the archive. Headroom is now **~164 MB**, not the
+dozen-more-series margin this section used to describe — a couple more
+deformation-scale series, or several dozen more static models, would spend
+it. Doubling any existing grid's resolution is 8x the bytes and would spend
+it immediately. See [issue #9](https://github.com/siwill22/Geode/issues/9):
+this is the thing to act on before it becomes a hard blocker, not after.
 
 Bandwidth is the softer constraint: first load is ~20 MB and scrubbing the whole
 OPT1 series pulls ~69 MB, so 100 GB/month is several hundred engaged visits.
@@ -690,28 +823,48 @@ Exceeding it prompts an email, not a bill.
 
 When either becomes real, the seam is already there: `VITE_ARCHIVE_BASE` points
 the viewer at an absolute URL, so the archive can move to object storage with
-free egress (Cloudflare R2) while Pages keeps serving the 630 kB app. The only
-extra requirement is CORS headers on the data host.
+free egress (Cloudflare R2) while Pages keeps serving the small built app. The
+only extra requirement is CORS headers on the data host.
 
 ## Layout
 
 ```
-prep/                       netCDF/GPML -> viewer binary format (Python, pygmt17)
-prep/prep_climate.py        climate netCDF -> climate-540myr model
-prep/prep_paleogeography.py Scotese PaleoDEM -> paleogeography-scotese model
-prep/pack_deploy.mjs        archive/ -> archive-deploy/, for the deployed site
-archive/                    generated data, served statically, not tracked
-archive-deploy/             packed subset that ships; not tracked
-viewer/                     TypeScript + Vite + three.js
-viewer/index.html           the mantle viewer's entry page
-viewer/climate.html         the paleoclimate viewer's entry page
-viewer/src/core/            shared engine: rendering, data loading, colour ramps
-viewer/src/tomography/      mantle viewer only
-viewer/src/climate/         paleoclimate viewer only
-viewer/vendor/               deep-time-map submodule
-test-data/                  synthetic fixtures and the pygplates cross-check
-docs/adr/                   architecture decisions
-.github/workflows/          Pages deploy
+prep/                            netCDF/GPML -> viewer binary format (Python, pygmt17)
+prep/prep_climate.py             climate netCDF -> climate-540myr model
+prep/prep_pohl.py                Pohl et al. FOAM netCDFs -> climate-pohl2022 model
+prep/prep_bridge.py              Valdes/BRIDGE run -> bridge-valdes2021-* models
+prep/prep_paleogeography.py      Scotese PaleoDEM -> paleogeography-scotese model
+prep/prep_deformation.py         defamation pipeline run -> <id>-deformation / <id>-age-heatflux
+prep/prep_reconstruction.py      one gprm fetch_<model>() -> a Reconstruction Model's own coastlines/boundaries
+prep/prep_staticpolygons.py      static polygons for Plate-Frame Point, per Reconstruction Model
+prep/pack_deploy.mjs             archive/ -> archive-deploy/, for the deployed site
+archive/                         generated data, served statically, not tracked
+archive/reconstructions/<id>/    one Reconstruction Model's own manifest + assets (ADR-0021)
+archive-deploy/                  packed subset that ships; not tracked
+generator/                       scaffolds a new standalone viewer repo from the data catalog
+viewer/                          TypeScript + Vite + three.js
+viewer/index.html                the mantle viewer's entry page
+viewer/climate.html              the paleoclimate viewer's entry page
+viewer/valdes.html               the Valdes/BRIDGE viewer's entry page
+viewer/globe.html                generated: single-model-globe
+viewer/groupGlobe.html           generated: model-group-globe
+viewer/reconstruction.html       generated: single-reconstruction-globe
+viewer/reconstructionGroup.html  generated: reconstruction-group-globe
+viewer/src/core/                 shared engine: rendering, data loading, colour ramps, query point
+viewer/src/tomography/           mantle viewer only
+viewer/src/climate/              paleoclimate viewer only
+viewer/src/valdes/               Valdes/BRIDGE viewer only
+viewer/src/globe/                single-model-globe wrapper
+viewer/src/groupGlobe/           model-group-globe wrapper
+viewer/src/reconstruction/       single-reconstruction-globe wrapper
+viewer/src/reconstructionGroup/  reconstruction-group-globe wrapper
+viewer/src/generated/            per-recipe config the generator overwrites (checked in with real defaults)
+viewer/vendor/                   deep-time-map submodule
+test-data/                       synthetic fixtures and the pygplates cross-check
+docs/adr/                        architecture decisions
+docs/plans/                      design docs for individual features
+.claude/skills/                  the geode-globe-viewer Skill (drives generator/)
+.github/workflows/               Pages deploy
 ```
 
 ## Attribution
@@ -723,8 +876,23 @@ Rotations, plate boundaries and the OPT1 convection run from Müller et al.
 [deep-time-map](https://github.com/siwill22/deep-time-map). Tomography models
 are cited per-model in each `manifest.json`.
 
-**Paleoclimate viewer.** Climate simulation from Li, X., Hu, Y. et al. 2022,
+**Paleoclimate viewer.** Climate simulations from Li, X., Hu, Y. et al. 2022,
 *A high-resolution climate simulation dataset for the past 540 million years*,
-Scientific Data. Paleogeography from Scotese & Wright 2018, PALEOMAP
-PaleoDEMs. Continent outlines from the Scotese 2008 rotation model, via Cao et
-al. 2018.
+Scientific Data, and from Pohl et al. 2022. Paleogeography from Scotese &
+Wright 2018, PALEOMAP PaleoDEMs. Continent outlines from the Scotese 2008
+rotation model, via Cao et al. 2018.
+
+**Valdes/BRIDGE viewer.** Simulation from Valdes, P.J. et al. 2021, *The
+BRIDGE HadCM3 family of climate models*.
+
+**Crustal deformation (`globe.html`/`groupGlobe.html`'s checked-in
+example).** Cao 2024 and Müller et al. 2019 reconstructions, run through the
+`defamation` pipeline (a sibling project) to produce strain/style and
+tectonothermal age/heat-flux fields.
+
+**Reconstruction Models (`reconstruction.html`/`reconstructionGroup.html`'s
+checked-in example).** Müller, R.D., Zahirovic, S., Williams, S.E., et al.
+2019, *A Global Plate Model Including Lithospheric Deformation Along Major
+Rifts and Orogens Since the Triassic*, Tectonics. Seton, M., Müller, R.D.,
+Zahirovic, S., et al. 2012, *Global continental and ocean basin
+reconstructions since 200 Ma*, Earth-Science Reviews.

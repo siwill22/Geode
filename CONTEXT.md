@@ -47,13 +47,12 @@ both declare Cao2024; OPT1 declares Müller 2022) so the underlying
 rotation/geometry data is stored once, not duplicated per Model — see
 Reconstruction-dependence above for the rule this makes possible to enforce.
 
-Not yet a first-class catalog entity in its own right: today it is a bare
-name on each reconstruction-dependent Model's manifest
-(`reconstruction_model`), matched by lowercase key against a
-directory-discovered bucket of coastline files with no declared display
-name or citation of its own. Formalizing it as a real, independently-listed
-catalog section (its own id, name, citation, age range) is real follow-up
-work, not yet done.
+A first-class catalog entity since ADR-0021: `archive.json`'s
+`reconstruction_models[]` array gives each one its own id, display name,
+citation, and `path` to a `reconstructions/<id>/manifest.json` carrying its
+own `has_boundaries`/`has_static_polygons` facts — no longer a bare name
+matched by lowercase key against a directory-discovered coastline bucket.
+Müller 2019, Scotese, and Seton et al. 2012 are the three entries today.
 
 A Reconstruction Model's two assets — coastline geometry and Boundary
 Frames — are independently optional. Every Reconstruction Model that
@@ -62,10 +61,10 @@ sometimes-permanent absence, not a "not yet exported" gap in general.
 Checked directly, not assumed: Scotese's own reconstruction resolves no
 topological plates at all (only present-day continents, rotated back
 through time by absolute rotation), so it can never gain Boundary Frames no
-matter how much more prep work runs, while Müller 2019 genuinely has them
-and simply hasn't been exported yet. See `docs/adr/0019` for the full
-reasoning and the rule this implies for any catalog metadata or UI that
-lists Reconstruction Models.
+matter how much more prep work runs, while Müller 2019 and Seton et al.
+2012 both genuinely have them and have since been exported. See
+`docs/adr/0019` for the full reasoning and the rule this implies for any
+catalog metadata or UI that lists Reconstruction Models.
 
 ## Frame
 

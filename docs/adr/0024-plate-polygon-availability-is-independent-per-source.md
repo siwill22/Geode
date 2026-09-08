@@ -34,18 +34,19 @@ Plate-Frame Point must check both.
 
 ## Consequences
 
-- This is scoping only — `prep_reconstruction.py` doesn't export either
-  polygon source yet, and Plate-Frame Point remains "not scheduled" (see
-  the plan doc). No manifest field exists yet; when this is built, it
-  needs its own `has_static_polygons`-shaped fact alongside
-  `has_boundaries`, following ADR-0021's pattern of storing per-
-  Reconstruction-Model facts directly rather than inferring them.
+- This was scoping only at the time -- since resolved, and built:
+  `has_static_polygons` is now a real per-Reconstruction-Model manifest
+  field (Müller 2019, Seton 2012, and Scotese all `true`; Müller 2022 the
+  one known `false`), following ADR-0021's pattern exactly as anticipated
+  here. `prep_staticpolygons.py` exports the static-polygon source, and
+  Plate-Frame Point is built and live in the climate viewer (ADR-0025/
+  0026/0027, `docs/plans/plate-frame-point.md`).
 - A reconstruction-dependent numerical Model (e.g. Cao2024-deformation)
   never gets its own separate polygon source — it uses whichever source(s)
   its declared Reconstruction Model has, the same inheritance ADR-0004
   already established for coastlines and rotations.
 - Which source to prefer when a Reconstruction Model has both (static
   polygons are continuous like coastlines; resolved topology is
-  discontinuous but captures actual plate reorganization) is a real
-  trade-off, deliberately left open for whichever session actually
-  implements Plate-Frame Point.
+  discontinuous but captures actual plate reorganization) was resolved by
+  ADR-0025: static polygons only, for v1 -- dynamic/resolved-topology
+  assignment remains deferred, not built.
