@@ -2,9 +2,11 @@
 
 **Status: implemented**, from a grilling session on 2026-09-03, built the
 same day. `prep/prep_deformation.py` ingests `Muller2019_deformation_pipeline`
-into `muller2019-deformation`/`muller2019-age-heatflux`; the viewer lives at
-`viewer/deformation.html` / `viewer/src/deformation/`. `Cao2024` and the
-full heat-flux scenario ensemble remain future work (see "Out of scope for
+into `muller2019-deformation`/`muller2019-age-heatflux`; the viewer is served
+through the generic `model-group-globe` wrapper (`viewer/groupGlobe.html`,
+`viewer/src/generated/groupConfig.ts`) rather than a bespoke page, alongside
+the Cao2024 deformation comparison. `Cao2024` and the full heat-flux
+scenario ensemble remain future work (see "Out of scope for
 v1" below, still accurate). Source repo is a sibling project,
 `~/GIT/defamation` — a pipeline that reconstructs where and when continental
 crust deformed from nothing but a plate rotation model and continent
@@ -28,9 +30,12 @@ tightening the margin to 0.002.
 
 ## What it is
 
-A new entry page, `viewer/deformation.html` / `viewer/src/deformation/`,
-following the project's own rule that a new viewer is a new page and wrapper
-directory, not a branch inside `tomography/` or `climate/`. Structurally it
+A new numerical Model, not a new page — it rides the generic
+`model-group-globe` wrapper (`viewer/groupGlobe.html`,
+`viewer/src/generated/groupConfig.ts`) rather than a bespoke
+`viewer/src/deformation/`, following the generator's own rule that a new
+Model composes from an existing wrapper type unless its UI genuinely needs
+something none of the four wrapper types offer. Structurally it
 is much closer to the climate viewer than the mantle one: a 2D surface field
 with no depth axis, reconstructed per-age rather than a fixed-frame volume
 with coastlines rotated on top of it.
@@ -172,8 +177,9 @@ resolution-vs-budget tension: keeping the native 0.5° grid (4x the cells of
 Geode's usual 360×181) costs essentially nothing here, the opposite of what
 it would cost for a dense field like REVEAL. The static age/heat-flux layer
 adds a handful of single-frame files, negligible by comparison. Total new
-archive weight is small next to the existing ~170 MB deployed archive and
-well inside the shared 1 GB Pages cap.
+archive weight is small in absolute terms, though see the README's "limits"
+section for how the deployed package as a whole now sits close to the
+shared 1 GB Pages cap.
 
 ## Prep script
 
