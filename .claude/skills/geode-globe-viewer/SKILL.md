@@ -7,8 +7,11 @@ description: Generate a standalone, deployable Geode globe-viewer website from a
 
 Turns a plain-language request into a new GitHub repo containing a minimal,
 standalone globe viewer, deployed to the requesting user's own GitHub Pages.
-See `docs/plans/consider-this-general-question-virtual-kay.md` for the full
-design and rationale — read it if anything below is unclear or if the
+See ADR-0017 (composability), ADR-0018 (reconstruction-override friction),
+ADR-0020 (reconstruction comparison as its own wrapper type), ADR-0021
+(Reconstruction Models as a catalog section) and ADR-0022 (Multi-Globe) for
+the design decisions behind this, and `generator/recipeTypes.ts` for the
+recipe shape itself — read them if anything below is unclear or if the
 catalog/tooling has visibly moved on since this was written.
 
 **Scope**: v1.9 only composes from the existing, pre-vetted data catalog
