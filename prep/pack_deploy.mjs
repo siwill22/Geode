@@ -159,6 +159,19 @@ for (const entry of index.reconstruction_models ?? []) {
   const relDir = dirname(entry.path);
   manifest.coastlines = packCoastlineSet(relDir, manifest.coastlines);
   if (manifest.boundaries) manifest.boundaries = packBoundaries(relDir, manifest.boundaries);
+  if (manifest.static_polygons) {
+    const { geometry } = manifest.static_polygons;
+    manifest.static_polygons = {
+      ...manifest.static_polygons,
+      geometry: gzipInPlace(join(relDir, geometry)) ? `${geometry}.gz` : geometry,
+      // Shares its rotation file with `manifest.coastlines` above (same file
+      // on disk -- see core/staticPolygons.ts's own doc comment), which
+      // packCoastlineSet() already gzipped in place a line up; point at
+      // whatever that rewrote it to rather than gzipping a second time (the
+      // original no longer exists to gzip again).
+      rotations: manifest.coastlines.rotations,
+    };
+  }
   writeFileSync(manifestAbs, JSON.stringify(manifest));
 }
 
