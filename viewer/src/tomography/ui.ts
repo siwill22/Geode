@@ -64,7 +64,9 @@ export class UI {
   private variableCtrl!: any;
   private colormapCtrl!: any;
   private ageCtrl!: any;
+  private isoColdEnabledCtrl!: any;
   private isoColdCtrl!: any;
+  private isoHotEnabledCtrl!: any;
   private isoHotCtrl!: any;
   private depthSliceDepthCtrl!: any;
   private depthSinkingCtrl!: any;
@@ -216,14 +218,14 @@ export class UI {
     // a hot upwelling are unrelated objects at unrelated magnitudes, and tying
     // their isovalues together would be a claim about the data.
     const fi = this.gui.addFolder('Isosurfaces');
-    fi.add(this.state.iso, 'coldEnabled')
+    this.isoColdEnabledCtrl = fi.add(this.state.iso, 'coldEnabled')
       .name('cold surface')
       .onChange(() => cb.onIsosurface());
     this.isoColdCtrl = fi
       .add(this.state.iso, 'coldValue', -1, 1, 0.001)
       .name('cold isovalue')
       .onChange(() => cb.onIsosurface());
-    fi.add(this.state.iso, 'hotEnabled')
+    this.isoHotEnabledCtrl = fi.add(this.state.iso, 'hotEnabled')
       .name('hot surface')
       .onChange(() => cb.onIsosurface());
     this.isoHotCtrl = fi
@@ -355,8 +357,19 @@ export class UI {
       .setValue(v.default_clip_min);
     this.isoHotCtrl.min(v.encode_min).max(v.encode_max).step(step)
       .setValue(v.default_clip_max);
-    this.isoColdCtrl.name(`cold isovalue (${v.units})`);
-    this.isoHotCtrl.name(`hot isovalue (${v.units})`);
+
+    // 'fast' variables (seismic velocity) are the opposite of temperature: the
+    // high value is the COLD one, so calling it "hot isovalue" would say the
+    // opposite of what the isosurface.setPolarity() colour shows. "slow"/
+    // "fast" name the physical quantity instead of a temperature that may be
+    // inverted from it.
+    const [lowLabel, highLabel] = (v.high_means ?? 'fast') === 'fast'
+      ? ['slow', 'fast']
+      : ['cold', 'hot'];
+    this.isoColdEnabledCtrl.name(`${lowLabel} surface`);
+    this.isoHotEnabledCtrl.name(`${highLabel} surface`);
+    this.isoColdCtrl.name(`${lowLabel} isovalue (${v.units})`);
+    this.isoHotCtrl.name(`${highLabel} isovalue (${v.units})`);
   }
 
   setSurfaceMode(m: SurfaceMode): void {

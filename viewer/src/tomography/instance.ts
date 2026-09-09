@@ -225,6 +225,9 @@ export class GlobeInstance {
         physicalToEncoded(this.variable, this.view.iso.coldValue),
         physicalToEncoded(this.variable, this.view.iso.hotValue),
       );
+      // A fast seismic anomaly is a cold one -- same polarity flip the
+      // colormap picker applies in colormapOptions() above.
+      this.isosurface.setPolarity(this.variable.high_means ?? 'fast');
     }
     this.isosurface.update(this.view.iso);
   }

@@ -1,6 +1,6 @@
 import {
   BackSide, Mesh, ShaderMaterial, SphereGeometry, Vector2, Vector3,
-  type Camera, type Data3DTexture,
+  type Camera, type Color, type Data3DTexture,
 } from 'three';
 import { GEOGRAPHIC_GLSL } from '../core/glsl/geographic';
 import { passthroughColor } from '../core/material';
@@ -218,6 +218,17 @@ void main() {
 }
 `;
 
+/**
+ * Which physical extreme is warm-coloured. Temperature-like variables put
+ * red at the high end (hot); velocity-like variables (seismic Vp/Vs, flow
+ * speed) put red at the LOW end instead -- a fast anomaly is a cold one, so
+ * blue has to track the high value there, not the low one.
+ */
+export type IsoPolarity = 'hot' | 'fast';
+
+const LOW_COLOR = 0x4d7fd6;  // blue
+const HIGH_COLOR = 0xd6553a; // red/orange
+
 export interface IsosurfaceState {
   coldEnabled: boolean;
   hotEnabled: boolean;
@@ -271,8 +282,8 @@ export class Isosurface {
         uRadiusInner: { value: depthToRadius(DEFAULT_ISOSURFACE.depthMaxKm) },
         uIso: { value: new Vector2(0.25, 0.75) },
         uEnabled: { value: new Vector2(0, 0) },
-        uColdColor: { value: passthroughColor(0x4d7fd6) },
-        uHotColor: { value: passthroughColor(0xd6553a) },
+        uColdColor: { value: passthroughColor(LOW_COLOR) },
+        uHotColor: { value: passthroughColor(HIGH_COLOR) },
         uLightDir: { value: LIGHT_DIR.clone() },
         uSteps: { value: DEFAULT_ISOSURFACE.steps },
         // ~25 km: a little over one depth level, so the difference spans real
@@ -314,6 +325,17 @@ export class Isosurface {
   /** Isovalues arrive already mapped into the shader's encoded 0..1 space. */
   setEncodedIso(cold: number, hot: number): void {
     (this.mat.uniforms.uIso.value as Vector2).set(cold, hot);
+  }
+
+  /**
+   * 'hot' keeps the low value blue / high value red (temperature-like).
+   * 'fast' swaps them: the low (slow) surface is red, the high (fast) one
+   * is blue, since a fast seismic anomaly is a cold one.
+   */
+  setPolarity(highMeans: IsoPolarity): void {
+    const swapped = highMeans === 'fast';
+    (this.mat.uniforms.uColdColor.value as Color).set(swapped ? HIGH_COLOR : LOW_COLOR);
+    (this.mat.uniforms.uHotColor.value as Color).set(swapped ? LOW_COLOR : HIGH_COLOR);
   }
 
   update(s: IsosurfaceState): void {
