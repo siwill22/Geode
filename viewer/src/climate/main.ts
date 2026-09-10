@@ -228,6 +228,97 @@ document.getElementById('globe-menu-toggle')?.addEventListener('click', () => {
   if (menu) menu.hidden = !menu.hidden;
 });
 
+document.getElementById('hint-toggle')?.addEventListener('click', () => {
+  const hint = document.getElementById('hint');
+  if (hint) hint.hidden = !hint.hidden;
+});
+
+// --- presets -------------------------------------------------------------
+//
+// "Start Here" menu, same convention as index.html/tomography/main.ts: each
+// preset drives the same public instance API a user action would
+// (setClimateModel/setVariable/setWindVisible/applyAge), so it can never
+// leave state a manual click couldn't also produce.
+
+document.getElementById('preset-toggle')?.addEventListener('click', () => {
+  const menu = document.getElementById('presets');
+  if (menu) menu.hidden = !menu.hidden;
+});
+
+function hidePresetsMenu(): void {
+  const menu = document.getElementById('presets');
+  if (menu) menu.hidden = true;
+}
+
+/** Preset 1: a single globe on the Li et al. 2022 model, showing
+ *  precipitation with animated wind streaks at density 2.5, reconstructed to
+ *  250 Ma. */
+async function applyPresetWindStreaks(): Promise<void> {
+  while (host.instances.length > 1) removeInstance(host.instances[host.instances.length - 1]);
+  const inst = host.instances[0];
+  host.focused = inst;
+
+  const model = deps.archive.models.find((m) => m.id === 'climate-540myr');
+  if (model) await inst.setClimateModel(model.id);
+  await inst.setVariable('P');
+  inst.setWindVisible(true);
+  inst.setWindStyle('streak');
+  inst.setWindDensity(2.5);
+  inst.applyAge(250);
+  inst.ui.refreshDisplay();
+}
+
+/** Preset 2: one globe per climate-family model (Li, Pohl, Valdes/BRIDGE),
+ *  each showing the Koppen classification, side by side for comparison. */
+async function applyPresetKoppenComparison(): Promise<void> {
+  const wantedIds = ['climate-540myr', 'climate-pohl2022', 'bridge-valdes2021-monthly'];
+  const models = wantedIds
+    .map((id) => deps.archive.models.find((m) => m.id === id))
+    .filter((m): m is NonNullable<typeof m> => !!m);
+  if (models.length === 0) return;
+
+  while (host.instances.length > models.length) removeInstance(host.instances[host.instances.length - 1]);
+  while (host.instances.length < models.length) await addInstance();
+  host.relayout();
+
+  for (let i = 0; i < models.length; i++) {
+    const inst = host.instances[i];
+    await inst.setClimateModel(models[i].id);
+    await inst.setVariable('KOPPEN');
+    // Wind and age are orthogonal to a Koppen-zone comparison -- a wind
+    // overlay or an age left over from an earlier preset (e.g. the Wind
+    // Streaks preset's 250 Ma) would clutter the map and put the three
+    // globes at mismatched times, defeating the side-by-side comparison this
+    // preset is for. Reset both so every globe starts from the same,
+    // uncluttered present-day view.
+    inst.setWindVisible(false);
+    inst.applyAge(0);
+    inst.ui.refreshDisplay();
+  }
+  host.focused = host.instances[0];
+  // Synced AFTER every globe already has age/month set to the same value
+  // above -- setSyncAge/setSyncMonth immediately broadcast the focused
+  // instance's CURRENT value to the others, so turning sync on first would
+  // push a still-mid-preset value from a half-configured globe onto the
+  // rest. A Koppen-zone comparison is only meaningful with every globe
+  // looking at the same moment in time, so both are on by default here
+  // (unlike the Wind Streaks preset, a single globe with nothing to sync).
+  setSyncAge(true);
+  setSyncMonth(true);
+}
+
+document.getElementById('preset-wind-streaks')?.addEventListener('click', () => {
+  if (!deps) return; // still booting; the first globe isn't up yet
+  hidePresetsMenu();
+  void applyPresetWindStreaks();
+});
+
+document.getElementById('preset-koppen-comparison')?.addEventListener('click', () => {
+  if (!deps) return;
+  hidePresetsMenu();
+  void applyPresetKoppenComparison();
+});
+
 // --- projection toggle -----------------------------------------------------
 //
 // One global control (see docs/adr/0003), not part of any instance's own

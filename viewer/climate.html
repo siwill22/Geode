@@ -15,6 +15,65 @@
         color: #d8dee4;
       }
       canvas { display: block; }
+      /* Same hint-toggle/hint + preset-toggle/presets convention as
+         index.html (tomography) -- see that file's own doc comments for the
+         pairing rationale. globe-menu-toggle is repositioned below to sit
+         third in the same left:12/44/76 row instead of multiGlobeMenu.css's
+         own standalone top-left default. */
+      #hint-toggle {
+        position: fixed; left: 12px; top: 12px; z-index: 20;
+        width: 24px; height: 24px; padding: 0;
+        display: flex; align-items: center; justify-content: center;
+        font: inherit; font-style: italic; font-weight: 600;
+        color: #d8dee4; background: #1b1f24;
+        border: 1px solid #3a4048; border-radius: 50%; cursor: pointer;
+      }
+      #hint-toggle:hover { background: #262b32; }
+      #hint {
+        position: fixed; left: 12px; top: 44px; z-index: 20;
+        padding: 6px 10px; border-radius: 4px;
+        background: rgba(0, 0, 0, 0.45); color: #97a3ad;
+        max-width: 32ch;
+      }
+      #hint[hidden] { display: none; }
+      #preset-toggle {
+        position: fixed; left: 44px; top: 12px; z-index: 20;
+        width: 24px; height: 24px; padding: 0;
+        display: flex; align-items: center; justify-content: center;
+        font: inherit; color: #d8dee4; background: #1b1f24;
+        border: 1px solid #3a4048; border-radius: 50%; cursor: pointer;
+      }
+      #preset-toggle:hover { background: #262b32; }
+      #presets {
+        position: fixed; left: 12px; top: 44px; z-index: 20;
+        width: 240px; padding: 8px; border-radius: 6px;
+        background: #1b1f24; border: 1px solid #3a4048;
+        display: flex; flex-direction: column; gap: 6px;
+      }
+      #presets[hidden] { display: none; }
+      .presets-title {
+        color: #97a3ad; font-size: 11px; text-transform: uppercase;
+        letter-spacing: 0.04em; padding: 2px 4px 4px;
+      }
+      .preset-btn {
+        display: block; width: 100%; text-align: left;
+        font: inherit; color: #d8dee4; background: #262b32;
+        border: 1px solid #3a4048; border-radius: 4px;
+        padding: 8px 10px; cursor: pointer;
+      }
+      .preset-btn:hover { background: #2f353d; }
+      .preset-btn .sub {
+        display: block; color: #97a3ad; font-size: 11px; margin-top: 2px;
+      }
+      #globe-menu-toggle {
+        left: 76px; top: 12px;
+        width: 24px; height: 24px;
+      }
+      #globe-menu-toggle svg { width: 14px; height: 14px; }
+      #globe-menu {
+        top: 44px;
+        width: 200px;
+      }
       /* NOT independently positioned -- this single global control
          (Projection applies to every globe at once, see docs/adr/0003) is
          mounted as its own standalone circle, a sibling of ageSliderWrap
@@ -257,6 +316,27 @@
   </head>
   <body>
     <button id="projection-toggle" aria-label="Switch to Plate Carrée projection" title="Switch to Plate Carrée projection">&#9645;</button>
+    <button id="hint-toggle" aria-label="Help" title="Help">i</button>
+    <div id="hint" hidden>
+      Each globe's panel picks a climate model, layer/variable and age (Ma).
+      Wind arrows/streaks are an optional overlay with their own density &amp;
+      size sliders. Shift-click a globe to query a point's month profile.
+      Rotate/zoom is shared across every globe; "sync time"/"sync month" in
+      the multi-globe menu link those sliders across globes too, once turned
+      on.
+    </div>
+    <button id="preset-toggle" aria-label="Start Here" title="Start Here">&#9733;</button>
+    <div id="presets" hidden>
+      <div class="presets-title">Start here</div>
+      <button class="preset-btn" id="preset-wind-streaks">
+        Wind streaks &amp; precipitation
+        <span class="sub">Li et al. 2022, precipitation, wind streaks at density 2.5, 250 Ma</span>
+      </button>
+      <button class="preset-btn" id="preset-koppen-comparison">
+        Compare K&ouml;ppen zones
+        <span class="sub">Three globes: Li, Pohl &amp; Valdes (BRIDGE) models side by side</span>
+      </button>
+    </div>
     <button id="globe-menu-toggle" aria-label="Multi-Globe options" title="Multi-Globe options">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="7" height="7" rx="1.2"/>

@@ -58,6 +58,7 @@ uniform float uNoDataSentinel;   // encoded 0..1 space; <0 disables this check
 uniform float uSparseNoDataMode; // 0 = colour fill (uSparseNoDataColor), 1 = discard (transparent)
 uniform float uUseMask;      // 0 = ignore, 1 = keep inside cut, -1 = keep outside
 uniform float uUseValidMask; // 0 = ignore, 1 = discard where uValidMask < 0.5
+uniform float uValidMaskOceanFallback; // 1 = paint class-0 colour instead of discarding (see below)
 uniform float uOpacity;
 uniform float uSteps;   // 0 = continuous ramp, else this many discrete bands
 uniform float uDebug;   // 0 off, 1 pDep, 2 lat, 3 raw sample
@@ -83,7 +84,23 @@ void main() {
   // axis instead of the vertical one. See climateInstance.ts.
   if (uUseValidMask > 0.5) {
     float valid = texture(uValidMask, geographicToUV(ll)).r;
-    if (valid < 0.5) discard;
+    if (valid < 0.5) {
+      // A continental-only model's own coverage gap is, by definition, ocean
+      // for a Koppen-shaped categorical variable (class 0 is always "Ocean"
+      // -- see class_names' own authored convention, checked in
+      // climateInstance.ts's applyClip()) -- painting that class's colour
+      // here instead of leaving the fragment unwritten keeps the model's own
+      // coverage gap from reading as a hole in the sphere (DoubleSide
+      // geometry means a discarded near-side fragment otherwise exposes the
+      // far hemisphere straight through the globe). Every other variable
+      // (temperature, precipitation, ...) has no such fallback value to
+      // assume, so it still discards.
+      if (uValidMaskOceanFallback > 0.5 && uSteps >= 2.0) {
+        gl_FragColor = vec4(texture(uColormap, vec2(0.5 / uSteps, 0.5)).rgb, uOpacity);
+        return;
+      }
+      discard;
+    }
   }
 
   // A depth slice supplies its depth directly instead of deriving it from
@@ -182,6 +199,7 @@ export function createVolumeSurfaceMaterial(): ShaderMaterial {
       uSparseNoDataMode: { value: 0 },
       uUseMask: { value: 0 },
       uUseValidMask: { value: 0 },
+      uValidMaskOceanFallback: { value: 0 },
       uOpacity: { value: 1 },
       uSteps: { value: 0 },
       uDebug: { value: 0 },

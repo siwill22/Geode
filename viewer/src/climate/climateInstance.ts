@@ -1010,6 +1010,7 @@ export class ClimateInstance {
     const src = this.sources[this.sourceKey(this.view.layer)];
     if (variableId === src.variableId) return;
     src.variableId = variableId;
+    this.view.variable = variableId;
     const cm = this.deps.colormaps[this.variable.default_colormap];
     src.colormapTexture = makeColormapTexture(cm.colors);
     this.field.material.uniforms.uColormap.value = src.colormapTexture;
@@ -1107,6 +1108,12 @@ export class ClimateInstance {
     // prep_colormaps.py's build_categorical_colormap(). 0 = continuous,
     // the default for every ordinary variable.
     this.field.material.uniforms.uSteps.value = v.categorical ? (v.class_names?.length ?? 0) : 0;
+    // See material.ts's own doc comment on uValidMaskOceanFallback -- only a
+    // Koppen-shaped categorical variable (class 0 authored as "Ocean") has a
+    // sensible fallback value for a continental-only model's coverage gap;
+    // every other variable still discards there.
+    this.field.material.uniforms.uValidMaskOceanFallback.value =
+      v.categorical && v.class_names?.[0] === 'Ocean' ? 1 : 0;
 
     // Keeps whichever query result is currently shown in step with the new
     // clip range -- both charts render against `view.clipMin`/`clipMax` as a
@@ -1169,6 +1176,7 @@ export class ClimateInstance {
    *  style later doesn't land on a stale scale/density from whenever that
    *  mode was last active; only the visible mode's mesh actually renders. */
   setWindScale(v: number): void {
+    this.view.windScale = v;
     this.wind.setSize(v);
     this.windStreaks.setSize(v);
     this.refreshWindGlyphs();
@@ -1176,6 +1184,7 @@ export class ClimateInstance {
 
   /** Same reasoning as setWindScale(). */
   setWindDensity(v: number): void {
+    this.view.windDensity = v;
     this.wind.setDensity(v);
     this.windStreaks.setDensity(v);
     this.refreshWindGlyphs();
