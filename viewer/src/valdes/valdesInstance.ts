@@ -1,17 +1,18 @@
 import {
-  Scene, Vector3, type Camera, type Data3DTexture, type ShaderMaterial,
-  type Texture, type WebGLRenderer,
+  Raycaster, Scene, Vector3, type Camera, type Data3DTexture, type ShaderMaterial,
+  type Texture, type Vector2, type WebGLRenderer,
 } from 'three';
 
 import { DepthSlice } from '../core/depthSlice';
 import { setNoDataSentinel, setNoDataStyle } from '../core/material';
 import { Coastlines, type CoastlineData } from '../core/coastlines';
 import { createMaskTexture } from '../core/mask';
-import { R_SURFACE } from '../core/constants';
+import { R_SURFACE, vec3ToLonLat } from '../core/constants';
 import type { ProjectionMode } from '../core/projection';
 import type { Rect } from '../core/layout';
 import { WindGlyphs } from '../core/windGlyphs';
 import { WindStreaks } from '../core/windStreaks';
+import { TrackedParticles } from '../core/trackedParticles';
 import {
   FrameCache, loadManifest, makeColormapTexture, nearestFrame, physicalToEncoded,
 } from '../core/volume';
@@ -104,8 +105,13 @@ export class ValdesInstance {
    *  time, see CONTEXT.md's Vector Field entry. */
   readonly vectorGlyphs = new WindGlyphs();
   readonly vectorStreaks = new WindStreaks();
+  /** User-seeded, persistent particles tracking the active Vector Field --
+   *  docs/plans/tracked-particle-seeding.md. Independent of `vectorStreaks`,
+   *  same reasoning as ClimateInstance's own `trackedParticles`. */
+  readonly trackedParticles = new TrackedParticles();
   readonly ui: ValdesUI;
   coastlines: Coastlines | null = null;
+  private readonly queryRaycaster = new Raycaster();
 
   readonly view: ValdesViewState = {
     layer: 'monthly', variable: '', age: 0, layerIndex: 0,
@@ -158,6 +164,8 @@ export class ValdesInstance {
     this.scene.add(this.vectorGlyphs.mesh);
     this.vectorStreaks.mesh.renderOrder = 4;
     this.scene.add(this.vectorStreaks.mesh);
+    this.trackedParticles.group.renderOrder = 5;
+    this.scene.add(this.trackedParticles.group);
 
     this.ui = new ValdesUI(this.view, {
       onLayer: (l) => void this.setLayer(l),
@@ -171,6 +179,7 @@ export class ValdesInstance {
       onVectorScale: (v) => this.setVectorScale(v),
       onVectorDensity: (v) => this.setVectorDensity(v),
       onFieldOpacity: (v) => this.applyFieldOpacity(v),
+      onClearTrackedParticles: () => this.clearTrackedParticles(),
     }, label, () => this.hooks.onRemove(this));
   }
 
@@ -261,8 +270,37 @@ export class ValdesInstance {
     if (this.coastlines) this.coastlines.lines.visible = mode === 'globe';
     this.vectorGlyphs.setProjection(mode);
     this.vectorStreaks.setProjection(mode);
+    this.trackedParticles.setProjection(mode);
     if (this.view.vectorFieldId) this.refreshVectorGlyphs();
     this.applyVectorVisibility();
+  }
+
+  /**
+   * Tracked Particle (docs/plans/tracked-particle-seeding.md): alt-click on
+   * the globe seeds a new particle at the clicked location, advected
+   * continuously along the active Vector Field via tick() below -- see
+   * ClimateInstance.addTrackedParticleAt(), which this mirrors exactly
+   * (same Globe-only restriction, same raycast against `field.mesh`). A
+   * no-op if the active Layer has no Vector Field selected at all.
+   */
+  addTrackedParticleAt(ndc: Vector2): void {
+    if (this.projectionMode !== 'globe') return;
+    if (!this.view.vectorFieldId) {
+      this.ui.setStatus('this layer has no Vector Field to track a particle along', true);
+      return;
+    }
+    this.queryRaycaster.setFromCamera(ndc, this.camera);
+    const hit = this.queryRaycaster.intersectObject(this.field.mesh, false)[0];
+    if (!hit) return;
+    const at = vec3ToLonLat(hit.point.x, hit.point.y, hit.point.z);
+    this.trackedParticles.add(at);
+    this.ui.setStatus('');
+  }
+
+  /** Remove every currently-tracked particle -- wired to ValdesUI's own
+   *  "clear tracked particles" control. */
+  clearTrackedParticles(): void {
+    this.trackedParticles.clear();
   }
 
   private async loadSource(modelId: string): Promise<LayerSource> {
@@ -529,13 +567,27 @@ export class ValdesInstance {
   }
 
   tick(dt: number): void {
-    if (!this.streakActive) return;
-    const plane = this.currentVectorPlane();
-    if (!plane || !this.vectorUVar || !this.vectorVVar) return;
-    this.vectorStreaks.update(
-      dt, plane.uData, plane.vData, plane.nlon, plane.nlat, this.vectorUVar, this.vectorVVar,
-      plane.sentinel, plane.speedScale,
-    );
+    if (this.streakActive) {
+      const plane = this.currentVectorPlane();
+      if (plane && this.vectorUVar && this.vectorVVar) {
+        this.vectorStreaks.update(
+          dt, plane.uData, plane.vData, plane.nlon, plane.nlat, this.vectorUVar, this.vectorVVar,
+          plane.sentinel, plane.speedScale,
+        );
+      }
+    }
+    // Tracked Particle rides the same live field, independently of whether
+    // Vector Streak (the ambient mode) happens to be showing -- see
+    // `trackedParticles`' own doc comment.
+    if (this.trackedParticles.count > 0) {
+      const plane = this.currentVectorPlane();
+      if (plane && this.vectorUVar && this.vectorVVar) {
+        this.trackedParticles.update(
+          dt, plane.uData, plane.vData, plane.nlon, plane.nlat, this.vectorUVar, this.vectorVVar,
+          plane.sentinel, plane.speedScale,
+        );
+      }
+    }
   }
 
   render(renderer: WebGLRenderer): void {

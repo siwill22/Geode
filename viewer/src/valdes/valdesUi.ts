@@ -42,6 +42,9 @@ export interface ValdesUICallbacks {
   onVectorScale(v: number): void;
   onVectorDensity(v: number): void;
   onFieldOpacity(v: number): void;
+  /** Alt-click seeded a Tracked Particle -- see
+   *  ValdesInstance.clearTrackedParticles() (docs/plans/tracked-particle-seeding.md). */
+  onClearTrackedParticles(): void;
 }
 
 const MONTH_NAMES = [
@@ -82,6 +85,7 @@ export class ValdesUI {
   private vectorScaleCtrl: Controller;
   private vectorDensityCtrl: Controller;
   private fieldOpacityCtrl: Controller;
+  private clearTrackedCtrl: Controller;
   private status: HTMLDivElement;
   private ageSlider: HTMLInputElement;
   private ageReadout: HTMLSpanElement;
@@ -161,6 +165,13 @@ export class ValdesUI {
     this.vectorDensityCtrl = this.gui.add(this.state, 'vectorDensity', 0.5, 3, 0.1)
       .name('vector density')
       .onChange((v: number) => cb.onVectorDensity(v));
+    // Alt-click on the globe seeds a Tracked Particle along whichever
+    // Vector Field is active (docs/plans/tracked-particle-seeding.md) --
+    // gated on the same vector-field-availability visibility as the
+    // controls above it, see setVectorFields().
+    this.clearTrackedCtrl = this.gui
+      .add({ fn: () => cb.onClearTrackedParticles() }, 'fn')
+      .name('clear tracked particles (alt-click to seed)');
 
     this.clipMinCtrl = this.gui.add(this.state, 'clipMin', -60, 50, 0.1)
       .name('clip min')
@@ -289,6 +300,7 @@ export class ValdesUI {
     this.vectorStyleCtrl[action]();
     this.vectorScaleCtrl[action]();
     this.vectorDensityCtrl[action]();
+    this.clearTrackedCtrl[action]();
   }
 
   /** Show/hide the raster-opacity slider -- called once from boot() once it

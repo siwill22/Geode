@@ -1,4 +1,4 @@
-import { Clock, Color, WebGLRenderer, type Camera } from 'three';
+import { Clock, Color, Vector2, WebGLRenderer, type Camera } from 'three';
 import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 import { PALETTE } from '../core/palette';
@@ -179,20 +179,43 @@ projectionToggle?.addEventListener('click', () => {
 
 // --- interaction ---------------------------------------------------------
 
-function hitTest(clientX: number, clientY: number): ValdesInstance | null {
+function hitTest(clientX: number, clientY: number): { inst: ValdesInstance; rect: Rect } | null {
   for (let i = 0; i < instances.length; i++) {
     const r = layoutRects[i];
     if (r && clientX >= r.x && clientX < r.x + r.width
       && clientY >= r.y && clientY < r.y + r.height) {
-      return instances[i];
+      return { inst: instances[i], rect: r };
     }
   }
   return null;
 }
 
+/** NDC for a point, relative to one tile rather than the whole window --
+ *  mirrors climate/main.ts's own ndcFor(). */
+const ptr = new Vector2();
+function ndcFor(rect: Rect, clientX: number, clientY: number): Vector2 {
+  ptr.x = ((clientX - rect.x) / rect.width) * 2 - 1;
+  ptr.y = -((clientY - rect.y) / rect.height) * 2 + 1;
+  return ptr;
+}
+
 renderer.domElement.addEventListener('pointerdown', (ev) => {
   const hit = hitTest(ev.clientX, ev.clientY);
-  if (hit) focusedInstance = hit;
+  if (hit) focusedInstance = hit.inst;
+  // Alt-click seeds a Tracked Particle (docs/plans/tracked-particle-
+  // seeding.md) -- disable orbiting for the gesture's duration, same
+  // reasoning as climate/main.ts's shift/alt handling: with orbiting off,
+  // nothing competes for the click-vs-drag distinction.
+  if (ev.altKey) controls.enabled = false;
+});
+
+renderer.domElement.addEventListener('pointerup', (ev) => {
+  controls.enabled = true; // unconditional: an alt-release mid-drag must not wedge orbiting off
+  if (!ev.altKey) return;
+  const hit = hitTest(ev.clientX, ev.clientY);
+  if (!hit) return;
+  updateProjectionCameraAspect(camera, hit.rect.width / hit.rect.height);
+  hit.inst.addTrackedParticleAt(ndcFor(hit.rect, ev.clientX, ev.clientY));
 });
 
 // --- boot -------------------------------------------------------------------
@@ -277,6 +300,13 @@ window.__valdes = {
     inst.setVectorStyle(v);
     inst.ui.refreshDisplay();
   },
+  /** Bypasses the alt-click raycast entirely -- see climate/main.ts's own
+   *  addTrackedParticle() test hook for why. */
+  addTrackedParticle: (lon: number, lat: number) => {
+    primary().trackedParticles.add({ lon, lat });
+  },
+  clearTrackedParticles: () => primary().clearTrackedParticles(),
+  trackedParticleCount: () => primary().trackedParticles.count,
   addGlobe: () => addInstance(),
   removeGlobe: (index = instances.length - 1) => {
     const inst = instances[index];

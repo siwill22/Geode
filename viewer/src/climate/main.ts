@@ -379,14 +379,19 @@ projectionToggle?.addEventListener('click', () => {
 // The camera and canvas are shared. Unlike tomography there is no
 // per-instance TOOL state competing with OrbitControls for the same drag
 // gesture (no cutaway drawing here) -- OrbitControls owns ordinary pointer
-// interaction with nothing to fight it EXCEPT the one exception below:
+// interaction with nothing to fight it EXCEPT two exceptions below:
 // shift-click, dispatched by ClimateInstance.queryAt() to either Anchored
 // Point's Month Profile query (queryMonthProfileAt(),
 // docs/plans/anchored-point-query.md) or Plate-Frame Point
 // (queryPlateFramePointAt(), docs/adr/0025, docs/adr/0026) depending on the
-// instance's own `view.queryMode`. That gesture needs a tile hit AND that
-// tile's own NDC, unlike the old click-just-to-focus-a-tile behaviour, which
-// only needed the former.
+// instance's own `view.queryMode`; and alt-click, dispatched to
+// ClimateInstance.addTrackedParticleAt() (docs/plans/tracked-particle-
+// seeding.md). Alt was picked specifically because Shift is already taken
+// by the query gesture -- reusing it would make one modifier mean two
+// different things, the exact collision ADR-0016 avoided once already for
+// Anchored Point vs. tomography's own Ctrl/Cmd convention. Both gestures
+// need a tile hit AND that tile's own NDC, unlike the old
+// click-just-to-focus-a-tile behaviour, which only needed the former.
 
 function hitTest(clientX: number, clientY: number): { inst: ClimateInstance; rect: Rect } | null {
   for (let i = 0; i < host.instances.length; i++) {
@@ -411,23 +416,24 @@ function ndcFor(rect: Rect, clientX: number, clientY: number): Vector2 {
 renderer.domElement.addEventListener('pointerdown', (ev) => {
   const hit = hitTest(ev.clientX, ev.clientY);
   if (hit) host.focused = hit.inst;
-  // Shift owns this gesture entirely -- disable orbiting for its duration
-  // so a shift-drag can't ALSO spin the globe underneath the query. No
-  // movement threshold needed to tell a shift-click from a shift-drag: with
-  // orbiting off, nothing competes for the gesture either way (unlike
+  // Shift/Alt each own their gesture entirely -- disable orbiting for its
+  // duration so a modifier-drag can't ALSO spin the globe underneath the
+  // query/seed. No movement threshold needed to tell a click from a drag:
+  // with orbiting off, nothing competes for the gesture either way (unlike
   // tomography's tool modes, which need to keep dragging live).
-  if (ev.shiftKey) controls.enabled = false;
+  if (ev.shiftKey || ev.altKey) controls.enabled = false;
 });
 
 renderer.domElement.addEventListener('pointerup', (ev) => {
-  controls.enabled = true; // unconditional: a shift-release mid-drag must not wedge orbiting off
-  if (!ev.shiftKey) return;
+  controls.enabled = true; // unconditional: a modifier release mid-drag must not wedge orbiting off
+  if (!ev.shiftKey && !ev.altKey) return;
   const hit = hitTest(ev.clientX, ev.clientY);
   if (!hit) return;
   // The shared camera's aspect is left matching whichever tile animate()
   // rendered last -- same reasoning as tomography's own focusCameraOn().
   updateProjectionCameraAspect(camera, hit.rect.width / hit.rect.height);
-  void hit.inst.queryAt(ndcFor(hit.rect, ev.clientX, ev.clientY));
+  if (ev.altKey) void hit.inst.addTrackedParticleAt(ndcFor(hit.rect, ev.clientX, ev.clientY));
+  else void hit.inst.queryAt(ndcFor(hit.rect, ev.clientX, ev.clientY));
 });
 
 // --- boot -------------------------------------------------------------------
@@ -565,6 +571,14 @@ window.__climate = {
     inst.setWindDensity(v);
     inst.ui.refreshDisplay();
   },
+  /** Bypasses the alt-click raycast entirely -- seeds a Tracked Particle
+   *  directly at a given lon/lat, for verification scripts that can't
+   *  easily simulate a real pointer gesture against a specific globe pixel. */
+  addTrackedParticle: (lon: number, lat: number) => {
+    primary().trackedParticles.add({ lon, lat });
+  },
+  clearTrackedParticles: () => primary().clearTrackedParticles(),
+  trackedParticleCount: () => primary().trackedParticles.count,
   setCamera: (o: { lon: number; lat: number; dist: number }) => {
     const [x, y, z] = lonLatToVec3(o.lon, o.lat, o.dist);
     camera.position.set(x, y, z);

@@ -12,6 +12,7 @@ import type { ProjectionMode } from '../core/projection';
 import type { Rect } from '../core/layout';
 import { WindGlyphs } from '../core/windGlyphs';
 import { WindStreaks } from '../core/windStreaks';
+import { TrackedParticles } from '../core/trackedParticles';
 import { computeTimeSeries, type TimeSeriesPoint } from '../core/timeSeries';
 import { FrameByteCache } from '../core/frameByteCache';
 import {
@@ -227,6 +228,12 @@ export class ClimateInstance {
    *  exclusive with it; see setWindStyle() and
    *  docs/adr/0002-world-space-trail-ribbons-for-wind-flow.md. */
   readonly windStreaks = new WindStreaks();
+  /** User-seeded, persistent particles tracking the active Vector Field --
+   *  docs/plans/tracked-particle-seeding.md. Independent of `windStreaks`:
+   *  a user can track a particle whether or not the ambient Vector Streak
+   *  animation is on, and vice versa. Alt-click-seeded, see
+   *  addTrackedParticleAt() and climate/main.ts's pointer handlers. */
+  readonly trackedParticles = new TrackedParticles();
   readonly ui: ClimateUI;
   coastlines: Coastlines | null = null;
 
@@ -395,6 +402,8 @@ export class ClimateInstance {
     this.scene.add(this.wind.mesh);
     this.windStreaks.mesh.renderOrder = 4;
     this.scene.add(this.windStreaks.mesh);
+    this.trackedParticles.group.renderOrder = 6; // above the query marker (5) -- a tracked path should never hide under it
+    this.scene.add(this.trackedParticles.group);
 
     // After everything else, same ordering reasoning as `wind`'s own
     // comment -- far-side hiding is NOT GPU depth-testing (see the
@@ -419,6 +428,7 @@ export class ClimateInstance {
       onWindStyle: (v) => this.setWindStyle(v),
       onWindScale: (v) => this.setWindScale(v),
       onWindDensity: (v) => this.setWindDensity(v),
+      onClearTrackedParticles: () => this.clearTrackedParticles(),
       onExpandTimeSeries: () => this.onExpandTimeSeries(),
       onQueryPanelClose: () => { this.queryOpen = false; },
     }, label, () => this.hooks.onRemove(this), startCollapsed);
@@ -692,6 +702,37 @@ export class ClimateInstance {
     }
   }
 
+  /**
+   * Tracked Particle (docs/plans/tracked-particle-seeding.md): alt-click on
+   * the globe seeds a new particle at the clicked location, which then
+   * advects continuously along the active Vector Field via tick() below --
+   * unlike Anchored Point/Plate-Frame Point, this never opens a panel or
+   * assigns a single "the" point; any number of particles can be tracked at
+   * once. Mirrors queryMonthProfileAt()'s own raycast and Globe-only
+   * restriction (TrackedParticles doesn't support Plate Carrée yet, see its
+   * own class doc comment). A no-op if the active climate model has no
+   * Vector Field at all -- there is nothing for a particle to advect along.
+   */
+  addTrackedParticleAt(ndc: Vector2): void {
+    if (this.projectionMode !== 'globe') return;
+    if (!this.hasWind) {
+      this.ui.setStatus('this model has no Vector Field to track a particle along', true);
+      return;
+    }
+    this.queryRaycaster.setFromCamera(ndc, this.camera);
+    const hit = this.queryRaycaster.intersectObject(this.field.mesh, false)[0];
+    if (!hit) return;
+    const at = vec3ToLonLat(hit.point.x, hit.point.y, hit.point.z);
+    this.trackedParticles.add(at);
+    this.ui.setStatus('');
+  }
+
+  /** Remove every currently-tracked particle -- wired to ClimateUI's own
+   *  "Clear" control. */
+  clearTrackedParticles(): void {
+    this.trackedParticles.clear();
+  }
+
   /** Switch the shift-click gesture's meaning -- discards whichever point
    *  (either mode) was assigned under the OLD mode: switching modes
    *  shouldn't leave a stale marker orphaned on screen with no way to clear
@@ -925,6 +966,7 @@ export class ClimateInstance {
     if (this.coastlines) this.coastlines.lines.visible = mode === 'globe';
     this.wind.setProjection(mode);
     this.windStreaks.setProjection(mode);
+    this.trackedParticles.setProjection(mode);
     // WindGlyphs only reposes on an explicit update() call (unlike
     // WindStreaks, which reposes every frame via tick()) -- without this,
     // arrows would keep showing whatever matrices they last had under the
@@ -1349,12 +1391,25 @@ export class ClimateInstance {
    *  WindStreaks) or it would just sit frozen. A no-op whenever Wind Streak
    *  isn't the active, visible mode. */
   tick(dt: number): void {
-    if (!this.streakActive) return;
-    const plane = this.currentWindPlane();
-    if (!plane) return;
-    this.windStreaks.update(
-      dt, plane.uData, plane.vData, plane.nlon, plane.nlat, this.windUVar, this.windVVar,
-    );
+    if (this.streakActive) {
+      const plane = this.currentWindPlane();
+      if (plane) {
+        this.windStreaks.update(
+          dt, plane.uData, plane.vData, plane.nlon, plane.nlat, this.windUVar, this.windVVar,
+        );
+      }
+    }
+    // Tracked Particle rides the same live field, independently of whether
+    // Vector Streak (the ambient mode) happens to be showing -- see
+    // `trackedParticles`' own doc comment.
+    if (this.trackedParticles.count > 0) {
+      const plane = this.currentWindPlane();
+      if (plane) {
+        this.trackedParticles.update(
+          dt, plane.uData, plane.vData, plane.nlon, plane.nlat, this.windUVar, this.windVVar,
+        );
+      }
+    }
   }
 
   render(renderer: WebGLRenderer): void {
