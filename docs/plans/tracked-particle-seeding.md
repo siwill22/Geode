@@ -187,11 +187,17 @@ than left blocking — flagged here for review, not presented as settled:
   month). This is stricter than the "freeze in place" language above
   implied and hasn't been checked against a real no-data-heavy model
   (Pohl) for whether permanent-vs-resumable is the right call.
-- **Removing particles**: only `clearTrackedParticles()` (a single "clear
-  tracked particles" lil-gui button, alongside the wind/vector-field
-  controls in both climateUi.ts and valdesUi.ts, hidden when no Vector
-  Field is available) — no per-particle removal, no list UI. The open
-  question about a removable list is still open.
+- **Deliberately undiscoverable, on request** (2026-09-11 follow-up): the
+  user confirmed Alt-click as the gesture but doesn't yet know what they
+  want to DO with this feature, so it stays in the codebase with no UI
+  footprint at all -- no lil-gui button, no status message on success or on
+  a no-op (no Vector Field active, wrong projection). The only way in is
+  the Alt-click gesture itself; the only way to clear tracked particles is
+  `clearTrackedParticles()`, reachable today only via the browser console
+  or the `window.__climate`/`window.__valdes` test hooks
+  (`addTrackedParticle`, `clearTrackedParticles`, `trackedParticleCount`).
+  Removing particles individually (vs. clear-all) is still an open
+  question, unblocked by any UI commitment now.
 - **Frame/month/age changes mid-flight, Multi-Globe interaction,
   coexistence with Vector Streak**: built per the working assumptions
   stated above (continues advecting through whatever plane is current;

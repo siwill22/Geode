@@ -52,10 +52,6 @@ export interface ClimateUICallbacks {
   onWindStyle(style: WindStyle): void;
   onWindScale(v: number): void;
   onWindDensity(v: number): void;
-  /** Alt-click seeded a Tracked Particle -- see
-   *  ClimateInstance.clearTrackedParticles(), wired to ClimateUI's own
-   *  "clear tracked particles" button (docs/plans/tracked-particle-seeding.md). */
-  onClearTrackedParticles(): void;
   /** The time-series panel was just opened -- see setTimeSeriesVariables()'s
    *  own doc comment for why every open fires this rather than ClimateUI
    *  tracking "already requested" itself. */
@@ -114,7 +110,6 @@ export class ClimateUI {
   private windStyleCtrl: Controller;
   private windScaleCtrl: Controller;
   private windDensityCtrl: Controller;
-  private clearTrackedCtrl: Controller;
   /** How many models of type 'climate' are registered -- the climate-model
    *  dropdown hides itself when there's only one, same "dropdown of one is
    *  a dead control" precedent as setResolutions(). Set by
@@ -333,14 +328,6 @@ export class ClimateUI {
     this.windDensityCtrl = this.gui.add(this.state, 'windDensity', 0.5, 3, 0.1)
       .name('wind density')
       .onChange((v: number) => cb.onWindDensity(v));
-    // Alt-click on the globe seeds a Tracked Particle along whichever Vector
-    // Field is active (docs/plans/tracked-particle-seeding.md) -- gated on
-    // the same wind-availability visibility as the controls above it, since
-    // seeding is a no-op without a Vector Field to advect along (see
-    // ClimateInstance.addTrackedParticleAt()).
-    this.clearTrackedCtrl = this.gui
-      .add({ fn: () => cb.onClearTrackedParticles() }, 'fn')
-      .name('clear tracked particles (alt-click to seed)');
     this.clipMinCtrl = this.gui.add(this.state, 'clipMin', -60, 50, 0.1)
       .name('clip min')
       .onChange(() => {
@@ -565,7 +552,6 @@ export class ClimateUI {
     this.windStyleCtrl[action]();
     this.windScaleCtrl[action]();
     this.windDensityCtrl[action]();
-    this.clearTrackedCtrl[action]();
   }
 
   /** Populate the resolution dropdown from the paleogeography source's own

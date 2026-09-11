@@ -428,7 +428,6 @@ export class ClimateInstance {
       onWindStyle: (v) => this.setWindStyle(v),
       onWindScale: (v) => this.setWindScale(v),
       onWindDensity: (v) => this.setWindDensity(v),
-      onClearTrackedParticles: () => this.clearTrackedParticles(),
       onExpandTimeSeries: () => this.onExpandTimeSeries(),
       onQueryPanelClose: () => { this.queryOpen = false; },
     }, label, () => this.hooks.onRemove(this), startCollapsed);
@@ -710,25 +709,28 @@ export class ClimateInstance {
    * assigns a single "the" point; any number of particles can be tracked at
    * once. Mirrors queryMonthProfileAt()'s own raycast and Globe-only
    * restriction (TrackedParticles doesn't support Plate Carrée yet, see its
-   * own class doc comment). A no-op if the active climate model has no
-   * Vector Field at all -- there is nothing for a particle to advect along.
+   * own class doc comment). A no-op (silently -- see the class doc comment
+   * below) if the active climate model has no Vector Field at all -- there
+   * is nothing for a particle to advect along.
+   *
+   * Deliberately UNDISCOVERABLE: no lil-gui control, no status message,
+   * nothing in the panel hints this exists -- the user asked to keep this
+   * feature in the codebase without committing to a UI for it yet. The only
+   * way in is the alt-click gesture itself; the only way to clear tracked
+   * particles is clearTrackedParticles() below, reachable today only via
+   * the browser console or window.__climate's test hook.
    */
   addTrackedParticleAt(ndc: Vector2): void {
-    if (this.projectionMode !== 'globe') return;
-    if (!this.hasWind) {
-      this.ui.setStatus('this model has no Vector Field to track a particle along', true);
-      return;
-    }
+    if (this.projectionMode !== 'globe' || !this.hasWind) return;
     this.queryRaycaster.setFromCamera(ndc, this.camera);
     const hit = this.queryRaycaster.intersectObject(this.field.mesh, false)[0];
     if (!hit) return;
     const at = vec3ToLonLat(hit.point.x, hit.point.y, hit.point.z);
     this.trackedParticles.add(at);
-    this.ui.setStatus('');
   }
 
-  /** Remove every currently-tracked particle -- wired to ClimateUI's own
-   *  "Clear" control. */
+  /** Remove every currently-tracked particle -- see addTrackedParticleAt()'s
+   *  doc comment for why this has no UI control of its own yet. */
   clearTrackedParticles(): void {
     this.trackedParticles.clear();
   }

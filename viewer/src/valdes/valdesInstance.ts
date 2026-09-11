@@ -179,7 +179,6 @@ export class ValdesInstance {
       onVectorScale: (v) => this.setVectorScale(v),
       onVectorDensity: (v) => this.setVectorDensity(v),
       onFieldOpacity: (v) => this.applyFieldOpacity(v),
-      onClearTrackedParticles: () => this.clearTrackedParticles(),
     }, label, () => this.hooks.onRemove(this));
   }
 
@@ -280,25 +279,23 @@ export class ValdesInstance {
    * the globe seeds a new particle at the clicked location, advected
    * continuously along the active Vector Field via tick() below -- see
    * ClimateInstance.addTrackedParticleAt(), which this mirrors exactly
-   * (same Globe-only restriction, same raycast against `field.mesh`). A
-   * no-op if the active Layer has no Vector Field selected at all.
+   * (same Globe-only restriction, same raycast against `field.mesh`, same
+   * "deliberately undiscoverable, no UI control yet" reasoning -- see its
+   * own doc comment). A no-op (silently) if the active Layer has no Vector
+   * Field selected at all.
    */
   addTrackedParticleAt(ndc: Vector2): void {
-    if (this.projectionMode !== 'globe') return;
-    if (!this.view.vectorFieldId) {
-      this.ui.setStatus('this layer has no Vector Field to track a particle along', true);
-      return;
-    }
+    if (this.projectionMode !== 'globe' || !this.view.vectorFieldId) return;
     this.queryRaycaster.setFromCamera(ndc, this.camera);
     const hit = this.queryRaycaster.intersectObject(this.field.mesh, false)[0];
     if (!hit) return;
     const at = vec3ToLonLat(hit.point.x, hit.point.y, hit.point.z);
     this.trackedParticles.add(at);
-    this.ui.setStatus('');
   }
 
-  /** Remove every currently-tracked particle -- wired to ValdesUI's own
-   *  "clear tracked particles" control. */
+  /** Remove every currently-tracked particle -- see
+   *  ClimateInstance.addTrackedParticleAt()'s doc comment for why this has
+   *  no UI control of its own yet. */
   clearTrackedParticles(): void {
     this.trackedParticles.clear();
   }
