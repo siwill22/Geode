@@ -514,3 +514,50 @@ they'd all be built from (assignment + rotation) is no longer a blocked
 dependency now that it exists, just not yet extended past a single click's
 Month Profile / Age Series (see docs/plans/plate-frame-point.md,
 docs/adr/0024, docs/adr/0025).
+
+**Correction, from designing Virtual Geomagnetic Pole:** "loading an
+arbitrary point dataset" turned out not to be one uniform case. A dataset
+whose points are locations *on* a plate (deposits, sample sites) is this
+same primitive. A Virtual Geomagnetic Pole is not — see its own entry below
+for why assignment and age-semantics both differ — so it is designed
+(ADR-0029) as a related but distinct mechanism, not an instance of this one.
+
+## Virtual Geomagnetic Pole (VGP)
+
+A paleomagnetic pole computed from one sampling site's mean field
+direction — pole position, sample site position, age, and a confidence
+radius (A95), read from a `gpml:VirtualGeomagneticPole` feature (e.g.
+`gprm.utils.pmag.vgp_to_dataframe()`). _Avoid_ using "paleomagnetic pole"
+interchangeably with VGP: a paleomagnetic pole can also mean a pole averaged
+from several VGPs at one geological unit, which this project does not yet
+compute (see Apparent Polar Wander Path below).
+
+Not a Plate-Frame Point, despite the family resemblance (per-point plate
+assignment, then rotation by that plate's own Reconstruction Model). Two
+differences drive different mechanisms: **assignment** is tested against
+the VGP's *sample site* position, never its pole position — a pole is not a
+location on the plate and has no polygon membership to test, so unlike a
+Plate-Frame Point's click-time assignment, a VGP's plate id is precomputed
+once per Reconstruction Model, not assigned live. **Age** is not free to
+scrub: a Plate-Frame Point's trajectory is meaningful at any age within its
+lifespan, but a VGP only means something at its own recorded age — it is
+reconstructed to exactly that age (the same anchor-plate-0 convention
+coastlines use) and shown only while the Reconstruction Age slider sits
+within a fixed window of it (see ADR-0029), never repositioned to track the
+slider continuously.
+
+Built on `viewer/vendor/deep-time-map`'s `PointLayer`/`points.json`
+pipeline per ADR-0028's split-features rule, not a new Geode `core/`
+primitive — see ADR-0029 for the upstream/downstream split, the per-
+Reconstruction-Model export granularity, and why VGP display is currently
+limited to Reconstruction Models with static polygons exported (Müller
+2019, Seton 2012, Scotese).
+
+## Apparent Polar Wander Path
+
+A path built from many VGPs — either a running-mean smoothed curve per time
+window, or many VGPs rotated into one common reference plate's frame for
+comparison (`gprm.utils.pmag.generate_running_mean_path` /
+`rotate_to_common_reference`). Explicitly deferred, not designed — see
+ADR-0029's Deferred section. Named here only so "Apparent Polar Wander
+Path" is never confused with a VGP itself once this is eventually built.
