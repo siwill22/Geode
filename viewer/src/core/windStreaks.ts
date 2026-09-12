@@ -441,6 +441,23 @@ export class WindStreaks {
       this.lon[p] = nextLon;
       this.lat[p] = nextLat;
       [rx, ry, rz] = referencePlateFlatPosition(nextLon, nextLat, this.qRef, FLAT_RIBBON_Z);
+
+      // The check above catches a seam crossing in the TRUE (unrotated)
+      // frame, which is all that mattered before Reference Plate existed.
+      // A non-zero Reference Plate can put the antimeridian at a different
+      // TRUE longitude than the map's own fixed DISPLAY edges (see
+      // docs/plans/reference-plate.md), so a step that stays well clear of
+      // the TRUE seam can still land its DISPLAY position on the opposite
+      // edge from where this particle's trail was last drawn -- comparing
+      // against the previously committed point's own DISPLAY x, not the
+      // TRUE lon, is what actually determines whether the ribbon segment
+      // about to be drawn would span the map. Same defensive respawn as
+      // the TRUE-frame check.
+      const prevX = this.trail[(p * TRAIL_LEN + this.cursor[p]) * 3];
+      if (Math.abs(rx - prevX) > Math.PI * R_SURFACE) {
+        this.respawn(p, false);
+        return true;
+      }
     }
 
     // Advection runs every frame so the HEAD moves smoothly, but committing

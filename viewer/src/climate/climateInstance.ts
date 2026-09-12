@@ -574,8 +574,9 @@ export class ClimateInstance {
     // createInstance() before boot() ever ran, so field/overlay/camera are
     // already correct) now that coastlines/wind actually exist -- both are
     // built during boot(), above, so the EARLIER setProjection() call had
-    // nothing to hide yet. Without this a globe added while Plate Carrée is
-    // active would boot with its coastline outline left showing.
+    // nothing to reproject yet. Without this a globe added while Plate
+    // Carrée is active would boot with its coastline outline still on the
+    // sphere, positioned for Globe.
     this.setProjection(this.projectionMode, this.camera);
     this.hooks.onDisplayChange?.(this);
   }
@@ -999,15 +1000,15 @@ export class ClimateInstance {
    *  (see docs/adr/0003): Globe and Plate Carrée need different camera
    *  types, so main.ts always replaces the camera object wholesale rather
    *  than reconfiguring this instance's existing one in place. Rebuilds the
-   *  field/overlay geometry for `mode` and reprojects wind; coastlines still
-   *  hide rather than reproject -- their CPU build pipeline (plate-rotation
-   *  slerp) is a separate, unrelated piece of work, see docs/adr/0003. */
+   *  field/overlay geometry for `mode`, reprojects wind, and reprojects
+   *  coastlines' line set (Coastlines.setProjection()) -- land fill stays
+   *  hidden either way, see that class's own `mode` doc comment. */
   setProjection(mode: ProjectionMode, camera: Camera): void {
     this.camera = camera;
     this.projectionMode = mode;
     this.field.setProjection(mode);
     this.overlay.setProjection(mode);
-    if (this.coastlines) this.coastlines.lines.visible = mode === 'globe';
+    this.coastlines?.setProjection(mode);
     this.wind.setProjection(mode);
     this.windStreaks.setProjection(mode);
     this.trackedParticles.setProjection(mode);

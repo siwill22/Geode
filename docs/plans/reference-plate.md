@@ -1,14 +1,14 @@
 # Reference Plate
 
 **Status: built for the climate viewer only** (ADR-0030's mechanism, proven
-end-to-end in BOTH Projections: coastlines (Globe only -- hidden in Plate
-Carrée regardless of Reference Plate, unrelated to this feature), raster
-field, wind glyphs, Wind Streak, Tracked Particle (Globe only, by its own
-design -- see trackedParticles.ts), and Query Point picking (Globe only,
-by its own design -- see queryPoint.ts) all reanchor consistently,
-verified live in a browser. Plate Carrée's fix is recorded below under
-"Fixed: Plate Carrée reanchoring" for anyone touching this code next. The
-other six wrapper types (globe, tomography, valdes, groupGlobe,
+end-to-end in BOTH Projections: coastlines, raster field, wind glyphs, and
+Wind Streak all reanchor consistently; Tracked Particle and Query Point
+picking are Globe-only by their own separate, pre-existing designs (see
+trackedParticles.ts/queryPoint.ts), unrelated to Reference Plate. All
+verified live in a browser. Plate Carrée needed real fixes along the way,
+not just wiring -- see "Fixed: Plate Carrée reanchoring" and "Fixed:
+Plate Carrée antimeridian seam" below for anyone touching this code next.
+The other six wrapper types (globe, tomography, valdes, groupGlobe,
 reconstruction, reconstructionGroup), deep-time-map's Boundary Frames/VGP
 layers, and the Multi-Globe sync toggle are not yet wired up. See
 `CONTEXT.md`'s Reference Plate entry for the resolved terminology.
@@ -191,6 +191,83 @@ content (and wind glyphs) visibly shifted to match, and the SAME content
 appears in Globe mode at the same Reference Plate/age — confirming the two
 Projections now agree, not just that Plate Carrée stopped visibly
 breaking. `npm run typecheck` clean.
+
+## Fixed: coastlines had no Plate Carrée support at all
+
+Separate from the reanchoring bug above: `Coastlines` never had a Plate
+Carrée mode to begin with, reanchoring or not — its line geometry was
+always computed on the sphere and simply hidden outright in Plate Carrée
+(`coastlines.lines.visible = mode === 'globe'`), predating Reference Plate
+entirely. Once the raster/wind fix above made Plate Carrée usable, this
+became the visible gap: the continent outlines that key the raster's
+paleogeography to something recognisable were just gone.
+
+Fix: `Coastlines` gained a `mode`/`setProjection()` (mirroring
+`WindStreaks`), and `setAge()`'s per-line-point loop now branches on it —
+Globe keeps the existing viewer-frame sphere position; Plate Carrée
+recovers (lon, lat) from that same already-fully-rotated (reconstruction +
+Reference Plate composed together, see the existing `composeQuaternions`
+call) point via `vec3ToLonLat`, then reprojects with
+`lonLatToFlatVec3`. `climateInstance.setProjection()` now calls
+`coastlines.setProjection(mode)` instead of toggling `.lines.visible`, so
+outlines render (and reanchor) in both Projections.
+
+Land fill (the triangulated continent mesh, distinct from the line
+outlines) was deliberately left on the sphere unconditionally — the
+climate viewer always sets `landVisible = false` (only the line outlines
+are used there, see the class doc comment), and reprojecting filled
+polygons correctly needs actual antimeridian polygon clipping, a
+materially bigger job than the line case below, for a mesh nothing
+currently draws. Flag this if a future wrapper turns land fill on under
+Plate Carrée.
+
+## Fixed: Plate Carrée antimeridian seam
+
+Reported live (2026-09-12): under Plate Carrée with a non-zero Reference
+Plate, Wind Streak drew bright ribbons spanning the full width of the map
+— the same failure mode the codebase already had ONE defence against
+(`WindStreaks.advect()`'s existing `Math.abs(nextLon - lon) > 180` check,
+which respawns a particle whose TRUE, unrotated position just crossed the
+antimeridian rather than draw a wrong segment across it), but that defence
+checks the wrong frame once Reference Plate is involved.
+
+Root cause: the TRUE-frame check is only a valid proxy for "does the
+RENDERED segment span the seam" when TRUE and DISPLAY longitude are the
+same thing, i.e. Reference Plate 0. A non-zero Reference Plate moves the
+antimeridian to a different TRUE longitude than the map's own fixed
+DISPLAY edges (±180, always) — so an ordinary short step that never
+crosses the TRUE seam can still reproject (via `referencePlateFlatPosition`,
+see the fix above) to a DISPLAY position on the opposite edge from where
+that particle's trail was last drawn. The existing check has nothing to
+say about that case; it only ever looked at the TRUE lon.
+
+Fix: `WindStreaks.advect()`'s Plate Carrée branch now ALSO compares the
+newly-computed DISPLAY x against the trail's own previously-committed
+DISPLAY x (`this.trail[... this.cursor[p] ...]`, read before this tick
+overwrites it) and respawns on the same "drop rather than draw a wrong
+line" precedent if that jump exceeds half the map width — checked in the
+space that's actually rendered, not the space that's merely sampled for
+data. The pre-existing TRUE-frame check is unchanged and still needed (it
+guards `texelIndex` lookups staying in a valid domain, unrelated to
+rendering).
+
+Coastlines needed the equivalent the moment they gained Plate Carrée
+support (previous section): each line's points are stored as independent
+`LineSegments` pairs already (not a shared vertex chain), so `setAge()`
+simply skips emitting a segment outright — no respawn concept applies to
+static geometry — whenever its two endpoints' DISPLAY x differ by more
+than half the map width. Wind glyphs need no equivalent: each arrow is an
+independent instance with no line connecting it to its neighbours, so a
+glyph landing on the opposite map edge from where it "should" visually
+continue isn't a rendering artifact, just the same thing every flat world
+map already looks like at its own edges.
+
+Verified live in a browser (2026-09-12): swept Reference Plate through
+five plate ids (801, 802, 701, 601, 501) at age 100 Ma under Plate Carrée
+with Wind Streak active and enlarged (density/size upsized for
+visibility) — no ribbon or coastline segment spanning the map at any of
+them, coastlines and streaks both reanchoring consistently with the
+raster underneath. `npm run typecheck` clean.
 
 ## Not yet resolved
 

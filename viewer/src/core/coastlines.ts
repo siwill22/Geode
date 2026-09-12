@@ -4,14 +4,17 @@ import {
 } from 'three';
 import { passthroughColor } from './material';
 import { GEOGRAPHIC_GLSL } from './glsl/geographic';
-import { R_SURFACE, LIGHT_DIR } from './constants';
+import { R_SURFACE, LIGHT_DIR, vec3ToLonLat } from './constants';
 import { PALETTE } from './palette';
 import { fetchVolumeBytes } from './volume';
 import { composeQuaternions, referenceRotationAt, rotationAt } from './rotation';
+import { lonLatToFlatVec3, type ProjectionMode } from './projection';
 import type { ArchiveIndex, CoastlineLine, CoastlineSet, Manifest, RotationTable } from './types';
 
 const LAND_R = R_SURFACE * 1.0006;      // just clear of the surface sphere
 const COASTLINE_R = R_SURFACE * 1.0014; // and the lines just clear of the land
+// The Plate Carrée equivalent, same derivation as windGlyphs.ts's FLAT_GLYPH_Z.
+const FLAT_COASTLINE_Z = COASTLINE_R - R_SURFACE;
 
 /** Symmetric offset below R_SURFACE, for a caller that wants land to sit
  *  UNDER a data sphere rather than above it -- see Coastlines' `landRadius`
@@ -116,7 +119,10 @@ void main() {
  *
  * Points arrive in the geographic frame (X to 0N/0E, Y to 0N/90E, Z to the
  * pole) and the quaternions act in that frame, so we rotate there and convert
- * to the viewer's (X, Z, -Y) frame afterwards -- see constants.ts.
+ * to the viewer's (X, Z, -Y) frame afterwards -- see constants.ts. Under
+ * Plate Carrée (setProjection()), that viewer-frame point is then reprojected
+ * onto the flat map via (lon, lat) rather than used directly -- see setAge()'s
+ * mode branch and docs/plans/reference-plate.md.
  */
 export class Coastlines {
   readonly lines: LineSegments;
@@ -136,6 +142,13 @@ export class Coastlines {
    *  current age. */
   private referencePlateId = 0;
   private currentAge = 0;
+  /** Only affects the LINE set (see setAge()'s mode branch) -- land fill is
+   *  never shown in a wrapper that also offers Plate Carrée today (climate.html
+   *  always sets landVisible false, see climateInstance.ts), so its geometry
+   *  is left on the sphere unconditionally rather than build flat-map
+   *  polygon-clipping (a materially bigger job than the line case below,
+   *  which can just drop a seam-crossing segment) for a mesh nothing draws. */
+  private mode: ProjectionMode = 'globe';
 
   constructor(
     private data: CoastlineLine[],
@@ -219,6 +232,16 @@ export class Coastlines {
     this.setAge(this.currentAge);
   }
 
+  /** Switch the LINE set's positions between Globe and Plate Carrée -- see
+   *  `mode`'s own doc comment for why only the lines, not land. Rebuilds via
+   *  setAge() rather than reprojecting the existing buffer in place, same
+   *  "cheap enough to redo from source" precedent as DepthSlice.setProjection(). */
+  setProjection(mode: ProjectionMode): void {
+    if (mode === this.mode) return;
+    this.mode = mode;
+    this.setAge(this.currentAge);
+  }
+
   /** Rebuild the visible line and land sets for a reconstruction age. */
   setAge(age: number): void {
     this.currentAge = age;
@@ -251,13 +274,39 @@ export class Coastlines {
         const rz = z + qw * tz + (qx * ty - qy * tx);
 
         // Geographic (X, Y, Z) -> viewer (X, Z, -Y).
-        const lx = rx * COASTLINE_R, ly = rz * COASTLINE_R, lz = -ry * COASTLINE_R;
+        const gx = rx * COASTLINE_R, gy = rz * COASTLINE_R, gz = -ry * COASTLINE_R;
+
+        let cx: number, cy: number, cz: number;
+        if (this.mode === 'globe') {
+          cx = gx; cy = gy; cz = gz;
+        } else {
+          // Recover (lon, lat) from the already-fully-rotated (reconstruction
+          // + Reference Plate) viewer-frame point and reproject onto the flat
+          // map -- the same "rotate the true point forward, then reproject"
+          // direction as windGlyphs.ts/windStreaks.ts's referencePlateFlat*
+          // helpers, just computed via this class's own CPU rotation instead
+          // of calling them (the composed quaternion above already bakes in
+          // BOTH rotations at once, which those helpers don't need to since
+          // they're only ever given one).
+          const { lon, lat } = vec3ToLonLat(gx, gy, gz);
+          [cx, cy, cz] = lonLatToFlatVec3(lon, lat, FLAT_COASTLINE_Z);
+        }
 
         if (i > 0) {
-          this.linePos[lw++] = px; this.linePos[lw++] = py; this.linePos[lw++] = pz;
-          this.linePos[lw++] = lx; this.linePos[lw++] = ly; this.linePos[lw++] = lz;
+          // Plate Carrée: a non-zero Reference Plate can put the antimeridian
+          // seam at a different TRUE longitude than the map's own fixed
+          // edges (see docs/plans/reference-plate.md), so an ordinary short
+          // segment in the reconstructed geometry can land on opposite
+          // DISPLAY edges of the flat map. Same "drop rather than draw a
+          // wrong line" choice as windStreaks.ts's advect() -- one skipped
+          // segment (a handful of pixels, given prep_coastlines.py's sampling
+          // density) is invisible; a line spanning the whole map width isn't.
+          if (this.mode !== 'plateCarree' || Math.abs(cx - px) <= Math.PI * R_SURFACE) {
+            this.linePos[lw++] = px; this.linePos[lw++] = py; this.linePos[lw++] = pz;
+            this.linePos[lw++] = cx; this.linePos[lw++] = cy; this.linePos[lw++] = cz;
+          }
         }
-        px = lx; py = ly; pz = lz;
+        px = cx; py = cy; pz = cz;
       }
 
       if (line.triangles && line.landPoints) {
