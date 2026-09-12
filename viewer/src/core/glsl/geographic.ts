@@ -90,5 +90,24 @@ vec3 rotateByQuat(vec4 q, vec3 v) {
   return v + q.w * t + cross(q.xyz, t);
 }
 
+/** Conjugate of a unit quaternion -- its inverse rotation. */
+vec4 conjugateQuat(vec4 q) {
+  return vec4(-q.xyz, q.w);
+}
+
+/**
+ * (lon, lat) radians -> unit-length RENDER-frame direction -- the inverse of
+ * worldToGeographic at radius 1. Only needed for the Plate Carrée Reference
+ * Plate round-trip (see core/material.ts's FRAG shader): the flat plane
+ * can't rotate in 3D the way the Globe sphere does (docs/adr/0030), so
+ * instead each fragment's DISPLAY (lon, lat) is converted to a direction,
+ * unrotated by uRefQuat's conjugate, and converted back -- recovering which
+ * TRUE (lon, lat) belongs at that fixed display position.
+ */
+vec3 lonLatToUnit(vec2 ll) {
+  float cl = cos(ll.y);
+  return vec3(cl * cos(ll.x), sin(ll.y), -cl * sin(ll.x));
+}
+
 #endif
 `;

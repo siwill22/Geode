@@ -24,6 +24,7 @@ const VERT = /* glsl */ `
 ${GEOGRAPHIC_GLSL}
 
 uniform vec4 uRefQuat;
+uniform float uProjectionMode; // 0 = globe, 1 = plate carree -- see FRAG's own copy below
 varying vec3 vGeoPos;
 
 void main() {
@@ -33,8 +34,17 @@ void main() {
   // Reanchoring the view must not reanchor the DATA (see docs/adr/0030 and
   // ADR-0001: a volume is never reconstructed), only where it's drawn --
   // splitting these here is what keeps that true.
+  //
+  // Globe only: position is a genuine point on the unit sphere, so a 3D
+  // quaternion rotation of it IS the LonLat-level rotation ADR-0030 calls
+  // for. Plate Carrée's position is a flat Cartesian encoding of (lon,
+  // lat) -- not a direction in 3D at all -- so rotating it in 3D warps the
+  // rectangle itself instead of reanchoring its content (see
+  // docs/plans/reference-plate.md's "Known issue" postmortem). The flat
+  // plane's geometry stays fixed; FRAG's lonLatToUnit round-trip is what
+  // actually reanchors it.
   vGeoPos = (modelMatrix * vec4(position, 1.0)).xyz;
-  vec3 rotated = rotateByQuat(uRefQuat, position);
+  vec3 rotated = uProjectionMode > 0.5 ? position : rotateByQuat(uRefQuat, position);
   vec4 wp = modelMatrix * vec4(rotated, 1.0);
   gl_Position = projectionMatrix * viewMatrix * wp;
 }
@@ -74,11 +84,29 @@ uniform float uOpacity;
 uniform float uSteps;   // 0 = continuous ramp, else this many discrete bands
 uniform float uDebug;   // 0 off, 1 pDep, 2 lat, 3 raw sample
 uniform float uProjectionMode; // 0 = globe (sphere), 1 = plate carree (flat plane) -- see core/projection.ts
+uniform vec4 uRefQuat; // see VERT's copy -- only used here for the Plate Carrée round-trip
 
 varying vec3 vGeoPos;
 
 void main() {
-  vec2 ll = uProjectionMode > 0.5 ? worldToGeographicFlat(vGeoPos) : worldToGeographic(vGeoPos);
+  // Globe: vGeoPos is already the TRUE (unrotated) position -- VERT moved
+  // gl_Position, not this -- so the ordinary sphere inverse is exactly the
+  // vertex's own true (lon, lat).
+  //
+  // Plate Carrée: the plane never moves (see VERT), so vGeoPos IS the fixed
+  // DISPLAY position. worldToGeographicFlat gives its DISPLAY (lon, lat);
+  // rotating that position's direction by uRefQuat's conjugate recovers the
+  // TRUE (lon, lat) whose content belongs at this fixed spot -- the
+  // LonLat-level round-trip ADR-0030 calls for, done per-fragment since the
+  // flat plane can't do it via a vertex-level 3D rotation the way Globe can.
+  vec2 ll;
+  if (uProjectionMode > 0.5) {
+    vec2 displayLL = worldToGeographicFlat(vGeoPos);
+    vec3 trueDir = rotateByQuat(conjugateQuat(uRefQuat), lonLatToUnit(displayLL));
+    ll = vec2(atan(-trueDir.z, trueDir.x), asin(clamp(trueDir.y, -1.0, 1.0)));
+  } else {
+    ll = worldToGeographic(vGeoPos);
+  }
 
   if (uUseMask != 0.0) {
     float m = texture(uMask, geographicToUV(ll)).r;

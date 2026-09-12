@@ -4,7 +4,9 @@ import {
 import {
   DEG, EARTH_RADIUS_KM, R_SURFACE, eastNorthAt, lonLatToVec3, vec3ToLonLat, wrapLon,
 } from './constants';
-import { FLAT_EAST, lonLatToFlatVec3, type ProjectionMode } from './projection';
+import {
+  FLAT_EAST, lonLatToFlatVec3, referencePlateFlatPosition, type ProjectionMode,
+} from './projection';
 import { texelIndex, texelToPhysical } from './volume';
 import { rotateVector, type Quaternion } from './rotation';
 import type { VariableInfo } from './types';
@@ -276,10 +278,16 @@ export class WindStreaks {
       : PARTICLE_LIFETIME_S * (0.7 + 0.6 * Math.random());
     this.speed[p] = 0;
 
-    const [x0, y0, z0] = this.mode === 'globe'
-      ? lonLatToVec3(lon, lat, RIBBON_R)
-      : lonLatToFlatVec3(lon, lat, FLAT_RIBBON_Z);
-    const [x, y, z] = rotateVector(this.qRef, x0, y0, z0);
+    let x: number; let y: number; let z: number;
+    if (this.mode === 'globe') {
+      const [x0, y0, z0] = lonLatToVec3(lon, lat, RIBBON_R);
+      [x, y, z] = rotateVector(this.qRef, x0, y0, z0);
+    } else {
+      // referencePlateFlatPosition, not a direct rotateVector of the flat
+      // Cartesian position -- see its own doc comment and
+      // docs/plans/reference-plate.md's "Known issue" postmortem.
+      [x, y, z] = referencePlateFlatPosition(lon, lat, this.qRef, FLAT_RIBBON_Z);
+    }
     for (let k = 0; k < TRAIL_LEN; k++) {
       const base = (p * TRAIL_LEN + k) * 3;
       this.trail[base] = x; this.trail[base + 1] = y; this.trail[base + 2] = z;
@@ -403,18 +411,25 @@ export class WindStreaks {
     this.speed[p] = Math.hypot(u, v);
     const step = (dt * STREAK_SPEED_SCALE) / EARTH_RADIUS_M;
 
-    let nx: number; let ny: number; let nz: number;
+    // rx/ry/rz are the RENDER (Reference-Plate-rotated) point this tick
+    // commits to the trail -- Globe gets there by rotating the true sphere
+    // point directly (rotateVector), Plate Carrée by referencePlateFlatPosition's
+    // round-trip through the sphere, never by rotating the flat plane's own
+    // Cartesian point directly (see that function's doc comment and
+    // docs/plans/reference-plate.md's "Known issue" postmortem).
+    let rx: number; let ry: number; let rz: number;
     if (this.mode === 'globe') {
       const { east, north } = eastNorthAt(lon, lat);
       const [px, py, pz] = lonLatToVec3(lon, lat, RIBBON_R);
-      nx = px + (u * east[0] + v * north[0]) * step;
-      ny = py + (u * east[1] + v * north[1]) * step;
-      nz = pz + (u * east[2] + v * north[2]) * step;
+      let nx = px + (u * east[0] + v * north[0]) * step;
+      let ny = py + (u * east[1] + v * north[1]) * step;
+      let nz = pz + (u * east[2] + v * north[2]) * step;
       const len = Math.hypot(nx, ny, nz) || 1;
       nx = (nx / len) * RIBBON_R; ny = (ny / len) * RIBBON_R; nz = (nz / len) * RIBBON_R;
       const next = vec3ToLonLat(nx, ny, nz);
       this.lon[p] = next.lon;
       this.lat[p] = next.lat;
+      [rx, ry, rz] = rotateVector(this.qRef, nx, ny, nz);
     } else {
       const [px, py] = lonLatToFlatVec3(lon, lat);
       const nextLon = wrapLon((px + u * step) / (DEG * R_SURFACE));
@@ -425,7 +440,7 @@ export class WindStreaks {
       const nextLat = Math.max(-90, Math.min(90, (py + v * step) / (DEG * R_SURFACE)));
       this.lon[p] = nextLon;
       this.lat[p] = nextLat;
-      [nx, ny, nz] = lonLatToFlatVec3(nextLon, nextLat, FLAT_RIBBON_Z);
+      [rx, ry, rz] = referencePlateFlatPosition(nextLon, nextLat, this.qRef, FLAT_RIBBON_Z);
     }
 
     // Advection runs every frame so the HEAD moves smoothly, but committing
@@ -437,7 +452,6 @@ export class WindStreaks {
     // and its call site.
     const c = commit ? (this.cursor[p] + 1) % TRAIL_LEN : this.cursor[p];
     this.cursor[p] = c;
-    const [rx, ry, rz] = rotateVector(this.qRef, nx, ny, nz);
     const base = (p * TRAIL_LEN + c) * 3;
     this.trail[base] = rx; this.trail[base + 1] = ry; this.trail[base + 2] = rz;
     return false;

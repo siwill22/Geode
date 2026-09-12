@@ -3,7 +3,10 @@ import {
   type BufferGeometry, type Camera,
 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { DEG, R_SURFACE } from './constants';
+import {
+  DEG, R_SURFACE, eastNorthAt, lonLatToVec3, vec3ToLonLat,
+} from './constants';
+import { rotateVector, type Quaternion } from './rotation';
 
 /**
  * How a volume-draped surface is mapped onto the screen -- see CONTEXT.md's
@@ -57,6 +60,64 @@ export function createSurfaceGeometry(mode: ProjectionMode, radius: number = R_S
  */
 export function lonLatToFlatVec3(lon: number, lat: number, z = 0): [number, number, number] {
   return [lon * DEG * R_SURFACE, lat * DEG * R_SURFACE, z];
+}
+
+function isIdentity(q: Quaternion): boolean {
+  return q[0] === 0 && q[1] === 0 && q[2] === 0 && q[3] === 1;
+}
+
+/**
+ * Reanchor a TRUE (lon, lat) into a Reference Plate rotation's frame, then
+ * reproject the result onto the flat Plate Carrée plane -- the Plate
+ * Carrée counterpart of rotating a Globe sphere point by the SAME 3D
+ * quaternion directly (see core/rotation.ts's docs/adr/0030 comments). A
+ * flat plane's own Cartesian position isn't a 3D direction, so rotating IT
+ * directly warps the map instead of reanchoring content (see
+ * docs/plans/reference-plate.md's "Known issue" postmortem) -- this
+ * instead rotates the TRUE point on the sphere, then reprojects the
+ * ROTATED result back onto the flat map, exactly like redrawing a map
+ * after the globe underneath it turned. Identity `qRef` (Reference Plate
+ * 0, the overwhelmingly common case) short-circuits to the exact
+ * bit-identical lonLatToFlatVec3(lon, lat, z) rather than round-tripping
+ * through trig for no reason. Used by windStreaks.ts's respawn()/advect().
+ */
+export function referencePlateFlatPosition(
+  lon: number, lat: number, qRef: Quaternion, z = 0,
+): [number, number, number] {
+  if (isIdentity(qRef)) return lonLatToFlatVec3(lon, lat, z);
+  const [x0, y0, z0] = lonLatToVec3(lon, lat, 1);
+  const [x1, y1, z1] = rotateVector(qRef, x0, y0, z0);
+  const rotated = vec3ToLonLat(x1, y1, z1);
+  return lonLatToFlatVec3(rotated.lon, rotated.lat, z);
+}
+
+/**
+ * Like referencePlateFlatPosition(), but also reanchors a local tangent
+ * direction -- `(u, v)` in the physical east/north sense (constants.ts's
+ * eastNorthAt), e.g. wind components -- for a caller that needs an on-map
+ * direction as well as a position (windGlyphs.ts's arrows). The rotated
+ * tangent is decomposed back onto the ROTATED location's own east/north
+ * basis: the flat map's own screen axes (FLAT_EAST/FLAT_NORTH) are fixed
+ * and never rotate -- only which physical (u, v) is displayed against them
+ * does, exactly the same "content moves, display frame doesn't" split the
+ * position round-trip above makes.
+ */
+export function referencePlateFlatSample(
+  lon: number, lat: number, u: number, v: number, qRef: Quaternion, z = 0,
+): { position: [number, number, number]; direction: [number, number, number] } {
+  if (isIdentity(qRef)) return { position: lonLatToFlatVec3(lon, lat, z), direction: [u, v, 0] };
+  const { east, north } = eastNorthAt(lon, lat);
+  const dx0 = u * east[0] + v * north[0];
+  const dy0 = u * east[1] + v * north[1];
+  const dz0 = u * east[2] + v * north[2];
+  const [px0, py0, pz0] = lonLatToVec3(lon, lat, 1);
+  const [px1, py1, pz1] = rotateVector(qRef, px0, py0, pz0);
+  const [dx1, dy1, dz1] = rotateVector(qRef, dx0, dy0, dz0);
+  const rotated = vec3ToLonLat(px1, py1, pz1);
+  const { east: east2, north: north2 } = eastNorthAt(rotated.lon, rotated.lat);
+  const u2 = dx1 * east2[0] + dy1 * east2[1] + dz1 * east2[2];
+  const v2 = dx1 * north2[0] + dy1 * north2[1] + dz1 * north2[2];
+  return { position: lonLatToFlatVec3(rotated.lon, rotated.lat, z), direction: [u2, v2, 0] };
 }
 
 /**
