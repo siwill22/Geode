@@ -6,7 +6,10 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { DEG, R_SURFACE, eastNorthAt, lonLatToVec3 } from './constants';
 import { FLAT_EAST, FLAT_NORTH, lonLatToFlatVec3, type ProjectionMode } from './projection';
 import { texelIndex, texelToPhysical } from './volume';
+import { rotateVector, type Quaternion } from './rotation';
 import type { VariableInfo } from './types';
+
+const IDENTITY_QUAT: Quaternion = [0, 0, 0, 1];
 
 // Just clear of the overlay sphere (R_SURFACE * 1.0006, see
 // climateInstance.ts's OVERLAY_R) -- arrows are real 3D geometry, not a
@@ -203,10 +206,19 @@ export class WindGlyphs {
    *
    *  `speedScale`: VectorFieldInfo.display_speed_scale, applied to the
    *  decoded (u, v) before length/direction math -- see that field's own
-   *  doc comment for why. 1 (its default) is a no-op. */
+   *  doc comment for why. 1 (its default) is a no-op.
+   *
+   *  `qRef`: the current Reference Plate rotation, already converted to the
+   *  render frame (core/rotation.ts's toRenderFrameRotation) -- see
+   *  docs/adr/0030. Applied to each glyph's position AND direction (rotating
+   *  a rigid body rotates its embedded vectors the same way), never to the
+   *  (lon, lat) used to sample uData/vData -- the field itself is never
+   *  reconstructed (ADR-0001), only where it's drawn. Identity (its default)
+   *  is a no-op, matching every existing caller. */
   update(
     uData: Uint8Array, vData: Uint8Array, nlon: number, nlat: number,
     uVar: VariableInfo, vVar: VariableInfo, sentinel?: number, speedScale = 1,
+    qRef: Quaternion = IDENTITY_QUAT,
   ): void {
     for (let i = 0; i < this.lattice.length; i++) {
       const { lon, lat } = this.lattice[i];
@@ -237,10 +249,13 @@ export class WindGlyphs {
       if (this.dir.lengthSq() < 1e-8) this.dir.set(0, 1, 0); // calm: length ~0 makes orientation invisible anyway
       else this.dir.normalize();
 
-      const [px, py, pz] = this.mode === 'globe'
+      const [px0, py0, pz0] = this.mode === 'globe'
         ? lonLatToVec3(lon, lat, GLYPH_R)
         : lonLatToFlatVec3(lon, lat, FLAT_GLYPH_Z);
+      const [px, py, pz] = rotateVector(qRef, px0, py0, pz0);
+      const [dx, dy, dz] = rotateVector(qRef, this.dir.x, this.dir.y, this.dir.z);
       this.tmp.position.set(px, py, pz);
+      this.dir.set(dx, dy, dz);
       this.tmp.quaternion.setFromUnitVectors(UP, this.dir);
       const len = (MIN_ARROW_LEN
         + (Math.min(speed, SPEED_CLIP_MS) / SPEED_CLIP_MS) * (MAX_ARROW_LEN - MIN_ARROW_LEN))

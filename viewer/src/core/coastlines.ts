@@ -7,7 +7,7 @@ import { GEOGRAPHIC_GLSL } from './glsl/geographic';
 import { R_SURFACE, LIGHT_DIR } from './constants';
 import { PALETTE } from './palette';
 import { fetchVolumeBytes } from './volume';
-import { rotationAt } from './rotation';
+import { composeQuaternions, referenceRotationAt, rotationAt } from './rotation';
 import type { ArchiveIndex, CoastlineLine, CoastlineSet, Manifest, RotationTable } from './types';
 
 const LAND_R = R_SURFACE * 1.0006;      // just clear of the surface sphere
@@ -129,6 +129,13 @@ export class Coastlines {
   private landIdx: Uint32Array;
   private lineMat: ShaderMaterial;
   private landMat: ShaderMaterial;
+  /** See CONTEXT.md's Reference Plate entry and docs/adr/0030 -- 0 (the
+   *  prep-time anchor) reduces every composeQuaternions() below to a no-op
+   *  extra multiply by identity, so this never needs its own branch in
+   *  setAge(). Set via setReferencePlate(), which also re-renders the
+   *  current age. */
+  private referencePlateId = 0;
+  private currentAge = 0;
 
   constructor(
     private data: CoastlineLine[],
@@ -205,18 +212,28 @@ export class Coastlines {
 
   set landVisible(v: boolean) { this.land.visible = v; }
 
+  /** Change which plate the whole set reanchors around, and re-render the
+   *  current age with it -- see CONTEXT.md's Reference Plate entry. */
+  setReferencePlate(plateId: number): void {
+    this.referencePlateId = plateId;
+    this.setAge(this.currentAge);
+  }
+
   /** Rebuild the visible line and land sets for a reconstruction age. */
   setAge(age: number): void {
+    this.currentAge = age;
     let lw = 0;   // line float cursor
     let vw = 0;   // land vertex count
     let iw = 0;   // land index cursor
+
+    const qRef = referenceRotationAt(this.table, this.referencePlateId, age);
 
     for (const line of this.data) {
       // Ages increase into the past, so appearAge is the LARGER value. A
       // feature appearing at 100 Ma must be absent at 150 Ma.
       if (age > line.appearAge || age < line.disappearAge) continue;
 
-      const [qx, qy, qz, qw] = rotationAt(this.table, line.plateId, age);
+      const [qx, qy, qz, qw] = composeQuaternions(qRef, rotationAt(this.table, line.plateId, age));
       const p = line.points;
       const n = p.length / 3;
       const base = vw;

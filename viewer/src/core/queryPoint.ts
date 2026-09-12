@@ -78,6 +78,23 @@ export function monthProfile(
  * shared cache computeTimeSeries uses, so a session with both a Time Series
  * panel and an Anchored Point open on the same (model, variable,
  * resolution) fetches each Frame's bytes once, not twice.
+ *
+ * TRAP for a future caller: `layerOffset` below hardcodes `ndepth - 1` as
+ * "the Annual layer", which only holds for a manifest whose depth axis is a
+ * calendar (Month + Annual, prep_climate.py always appends Annual last).
+ * `bridge-valdes2021-ocean-depth` reuses that same "index range in
+ * disguise" trick for actual DEPTH instead (see Manifest.depth_labels_km's
+ * own doc comment in types.ts) -- there `ndepth - 1` is the DEEPEST level
+ * (5.19 km for that model), not a surface/annual value, and reading it
+ * silently returns whatever (likely no-data) sits at abyssal depth rather
+ * than erroring. Currently unreachable in this viewer only because
+ * ClimateInstance (this function's one caller) is itself restricted to
+ * `type === 'climate' | 'climate-monthly'` manifests before it ever reaches
+ * here (see climate/main.ts's model filter) -- ValdesInstance holds the
+ * ocean-depth manifest instead and never calls this function. Confirmed by
+ * a downstream project (SODP) hitting exactly this when it called
+ * ageSeries() against the ocean-depth manifest directly, got the no-data
+ * sentinel at a real ridge point, and traced it back to this line.
  */
 export async function ageSeries(
   cache: FrameByteCache, manifest: Manifest, variable: VariableInfo, at: LonLat,
@@ -114,6 +131,10 @@ export async function ageSeries(
  * that the cutoff applies uniformly, once, not per age, so a caller already
  * holding `point.beginAge` needs no per-entry outcome to act on it (e.g. to
  * show "no plate before X Ma" as a series boundary, not a gap inside it).
+ *
+ * Same `ndepth - 1` = "Annual layer" trap as ageSeries() above applies here
+ * too -- see its doc comment. Currently unreachable for the identical
+ * reason (ClimateInstance never holds an ocean-depth manifest).
  */
 export async function plateFrameAgeSeries(
   cache: FrameByteCache, manifest: Manifest, variable: VariableInfo,

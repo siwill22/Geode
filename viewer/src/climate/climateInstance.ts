@@ -24,6 +24,10 @@ import {
 import {
   FrameCache, loadManifest, loadMask2D, makeColormapTexture, nearestFrame, physicalToEncoded,
 } from '../core/volume';
+import {
+  conjugateQuaternion, referenceRotationAt, rotateVector, toRenderFrameRotation, type Quaternion,
+} from '../core/rotation';
+import type { PlateNameTable } from '../core/plateNames';
 import { ClimateUI, type ClimateViewState } from './climateUi';
 import type {
   ArchiveIndex, ColormapData, FrameInfo, Manifest, VariableInfo,
@@ -244,6 +248,7 @@ export class ClimateInstance {
     layer: 'climate', queryMode: 'plateFrame', variable: 'T', climateModelId: '', resolution: '', age: 0, month: 0,
     clipMin: 0, clipMax: 1, overlayOpacity: DEFAULT_OVERLAY_OPACITY, showWind: DEFAULT_WIND_VISIBLE,
     windStyle: DEFAULT_WIND_STYLE, windScale: DEFAULT_WIND_SCALE, windDensity: DEFAULT_WIND_DENSITY,
+    referencePlateId: 0,
   };
 
   /** Keyed by model id (not by ClimateLayer) -- 'climate' can now be backed
@@ -288,6 +293,22 @@ export class ClimateInstance {
    *  boot() once coastlines/wind actually exist, to re-apply whichever
    *  Projection was already active before they did. */
   private projectionMode: ProjectionMode = 'globe';
+  /** The current Reference Plate rotation, already converted to the render
+   *  frame (core/rotation.ts's toRenderFrameRotation) -- see CONTEXT.md's
+   *  Reference Plate entry and docs/adr/0030. Recomputed by
+   *  updateReferenceRotation() on every age change AND every explicit
+   *  setReferencePlate() call (it's a function of both). Identity whenever
+   *  view.referencePlateId is 0 or no rotation table is loaded at all. */
+  private qRefRender: Quaternion = [0, 0, 0, 1];
+  /** Tracks the LAST APPLIED Reference Plate, separately from
+   *  `view.referencePlateId` -- ClimateUI writes the new value straight into
+   *  `view` (the same object it's bound to) before firing onReferencePlate,
+   *  same as every other lil-gui-bound control here (see setLayer()'s
+   *  `activeLayer` doc comment for the identical reasoning). Guarding
+   *  setReferencePlate() against `view.referencePlateId` instead would
+   *  always be true by the time it runs and silently no-op every real
+   *  selection. */
+  private activeReferencePlateId = 0;
   /** Anchored Point (shift-click), see queryMonthProfileAt() -- a plain
    *  console.log first slice, see docs/plans/anchored-point-query.md. */
   private readonly queryRaycaster = new Raycaster();
@@ -421,6 +442,7 @@ export class ClimateInstance {
       onVariable: (id) => void this.setVariable(id),
       onResolution: (id) => void this.setResolution(id),
       onAge: (age) => { this.applyAge(age); this.hooks.onAgeChange?.(this, age); },
+      onReferencePlate: (id) => this.setReferencePlate(id),
       onMonth: (month) => { this.applyMonth(month); this.hooks.onMonthChange?.(this, month); },
       onClip: (lo, hi) => this.applyClip(lo, hi),
       onOverlayOpacity: (v) => this.setOverlayOpacity(v),
@@ -517,6 +539,7 @@ export class ClimateInstance {
       this.scene.add(this.coastlines.lines, this.coastlines.land);
       this.coastlines.setAge(0);
     }
+    this.ui.setReferencePlateAvailable(this.availableReferencePlateIds(), this.referencePlateNames());
 
     const shadeVar = paleogeography.variables.find((v) => v.id === HILLSHADE_VARIABLE_ID);
     this.hasOverlay = !!shadeVar;
@@ -630,13 +653,31 @@ export class ClimateInstance {
    * showTooltip() (a genuine hover follower), nothing here needs the raw
    * event coordinates, only `ndc` for the raycast itself.
    */
+  /** A raycast hit against `field.mesh` lands at the point currently
+   *  DISPLAYED on screen -- which, once Reference Plate rotates the whole
+   *  sphere's vertex placement (see core/material.ts's VERT shader), is no
+   *  longer the TRUE physical lon/lat (the raycaster tests the mesh's
+   *  actual CPU-side geometry, which a sphere's rotational symmetry makes
+   *  identical in shape before and after the shader's rotation -- so the hit
+   *  point IS exactly the visually-displayed 3D position, not the
+   *  unrotated one). Recovering the physical location the user actually
+   *  clicked on requires undoing that same rotation -- required by every
+   *  caller that resolves a click to a LonLat (Query Point, Plate-Frame
+   *  Point assignment, Tracked Particle seeding), or picking silently
+   *  answers for the wrong location the moment Reference Plate != 0. See
+   *  docs/adr/0030's "Required companion change". */
+  private hitToLonLat(x: number, y: number, z: number): LonLat {
+    const [ux, uy, uz] = rotateVector(conjugateQuaternion(this.qRefRender), x, y, z);
+    return vec3ToLonLat(ux, uy, uz);
+  }
+
   async queryMonthProfileAt(ndc: Vector2): Promise<void> {
     if (this.projectionMode !== 'globe') return;
 
     this.queryRaycaster.setFromCamera(ndc, this.camera);
     const hit = this.queryRaycaster.intersectObject(this.field.mesh, false)[0];
     if (!hit) return;
-    const at = vec3ToLonLat(hit.point.x, hit.point.y, hit.point.z);
+    const at = this.hitToLonLat(hit.point.x, hit.point.y, hit.point.z);
 
     this.activeAnchoredPoint = at;
     this.queryOpen = true;
@@ -725,7 +766,7 @@ export class ClimateInstance {
     this.queryRaycaster.setFromCamera(ndc, this.camera);
     const hit = this.queryRaycaster.intersectObject(this.field.mesh, false)[0];
     if (!hit) return;
-    const at = vec3ToLonLat(hit.point.x, hit.point.y, hit.point.z);
+    const at = this.hitToLonLat(hit.point.x, hit.point.y, hit.point.z);
     this.trackedParticles.add(at);
   }
 
@@ -772,7 +813,7 @@ export class ClimateInstance {
     this.queryRaycaster.setFromCamera(ndc, this.camera);
     const hit = this.queryRaycaster.intersectObject(this.field.mesh, false)[0];
     if (!hit) return;
-    const at = vec3ToLonLat(hit.point.x, hit.point.y, hit.point.z);
+    const at = this.hitToLonLat(hit.point.x, hit.point.y, hit.point.z);
 
     this.queryOpen = true;
 
@@ -810,7 +851,8 @@ export class ClimateInstance {
       this.queryMarker.visible = false;
       return;
     }
-    const [x, y, z] = lonLatToVec3(at.lon, at.lat, QUERY_MARKER_R);
+    const [x0, y0, z0] = lonLatToVec3(at.lon, at.lat, QUERY_MARKER_R);
+    const [x, y, z] = rotateVector(this.qRefRender, x0, y0, z0);
     this.queryMarker.position.set(x, y, z);
     this.queryMarkerActive = true;
     this.updateQueryMarkerVisibility(); // don't wait a frame to hide it if placed on the far side
@@ -1177,11 +1219,82 @@ export class ClimateInstance {
   applyAge(age: number): void {
     this.view.age = age;
     this.coastlines?.setAge(age);
+    this.updateReferenceRotation(); // qRefRender is age-dependent -- see its own doc comment
     void this.loadFrame(this.view.layer, age);
     if (this.hasOverlay) void this.loadOverlayFrame(age);
     if (this.hasWind) void this.loadWindFrame(age);
     this.ui.setAge(age);
     this.ui.setTimeSeriesAge(age);
+  }
+
+  /** Plate ids that actually have a rotation series in the currently-loaded
+   *  Reconstruction Model's table -- the only ids a Reference Plate choice
+   *  is ever restricted to (see docs/adr/0030). Empty when no coastline/
+   *  rotation data is loaded at all, which is also when the control itself
+   *  should be disabled -- see ClimateUI.setReferencePlateAvailable(). */
+  availableReferencePlateIds(): ReadonlySet<number> {
+    const table = this.deps.coastlineData?.table;
+    return table ? new Set(Object.keys(table.plates).map(Number)) : new Set();
+  }
+
+  /** Empty for a model whose source data carries no plate names at all
+   *  (e.g. Scotese, the one backing this viewer today) -- see
+   *  core/plateNames.ts's own doc comment. Sourced from `staticPolygonData`
+   *  (fetched alongside its rotation table from the SAME Reconstruction
+   *  Model manifest, see prep_plate_names.py), not `coastlineData` --
+   *  the two are still the same underlying plate id set/rotations either
+   *  way (ADR-0025). */
+  referencePlateNames(): PlateNameTable {
+    return this.deps.staticPolygonData?.plateNames ?? {};
+  }
+
+  /** See CONTEXT.md's Reference Plate entry and docs/adr/0030. Reanchors
+   *  coastlines (CPU-side, Coastlines.setReferencePlate) and every other
+   *  layer (raster, wind, Tracked Particle -- via updateReferenceRotation())
+   *  into `plateId`'s own frame. Wind Streak/Tracked Particle get an
+   *  explicit reset here (their own setReferenceRotation() deliberately
+   *  doesn't reset itself, since it also runs on every ordinary age tick --
+   *  see their own doc comments) since a plate CHANGE, unlike an age tick,
+   *  is exactly the discrete moment a clean break is the right call. */
+  setReferencePlate(plateId: number): void {
+    if (plateId === this.activeReferencePlateId) return;
+    this.activeReferencePlateId = plateId;
+    this.view.referencePlateId = plateId;
+    this.coastlines?.setReferencePlate(plateId);
+    this.updateReferenceRotation();
+    this.windStreaks.resetAll();
+    this.trackedParticles.clear();
+    this.repositionActiveMarker();
+  }
+
+  /** Recompute `qRefRender` from the current age + Reference Plate and
+   *  re-apply it everywhere a render-frame rotation is needed. A no-op
+   *  identity rotation whenever no rotation table is loaded (see
+   *  availableReferencePlateIds()) or view.referencePlateId is 0. */
+  private updateReferenceRotation(): void {
+    const table = this.deps.coastlineData?.table;
+    const qGeo = table ? referenceRotationAt(table, this.view.referencePlateId, this.view.age) : ([0, 0, 0, 1] as Quaternion);
+    this.qRefRender = toRenderFrameRotation(qGeo);
+    this.field.setReferenceRotation(this.qRefRender);
+    this.overlay.setReferenceRotation(this.qRefRender);
+    this.windStreaks.setReferenceRotation(this.qRefRender);
+    this.trackedParticles.setReferenceRotation(this.qRefRender);
+    if (this.hasWind) this.refreshWindGlyphs();
+  }
+
+  /** Reposition whichever query marker is currently active under the new
+   *  qRefRender -- called from setReferencePlate() only; an ordinary age
+   *  tick already reaches setQueryMarker() through loadFrame()'s own
+   *  refreshPlateFrameQuery()/refreshAnchoredQuery() chain, which runs
+   *  AFTER applyAge()'s synchronous updateReferenceRotation() call, so it
+   *  always sees the up-to-date rotation without needing this. */
+  private repositionActiveMarker(): void {
+    if (this.activePlateFramePoint) {
+      const table = this.deps.staticPolygonData?.table;
+      if (table) this.setQueryMarker(positionAt(this.activePlateFramePoint, table, this.view.age));
+    } else if (this.activeAnchoredPoint) {
+      this.setQueryMarker(this.activeAnchoredPoint);
+    }
   }
 
   setOverlayOpacity(v: number): void {
@@ -1382,6 +1495,7 @@ export class ClimateInstance {
     if (!plane) return;
     this.wind.update(
       plane.uData, plane.vData, plane.nlon, plane.nlat, this.windUVar, this.windVVar,
+      undefined, 1, this.qRefRender,
     );
   }
 

@@ -6,7 +6,10 @@ import {
 } from './constants';
 import { FLAT_EAST, lonLatToFlatVec3, type ProjectionMode } from './projection';
 import { texelIndex, texelToPhysical } from './volume';
+import { rotateVector, type Quaternion } from './rotation';
 import type { VariableInfo } from './types';
+
+const IDENTITY_QUAT: Quaternion = [0, 0, 0, 1];
 
 // Same clearance reasoning as windGlyphs.ts's GLYPH_R -- just clear of the
 // overlay sphere so there is no z-fighting concern.
@@ -115,6 +118,23 @@ export class WindStreaks {
   private activeCount = BASE_PARTICLES;
   private sizeScale = 1;
   private mode: ProjectionMode = 'globe';
+  /** Reference Plate rotation, already in the render frame (see
+   *  core/rotation.ts's toRenderFrameRotation, docs/adr/0030). Applied only
+   *  to `trail`'s stored RENDER positions (respawn()/advect()), never to
+   *  `lon`/`lat` (the advection STATE, which must stay physical -- the field
+   *  itself is never reconstructed, ADR-0001).
+   *
+   *  Updated via a plain assignment (setReferenceRotation()), NOT a forced
+   *  resetAll() -- this value is age-dependent (see referenceRotationAt()),
+   *  so it changes on every ordinary age-slider tick, not just when the
+   *  user picks a new Reference Plate. Forcing a full reset on every tick
+   *  would flicker-reset the whole streak animation while scrubbing; the
+   *  caller (ClimateInstance) is responsible for calling resetAll() itself
+   *  on the discrete "Reference Plate actually changed" action, where a
+   *  clean break is the right call (same "clear rather than mis-draw"
+   *  precedent as setProjection()) -- a small kink from gradual rotation
+   *  drift during scrubbing is far less noticeable than a reset every tick. */
+  private qRef: Quaternion = IDENTITY_QUAT;
   /** Seconds accumulated since the trail ring buffers last advanced to a
    *  fresh slot -- see update()'s `commit` flag and advect()'s doc comment
    *  for why this is decoupled from the per-frame advection step. */
@@ -179,6 +199,12 @@ export class WindStreaks {
     if (mode === this.mode) return;
     this.mode = mode;
     this.resetAll();
+  }
+
+  /** See `qRef`'s own doc comment -- no reset here; call resetAll()
+   *  separately for a discrete Reference Plate change. */
+  setReferenceRotation(q: Quaternion): void {
+    this.qRef = q;
   }
 
   /** Respawn every active particle at a fresh random position -- used when
@@ -250,9 +276,10 @@ export class WindStreaks {
       : PARTICLE_LIFETIME_S * (0.7 + 0.6 * Math.random());
     this.speed[p] = 0;
 
-    const [x, y, z] = this.mode === 'globe'
+    const [x0, y0, z0] = this.mode === 'globe'
       ? lonLatToVec3(lon, lat, RIBBON_R)
       : lonLatToFlatVec3(lon, lat, FLAT_RIBBON_Z);
+    const [x, y, z] = rotateVector(this.qRef, x0, y0, z0);
     for (let k = 0; k < TRAIL_LEN; k++) {
       const base = (p * TRAIL_LEN + k) * 3;
       this.trail[base] = x; this.trail[base + 1] = y; this.trail[base + 2] = z;
@@ -410,8 +437,9 @@ export class WindStreaks {
     // and its call site.
     const c = commit ? (this.cursor[p] + 1) % TRAIL_LEN : this.cursor[p];
     this.cursor[p] = c;
+    const [rx, ry, rz] = rotateVector(this.qRef, nx, ny, nz);
     const base = (p * TRAIL_LEN + c) * 3;
-    this.trail[base] = nx; this.trail[base + 1] = ny; this.trail[base + 2] = nz;
+    this.trail[base] = rx; this.trail[base + 1] = ry; this.trail[base + 2] = rz;
     return false;
   }
 

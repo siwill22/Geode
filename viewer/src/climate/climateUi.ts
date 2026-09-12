@@ -4,6 +4,7 @@ import {
 } from './climateInstance';
 import { clampClipOrder, clipSliderStep } from '../core/clipRange';
 import { classNameFor } from '../core/volume';
+import { findReferencePlateMatches, type PlateNameTable } from '../core/plateNames';
 import type { Rect } from '../core/layout';
 import type { LonLat } from '../core/constants';
 import type { CellSample } from '../core/queryPoint';
@@ -36,6 +37,10 @@ export interface ClimateViewState {
   windStyle: WindStyle;
   windScale: number;
   windDensity: number;
+  /** Which plate the whole view reanchors around -- see CONTEXT.md's
+   *  Reference Plate entry, docs/adr/0030 and ClimateInstance.setReferencePlate().
+   *  0 (the prep-time anchor) is the default and means "no reanchoring". */
+  referencePlateId: number;
 }
 
 export interface ClimateUICallbacks {
@@ -46,6 +51,9 @@ export interface ClimateUICallbacks {
   onResolution(id: string): void;
   onAge(age: number): void;
   onMonth(month: number): void;
+  /** A Reference Plate was picked (or cleared, id 0) via the autocomplete
+   *  control -- see CONTEXT.md's Reference Plate entry. */
+  onReferencePlate(plateId: number): void;
   onClip(lo: number, hi: number): void;
   onOverlayOpacity(v: number): void;
   onShowWind(v: boolean): void;
@@ -84,6 +92,10 @@ const MONTH_NAMES = [
 // line against, still clearly the panel's secondary chart next to Month
 // Profile's own 72px.
 const AGE_SERIES_CANVAS_HEIGHT = 80;
+// Unique <datalist> id per ClimateUI instance -- Multi-Globe can have
+// several, and a shared id would make every instance's autocomplete list
+// the same DOM node.
+let referencePlateControlCount = 0;
 
 /**
  * A deliberately small panel: layer choice, variable choice, age, month
@@ -98,6 +110,24 @@ export class ClimateUI {
   readonly gui: GUI;
   private layerCtrl: Controller;
   private queryModeCtrl: Controller;
+  /** Text input with native `<datalist>` autocomplete for Reference Plate --
+   *  not a lil-gui controller (lil-gui has no autocomplete widget), same
+   *  "native input for a control lil-gui can't express" precedent as
+   *  ageSlider. See buildReferencePlateControl(). */
+  private referencePlateInput: HTMLInputElement;
+  private referencePlateDatalist: HTMLDataListElement;
+  /** Plate ids with a rotation series in the currently-loaded Reconstruction
+   *  Model -- populated by setReferencePlateAvailable(), called once
+   *  coastlineData is known (see ClimateInstance.boot()). Empty (and the
+   *  control disabled) whenever no rotation table is loaded at all -- see
+   *  CONTEXT.md's Reference Plate entry. */
+  private availablePlateIds: ReadonlySet<number> = new Set();
+  /** This Reconstruction Model's plate id -> name lookup -- see
+   *  core/plateNames.ts's own doc comment. Empty for a model with no name
+   *  data at all (e.g. Scotese), in which case the autocomplete only ever
+   *  matches by numeric id (see findReferencePlateMatches()'s numeric
+   *  branch) -- never a guessed name. */
+  private plateNames: PlateNameTable = {};
   private climateModelCtrl: Controller;
   private resolutionCtrl: Controller;
   private variableCtrl: Controller;
@@ -262,6 +292,7 @@ export class ClimateUI {
       .add(this.state, 'queryMode', { 'Plate-Frame': 'plateFrame', Anchored: 'anchored' })
       .name('query mode')
       .onChange((v: QueryMode) => cb.onQueryMode(v));
+    [this.referencePlateInput, this.referencePlateDatalist] = this.buildReferencePlateControl();
     // Options populated once boot() knows every registered climate-type
     // model -- see setClimateModels(). Layer-gated (unlike resolutionCtrl
     // below): which CLIMATE model is selected is meaningless while
@@ -466,6 +497,132 @@ export class ClimateUI {
     // fewer piece of "has this already happened" state to keep in sync
     // between the two classes for the same underlying fact.
     if (this.timeSeriesExpanded) this.cb.onExpandTimeSeries();
+  }
+
+  /** Native text input + `<datalist>` autocomplete for Reference Plate,
+   *  inserted as its own row right after the query-mode dropdown -- lil-gui
+   *  has no autocomplete widget, so this bypasses it entirely (same
+   *  precedent as ageSlider). Disabled until setReferencePlateAvailable()
+   *  supplies a non-empty id set -- see CONTEXT.md's Reference Plate entry:
+   *  with no rotation table loaded, there's nothing to reanchor against. */
+  private buildReferencePlateControl(): [HTMLInputElement, HTMLDataListElement] {
+    const row = document.createElement('div');
+    row.className = 'controller string';
+    const label = document.createElement('div');
+    label.className = 'name';
+    label.textContent = 'reference plate';
+    const widget = document.createElement('div');
+    widget.className = 'widget';
+
+    const listId = `geode-reference-plate-${referencePlateControlCount++}`;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.setAttribute('list', listId);
+    input.placeholder = '0 (default)';
+    input.disabled = true;
+    Object.assign(input.style, { width: '100%', boxSizing: 'border-box' });
+
+    const datalist = document.createElement('datalist');
+    datalist.id = listId;
+
+    widget.append(input, datalist);
+    row.append(label, widget);
+    this.queryModeCtrl.domElement.insertAdjacentElement('afterend', row);
+
+    input.addEventListener('input', () => this.refreshReferencePlateOptions(input.value));
+    input.addEventListener('change', () => this.commitReferencePlateInput(input));
+    return [input, datalist];
+  }
+
+  /** Candidates matching whatever's typed so far -- see
+   *  core/plateNames.ts's findReferencePlateMatches(). Rebuilt on every
+   *  keystroke. `option.value` is the BARE numeric id, not "Name (id)" --
+   *  selecting a suggestion (click or keyboard) sets the input's value to
+   *  `option.value` alone, so a selection always lands on
+   *  commitReferencePlateInput()'s already-correct numeric branch. Putting
+   *  the id+name combo in `option.value` instead was tried first and was
+   *  broken: selecting it re-fired the 'input' handler with that full
+   *  "Name (id)" string as the next query, which matches nothing (names
+   *  don't contain the "(id)" suffix), silently discarding the selection --
+   *  see the postmortem in docs/plans/reference-plate.md. `option.label` is
+   *  the friendly display text (id alongside name, so a wrong name-table
+   *  mapping is visible at selection time, not just after committing). */
+  private refreshReferencePlateOptions(query: string): void {
+    const matches = findReferencePlateMatches(query, this.availablePlateIds, this.plateNames);
+    this.referencePlateDatalist.replaceChildren(
+      ...matches.map((m) => {
+        const opt = document.createElement('option');
+        opt.value = String(m.plateId);
+        opt.label = `${m.name} (${m.plateId})`;
+        return opt;
+      }),
+    );
+  }
+
+  /** Resolve the input's current text to a plate id and, if valid, tell
+   *  ClimateInstance -- accepts a bare numeric id (checked against
+   *  `availablePlateIds`, see docs/adr/0030's plate-coverage rule; this is
+   *  also what a datalist selection resolves to, see
+   *  refreshReferencePlateOptions()'s doc comment), a typed-out exact name,
+   *  or an empty string (0, the default/no-op). Anything else reverts the
+   *  input to the last-known-good label rather than silently accepting an
+   *  unresolvable plate. */
+  private commitReferencePlateInput(input: HTMLInputElement): void {
+    const raw = input.value.trim();
+    let id: number | null = null;
+    if (raw === '') {
+      id = 0;
+    } else if (/^\d+$/.test(raw) && this.availablePlateIds.has(Number(raw))) {
+      id = Number(raw);
+    } else {
+      // Typed a name out by hand rather than selecting a suggestion. Only
+      // accepts an UNAMBIGUOUS exact name match (case-insensitive) -- a
+      // partial/ambiguous typed string with no dropdown selection is not
+      // guessed at.
+      const exact = findReferencePlateMatches(raw, this.availablePlateIds, this.plateNames)
+        .filter((m) => m.name.toLowerCase() === raw.toLowerCase());
+      if (exact.length === 1) id = exact[0].plateId;
+    }
+
+    if (id === null) {
+      input.value = this.referencePlateLabel(this.state.referencePlateId);
+      return;
+    }
+    this.state.referencePlateId = id;
+    input.value = id === 0 ? '' : this.referencePlateLabel(id);
+    this.cb.onReferencePlate(id);
+  }
+
+  /** Includes the bare id alongside the name (e.g. "Antarctica (802)") --
+   *  deliberately, not just cosmetic: even a generated, per-model name
+   *  table (see core/plateNames.ts's own doc comment) could still be wrong
+   *  in a way nobody's checked yet, so showing the id a selection actually
+   *  resolved to makes that visible/reportable instead of silently
+   *  trusted. Falls back to a bare "Plate N" for a model with no name data
+   *  at all (e.g. Scotese) -- never a guessed name. */
+  private referencePlateLabel(id: number): string {
+    const match = findReferencePlateMatches(String(id), new Set([id]), this.plateNames)[0];
+    return match ? `${match.name} (${id})` : `Plate ${id}`;
+  }
+
+  /** Which plate ids the currently-loaded Reconstruction Model actually has
+   *  a rotation series for, and its plate-name lookup (empty for a model
+   *  with no name data at all, e.g. Scotese -- see
+   *  ClimateInstance.availableReferencePlateIds()/referencePlateNames()).
+   *  An empty `ids` disables the control entirely (see CONTEXT.md's
+   *  Reference Plate entry: "no rotation table loaded" -> disabled); an
+   *  empty `names` just means the autocomplete only ever matches by
+   *  numeric id, never a guessed name. */
+  setReferencePlateAvailable(ids: ReadonlySet<number>, names: PlateNameTable): void {
+    this.availablePlateIds = ids;
+    this.plateNames = names;
+    this.referencePlateInput.disabled = ids.size === 0;
+    this.referencePlateInput.placeholder = Object.keys(names).length === 0
+      ? '0 (default) -- plate id only, no names for this model'
+      : '0 (default)';
+    this.referencePlateInput.title = ids.size === 0
+      ? 'unavailable -- this model has no rotation data loaded'
+      : '';
   }
 
   /** Bound by the manifest's own frame range (0-540 Ma) -- NOT

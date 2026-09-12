@@ -1,7 +1,10 @@
 import { Mesh, ShaderMaterial, FrontSide } from 'three';
-import { createVolumeSurfaceMaterial, setMaskMode, setProjectionMode } from './material';
+import {
+  createVolumeSurfaceMaterial, setMaskMode, setProjectionMode, setReferenceRotation,
+} from './material';
 import { R_SURFACE } from './constants';
 import { createSurfaceGeometry, type ProjectionMode } from './projection';
+import type { Quaternion } from './rotation';
 import type { Manifest } from './types';
 
 export interface DepthSliceState {
@@ -160,6 +163,13 @@ export class DepthSlice {
 
   setDepthKm(km: number): void {
     this.mat.uniforms.uSliceDepthKm.value = km;
+  }
+
+  /** See CONTEXT.md's Reference Plate entry and docs/adr/0030 -- `q` must
+   *  already be a render-frame quaternion (core/rotation.ts's
+   *  toRenderFrameRotation()). */
+  setReferenceRotation(q: Quaternion): void {
+    setReferenceRotation(this.mat, q);
   }
 
   /** Rebuild this surface's geometry for `mode` and flip the shader's

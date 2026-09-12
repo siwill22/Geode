@@ -64,3 +64,67 @@ export function rotateVector(
 export function conjugateQuaternion(q: Quaternion): Quaternion {
   return [-q[0], -q[1], -q[2], q[3]];
 }
+
+/** Compose two rotations: the result of applying `a` THEN `b` (v' =
+ *  b*(a*v*a^-1)*b^-1) is rotateVector(composeQuaternions(b, a), v). Order
+ *  matters -- the rotation applied SECOND is the first argument, standard
+ *  Hamilton-product convention. */
+export function composeQuaternions(b: Quaternion, a: Quaternion): Quaternion {
+  const [bx, by, bz, bw] = b;
+  const [ax, ay, az, aw] = a;
+  return [
+    bw * ax + bx * aw + by * az - bz * ay,
+    bw * ay - bx * az + by * aw + bz * ax,
+    bw * az + bx * ay - by * ax + bz * aw,
+    bw * aw - bx * ax - by * ay - bz * az,
+  ];
+}
+
+/**
+ * See CONTEXT.md's Reference Plate entry and docs/adr/0030.
+ *
+ * Reanchoring the view into `referencePlateId`'s own frame is a single
+ * rotation: the inverse of that plate's own rotationAt() at the same age,
+ * composed ON TOP of whatever rotation a layer already applies to its own
+ * present-day geometry. Identity at age 0 by construction (rotationAt is
+ * identity for every plate there), so choosing a Reference Plate never moves
+ * anything at the present day -- only deeper time is affected.
+ */
+export function referenceRotationAt(
+  table: RotationTable, referencePlateId: number, age: number,
+): Quaternion {
+  if (referencePlateId === 0) return [0, 0, 0, 1]; // common case, skip the lookup+conjugate
+  return conjugateQuaternion(rotationAt(table, referencePlateId, age));
+}
+
+/**
+ * Fixed change-of-basis from the geographic frame (X to 0N/0E, Y to 0N/90E,
+ * Z to the pole -- what RotationTable's quaternions and rotateVector() act
+ * in) to the viewer's render frame (X, Z, -Y of geographic -- see
+ * constants.ts). A rotation of -90 degrees about the geographic X axis:
+ * render = (geoX, geoZ, -geoY) is exactly what that rotation produces.
+ *
+ * Exists so a rotation computed in the geographic frame (referenceRotationAt,
+ * sourced from a RotationTable) can be applied directly to vectors that are
+ * ALREADY in render-frame coordinates -- lonLatToVec3()'s output, used
+ * throughout core/windGlyphs.ts, core/windStreaks.ts, core/trackedParticles.ts
+ * and the volume/raster shaders -- without converting each vector to the
+ * geographic frame and back. See toRenderFrameRotation().
+ */
+const GEOGRAPHIC_TO_RENDER_FRAME: Quaternion = [-Math.SQRT1_2, 0, 0, Math.SQRT1_2];
+
+/**
+ * Re-express a geographic-frame rotation (e.g. from referenceRotationAt) as
+ * the equivalent rotation in render-frame coordinates, via similarity
+ * transform: renderQ = F * geoQ * F^-1, where F is
+ * GEOGRAPHIC_TO_RENDER_FRAME. rotateVector(toRenderFrameRotation(q), v) on a
+ * render-frame v then gives the same physical rotation rotateVector(q, ...)
+ * would give on the equivalent geographic-frame vector -- computed once per
+ * age/Reference-Plate change, not per vertex.
+ */
+export function toRenderFrameRotation(q: Quaternion): Quaternion {
+  return composeQuaternions(
+    composeQuaternions(GEOGRAPHIC_TO_RENDER_FRAME, q),
+    conjugateQuaternion(GEOGRAPHIC_TO_RENDER_FRAME),
+  );
+}

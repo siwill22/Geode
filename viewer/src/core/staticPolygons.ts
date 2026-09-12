@@ -2,6 +2,7 @@ import type { LonLat } from './constants';
 import { fetchVolumeBytes } from './volume';
 import { rotationAt, rotateVector, conjugateQuaternion } from './rotation';
 import { loadReconstructionManifest, reconstructionAssetPath } from './reconstructions';
+import { fetchPlateNames, type PlateNameTable } from './plateNames';
 import type { ArchiveIndex, RotationTable, StaticPolygon } from './types';
 
 /** Parse staticpolygons/geometry.bin (see prep_staticpolygons.py for the
@@ -41,24 +42,33 @@ export function parseStaticPolygons(buf: ArrayBuffer): StaticPolygon[] {
 export interface StaticPolygonData {
   polygons: StaticPolygon[];
   table: RotationTable;
+  /** Empty for a model whose source data carries no plate names at all
+   *  (e.g. Scotese) -- see CONTEXT.md's Reference Plate entry and
+   *  prep_plate_names.py. Bundled here (not fetched separately) since it
+   *  comes from the same Reconstruction Model manifest as the rest of this
+   *  data, fetched in the same step. */
+  plateNames: PlateNameTable;
 }
 
 /** Fetch and parse static-polygon geometry plus the rotation table it shares
  *  with the same Reconstruction Model's coastlines (see
  *  prep_reconstruction.py -- plate ids from both sources are unioned before
- *  that file is written, so every plate id here has a rotation). */
+ *  that file is written, so every plate id here has a rotation). Also
+ *  fetches the Reference Plate name lookup, if this model has one --
+ *  `plateNamesPath` is undefined whenever has_plate_names was false. */
 export async function fetchStaticPolygonData(
-  base: string, geometryPath: string, rotationsPath: string,
+  base: string, geometryPath: string, rotationsPath: string, plateNamesPath?: string,
 ): Promise<StaticPolygonData> {
-  const [gBytes, rBytes] = await Promise.all([
+  const [gBytes, rBytes, plateNames] = await Promise.all([
     fetchVolumeBytes(`${base}/${geometryPath}`),
     fetchVolumeBytes(`${base}/${rotationsPath}`),
+    fetchPlateNames(base, plateNamesPath),
   ]);
   const polygons = parseStaticPolygons(
     gBytes.buffer.slice(gBytes.byteOffset, gBytes.byteOffset + gBytes.byteLength) as ArrayBuffer,
   );
   const table: RotationTable = JSON.parse(new TextDecoder().decode(rBytes));
-  return { polygons, table };
+  return { polygons, table, plateNames };
 }
 
 /**
@@ -109,6 +119,9 @@ export async function loadStaticPolygonDataFor(
     base,
     reconstructionAssetPath(rm, rm.static_polygons.geometry),
     reconstructionAssetPath(rm, rm.static_polygons.rotations),
+    rm.static_polygons.plate_names
+      ? reconstructionAssetPath(rm, rm.static_polygons.plate_names)
+      : undefined,
   );
 }
 

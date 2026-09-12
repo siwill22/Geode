@@ -186,6 +186,12 @@ export interface CoastlineSet {
 export interface StaticPolygonSet {
   geometry: string;
   rotations: string;
+  /** Present only if the model's own has_plate_names is true -- see
+   *  prep_plate_names.py and CONTEXT.md's Reference Plate entry. Not every
+   *  model's source data carries plate names at all (Scotese's shapefile
+   *  has none, checked directly), so this is genuinely absent sometimes,
+   *  never an empty/guessed fallback. */
+  plate_names?: string;
 }
 
 export interface ArchiveIndex {
@@ -248,6 +254,12 @@ export interface ReconstructionEntry {
    *  see ReconstructionManifest and docs/adr/0025. Independent of
    *  has_boundaries (docs/adr/0024): never derive one from the other. */
   has_static_polygons: boolean;
+  /** Mirrors the same Reconstruction Model's own manifest.json field -- see
+   *  ReconstructionManifest and CONTEXT.md's Reference Plate entry.
+   *  Independent of has_static_polygons: a model can have static polygons
+   *  with no name data in them at all (Scotese's source shapefile has
+   *  none, checked directly -- see prep_plate_names.py). */
+  has_plate_names: boolean;
 }
 
 /** A Reconstruction Model's own manifest.json (path from

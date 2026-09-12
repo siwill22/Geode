@@ -77,5 +77,18 @@ vec3 volumeUVW(vec2 ll, float depthKm, float depthMin, float depthMax, vec3 grid
   );
 }
 
+/**
+ * Rotate a vector by a unit quaternion -- v' = q*v*q^-1, expanded. The GLSL
+ * twin of core/rotation.ts's rotateVector(), for the Reference Plate
+ * rotation applied per-vertex (see core/material.ts's VERT shader and
+ * docs/adr/0030). q must already be in whatever frame v is in -- see
+ * toRenderFrameRotation() on the JS side, which is what every uRefQuat
+ * uniform is set from.
+ */
+vec3 rotateByQuat(vec4 q, vec3 v) {
+  vec3 t = 2.0 * cross(q.xyz, v);
+  return v + q.w * t + cross(q.xyz, t);
+}
+
 #endif
 `;

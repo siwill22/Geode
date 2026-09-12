@@ -255,6 +255,52 @@ More Projections
 (Robinson, Mollweide, Spilhaus) are expected later; Plate Carrée is the
 first.
 
+## Reference Plate
+
+Which plate is held fixed as Reconstruction Age changes — every other layer
+in the view (coastlines, static polygons, Boundary Frames, VGPs, the Volume
+raster, Vector Field glyphs/streaks, Tracked Particles) rotates relative to
+it instead. A view setting, not a data setting — it changes how the view is
+oriented, not what is being shown, the same distinction Projection already
+draws.
+
+Distinct from two existing, easily-confused concepts. It is not the
+prep-time `anchor_plate_id` pygplates parameter every Reconstruction
+Model's rotation table is exported with (see ADR-0001, ADR-0004) — that
+stays fixed at 0, invariant, and never becomes user-facing; Reference Plate
+is a further rotation layered on top of that fixed export at view time, the
+same way Reconstruction Age is a view setting layered on top of a Model's
+own Frames. Nor is it Anchored Point, which fixes a *grid cell* in a
+Volume's own frame — Reference Plate fixes a *plate*, with plate machinery
+fully involved.
+
+Computed as a single rotation at the LonLat level —
+`applyReferencePlate(lon, lat, quaternion) -> (lon', lat')`, from the same
+rotation table (ADR-0001) that already drives coastlines and Plate-Frame
+Point — and applied wherever any layer turns a LonLat into a render
+position, in both Globe and Plate Carrée alike (see docs/adr/0030). Choices
+are restricted to plate ids that already have a rotation series in the
+current Reconstruction Model's table — the same ids coastlines/static
+polygons already carry — so a Reference Plate is always answerable from
+data already on the client, never a plate id invented or looked up
+separately.
+
+Default is plate 0, matching the prep-time anchor. Holds its last valid
+rotation, with a warning, rather than snapping to identity, when the
+current Reconstruction Age falls outside the chosen plate's own defined
+range. Switching Reconstruction Model keeps the same plate id if it's valid
+in the new model, else resets to 0 — a plate id has no guaranteed meaning
+across Reconstruction Models, including its NAME: the autocomplete's name
+table is generated per Reconstruction Model at prep time from that model's
+own source data, not a shared hand-curated list (see docs/adr/0031) — a
+model whose source data carries no plate names at all (Scotese) offers
+bare numeric plate-id entry only, never an invented name. A Synced Field
+(see below), with its own
+independent sync toggle.
+
+See docs/adr/0030 and docs/plans/reference-plate.md for the full resolved
+design.
+
 ## Multi-Globe
 
 Two or more globe instances tiled on one shared canvas and camera, so
@@ -272,7 +318,9 @@ docs/adr/0022).
 
 Which of a globe instance's own state, in a Multi-Globe layout, broadcasts
 to every other instance when a "sync" toggle is on, versus stays
-independent by default. Reconstruction Age is the canonical Synced Field. A
+independent by default. Reconstruction Age is the canonical Synced Field;
+Reference Plate is a second, each with its own independent toggle so age and
+reference plate can be synced separately. A
 field that defines what is being compared — Layer, Variable, Model or
 Reconstruction Model choice — is never syncable: the point of a second
 globe is as much "show something different at the same age" as "show the

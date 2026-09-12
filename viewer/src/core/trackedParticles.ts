@@ -5,7 +5,10 @@ import {
   EARTH_RADIUS_KM, R_SURFACE, eastNorthAt, lonLatToVec3, vec3ToLonLat, type LonLat,
 } from './constants';
 import { texelIndex, texelToPhysical } from './volume';
+import { rotateVector, type Quaternion } from './rotation';
 import type { VariableInfo } from './types';
+
+const IDENTITY_QUAT: Quaternion = [0, 0, 0, 1];
 
 // Same clearance reasoning as windStreaks.ts's RIBBON_R, at a slightly
 // different radius so a tracked path never z-fights the ambient ribbon
@@ -79,9 +82,30 @@ interface Particle {
 export class TrackedParticles {
   readonly group = new Object3D();
   private readonly particles: Particle[] = [];
+  /** Reference Plate rotation, already in the render frame (see
+   *  core/rotation.ts's toRenderFrameRotation, docs/adr/0030). Applied to
+   *  each particle's rendered position, never to `lon`/`lat` (the advection
+   *  STATE sampled against the live Vector Field, which must stay physical).
+   *
+   *  Updated via a plain assignment, NOT a forced clear() -- this value is
+   *  age-dependent, so it changes on every ordinary age-slider tick, not
+   *  just when the user picks a new Reference Plate (see
+   *  WindStreaks.qRef's identical reasoning). A particle's history recorded
+   *  before a Reference Plate change keeps whatever rotation was in effect
+   *  when each point was appended; only NEW points use the latest rotation.
+   *  Acceptable for a still-undiscoverable feature (see the class doc
+   *  comment) -- the caller can clear() explicitly on the discrete
+   *  "Reference Plate actually changed" action if the resulting kink proves
+   *  objectionable in practice. */
+  private qRef: Quaternion = IDENTITY_QUAT;
 
   setVisible(v: boolean): void {
     this.group.visible = v;
+  }
+
+  /** See `qRef`'s own doc comment -- no clear() here. */
+  setReferenceRotation(q: Quaternion): void {
+    this.qRef = q;
   }
 
   get count(): number { return this.particles.length; }
@@ -92,7 +116,8 @@ export class TrackedParticles {
   add(at: LonLat): void {
     const positions = new Float32Array(MAX_PATH_POINTS * 3);
     const colors = new Float32Array(MAX_PATH_POINTS * 3);
-    const [x, y, z] = lonLatToVec3(at.lon, at.lat, PATH_R);
+    const [x0, y0, z0] = lonLatToVec3(at.lon, at.lat, PATH_R);
+    const [x, y, z] = rotateVector(this.qRef, x0, y0, z0);
     positions[0] = x; positions[1] = y; positions[2] = z;
     colors[0] = CALM_COLOR.r; colors[1] = CALM_COLOR.g; colors[2] = CALM_COLOR.b;
 
@@ -177,7 +202,8 @@ export class TrackedParticles {
       const next = vec3ToLonLat(nx, ny, nz);
       p.lon = next.lon;
       p.lat = next.lat;
-      this.appendPoint(p, nx, ny, nz, speed);
+      const [rx, ry, rz] = rotateVector(this.qRef, nx, ny, nz);
+      this.appendPoint(p, rx, ry, rz, speed);
     }
   }
 

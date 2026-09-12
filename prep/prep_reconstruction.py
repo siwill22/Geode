@@ -45,6 +45,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent))
 from prep_coastlines import export_geometry, export_rotations  # noqa: E402
 from prep_staticpolygons import export_static_polygons  # noqa: E402
+from prep_plate_names import export_plate_names  # noqa: E402
 
 DEEP_TIME_MAP_PY = Path(__file__).parent.parent / "viewer" / "vendor" / "deep-time-map" / "python"
 sys.path.insert(0, str(DEEP_TIME_MAP_PY))
@@ -107,6 +108,7 @@ def main():
     plate_ids, line_counts = export_geometry(
         geometry_files, out / "coastlines" / "geometry.bin", args.fill_spacing_deg)
 
+    has_plate_names = False
     if has_static_polygons:
         static_plate_ids, static_counts = export_static_polygons(
             args.model, m.static_polygon_files, out / "staticpolygons" / "geometry.bin")
@@ -114,6 +116,13 @@ def main():
         for pid, (n, npts) in static_counts.items():
             ln, lp = line_counts.get(pid, (0, 0))
             line_counts[pid] = (ln + n, lp + npts)
+
+        # Same source feature collection static polygons already came from --
+        # see prep_plate_names.py. Absent (not an empty file) when that
+        # source carries no name data at all (e.g. Scotese).
+        plate_names = export_plate_names(
+            m.static_polygon_files, out / "staticpolygons" / "plate_names.json")
+        has_plate_names = plate_names is not None
 
     ages = np.arange(args.age_min, args.age_max + args.age_step / 2, args.age_step)
     export_rotations(rotation_files, plate_ids, ages, args.anchor,
@@ -152,6 +161,9 @@ def main():
             # plate ids from both sources were unioned before it was written.
             "rotations": "coastlines/rotations.json",
         }
+        manifest["has_plate_names"] = has_plate_names
+        if has_plate_names:
+            manifest["static_polygons"]["plate_names"] = "staticpolygons/plate_names.json"
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2))
     print(f"\nwrote {out}/manifest.json")
 

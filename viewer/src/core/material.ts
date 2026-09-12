@@ -21,10 +21,21 @@ export function passthroughColor(hex: number): Color {
 }
 
 const VERT = /* glsl */ `
-varying vec3 vWorldPos;
+${GEOGRAPHIC_GLSL}
+
+uniform vec4 uRefQuat;
+varying vec3 vGeoPos;
+
 void main() {
-  vec4 wp = modelMatrix * vec4(position, 1.0);
-  vWorldPos = wp.xyz;
+  // vGeoPos: this vertex's TRUE, unrotated position -- what the fragment
+  // shader samples the volume/mask against, always. gl_Position: this
+  // vertex's REFERENCE-PLATE-ROTATED position -- where it actually renders.
+  // Reanchoring the view must not reanchor the DATA (see docs/adr/0030 and
+  // ADR-0001: a volume is never reconstructed), only where it's drawn --
+  // splitting these here is what keeps that true.
+  vGeoPos = (modelMatrix * vec4(position, 1.0)).xyz;
+  vec3 rotated = rotateByQuat(uRefQuat, position);
+  vec4 wp = modelMatrix * vec4(rotated, 1.0);
   gl_Position = projectionMatrix * viewMatrix * wp;
 }
 `;
@@ -64,10 +75,10 @@ uniform float uSteps;   // 0 = continuous ramp, else this many discrete bands
 uniform float uDebug;   // 0 off, 1 pDep, 2 lat, 3 raw sample
 uniform float uProjectionMode; // 0 = globe (sphere), 1 = plate carree (flat plane) -- see core/projection.ts
 
-varying vec3 vWorldPos;
+varying vec3 vGeoPos;
 
 void main() {
-  vec2 ll = uProjectionMode > 0.5 ? worldToGeographicFlat(vWorldPos) : worldToGeographic(vWorldPos);
+  vec2 ll = uProjectionMode > 0.5 ? worldToGeographicFlat(vGeoPos) : worldToGeographic(vGeoPos);
 
   if (uUseMask != 0.0) {
     float m = texture(uMask, geographicToUV(ll)).r;
@@ -107,7 +118,7 @@ void main() {
   // where the fragment sits in space -- see depthSlice.ts. Every other
   // volume surface (wall, floor) leaves uUseSliceDepth at 0 and this reduces
   // to the original line.
-  float depth = uUseSliceDepth > 0.5 ? uSliceDepthKm : worldDepthKm(vWorldPos);
+  float depth = uUseSliceDepth > 0.5 ? uSliceDepthKm : worldDepthKm(vGeoPos);
 
   // Outside the model's valid depth range: say so, don't fabricate. The half
   // kilometre of slack matters: the floor cap is placed exactly at the base of
@@ -204,8 +215,17 @@ export function createVolumeSurfaceMaterial(): ShaderMaterial {
       uSteps: { value: 0 },
       uDebug: { value: 0 },
       uProjectionMode: { value: 0 },
+      uRefQuat: { value: [0, 0, 0, 1] },
     },
   });
+}
+
+/** Set this material's Reference Plate rotation -- `q` must already be a
+ *  RENDER-frame quaternion (core/rotation.ts's toRenderFrameRotation()), not
+ *  the raw geographic-frame one referenceRotationAt() returns. See
+ *  docs/adr/0030. */
+export function setReferenceRotation(mat: ShaderMaterial, q: readonly [number, number, number, number]): void {
+  mat.uniforms.uRefQuat.value = q;
 }
 
 /** Switch this material's worldToGeographic branch -- see core/projection.ts.
