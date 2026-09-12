@@ -507,12 +507,17 @@ export class ClimateUI {
    *  with no rotation table loaded, there's nothing to reanchor against. */
   private buildReferencePlateControl(): [HTMLInputElement, HTMLDataListElement] {
     const row = document.createElement('div');
-    row.className = 'controller string';
+    // lil-gui's own controller classes, NOT a made-up "controller"/"name"/
+    // "widget" -- lil-gui prefixes all of its CSS with "lil-" (see its own
+    // Controller constructor), so anything else silently matches no rule at
+    // all and falls back to plain block layout (label stacked above the
+    // widget instead of beside it, the exact bug this fixes).
+    row.className = 'lil-controller lil-string';
     const label = document.createElement('div');
-    label.className = 'name';
+    label.className = 'lil-name';
     label.textContent = 'reference plate';
     const widget = document.createElement('div');
-    widget.className = 'widget';
+    widget.className = 'lil-widget';
 
     const listId = `geode-reference-plate-${referencePlateControlCount++}`;
     const input = document.createElement('input');
@@ -531,6 +536,16 @@ export class ClimateUI {
 
     input.addEventListener('input', () => this.refreshReferencePlateOptions(input.value));
     input.addEventListener('change', () => this.commitReferencePlateInput(input));
+    // Select the existing text so typing immediately replaces it (the
+    // standard combobox convention) instead of requiring a manual delete
+    // first, and refresh the dropdown for an EMPTY query -- not whatever
+    // decorated "Name (id)" label is currently displayed, which matches
+    // nothing (see refreshReferencePlateOptions()'s own doc comment) and
+    // would hide the "0 (default)" entry the moment something else is set.
+    input.addEventListener('focus', () => {
+      input.select();
+      this.refreshReferencePlateOptions('');
+    });
     return [input, datalist];
   }
 
@@ -566,11 +581,15 @@ export class ClimateUI {
    *  refreshReferencePlateOptions()'s doc comment), a typed-out exact name,
    *  or an empty string (0, the default/no-op). Anything else reverts the
    *  input to the last-known-good label rather than silently accepting an
-   *  unresolvable plate. */
+   *  unresolvable plate. 0 is always accepted regardless of
+   *  `availablePlateIds` -- see findReferencePlateMatches()'s own doc
+   *  comment for why it can't be assumed to be a literal member of that
+   *  set, the same reasoning the empty-string branch below already relies
+   *  on. */
   private commitReferencePlateInput(input: HTMLInputElement): void {
     const raw = input.value.trim();
     let id: number | null = null;
-    if (raw === '') {
+    if (raw === '' || raw === '0') {
       id = 0;
     } else if (/^\d+$/.test(raw) && this.availablePlateIds.has(Number(raw))) {
       id = Number(raw);

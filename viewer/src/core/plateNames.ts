@@ -46,17 +46,29 @@ export interface ReferencePlateMatch {
  * all digits) matches by id prefix instead, for a user who already knows the
  * plate id and doesn't need the name -- the ONLY thing offered at all for a
  * model with an empty `names` table (see PlateNameTable's own doc comment).
+ *
+ * An empty `query` (the box just cleared or freshly focused, see
+ * ClimateUI's own focus handler) returns exactly plate 0, the default/no-op
+ * anchor -- otherwise there would be NO way to discover how to switch back
+ * to it once a different plate is set, since 0 is often absent from
+ * `availablePlateIds` itself (a plate with an identity rotation frequently
+ * isn't written out to the table at all, see prep_reconstruction.py) and
+ * the committed display value never shows it as typeable text (see
+ * ClimateUI.commitReferencePlateInput's empty-string branch). Plate 0 is
+ * likewise always treated as available for an explicit numeric "0" query,
+ * for the same reason.
  */
 export function findReferencePlateMatches(
   query: string, availablePlateIds: ReadonlySet<number>, names: PlateNameTable,
 ): ReferencePlateMatch[] {
   const q = query.trim().toLowerCase();
-  if (!q) return [];
+  if (!q) return [{ plateId: 0, name: names[0] ?? 'Default' }];
 
   const isNumeric = /^\d+$/.test(q);
+  const ids = availablePlateIds.has(0) ? availablePlateIds : new Set([0, ...availablePlateIds]);
   const out: ReferencePlateMatch[] = [];
-  for (const plateId of availablePlateIds) {
-    const name = names[plateId];
+  for (const plateId of ids) {
+    const name = names[plateId] ?? (plateId === 0 ? 'Default' : undefined);
     if (isNumeric) {
       if (String(plateId).startsWith(q)) out.push({ plateId, name: name ?? `Plate ${plateId}` });
     } else if (name && name.toLowerCase().includes(q)) {
