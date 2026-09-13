@@ -10,7 +10,8 @@ import {
 import { createMaskTexture } from '../core/mask';
 import { Cutaway, removedFraction } from './cutaway';
 import { Coastlines, type CoastlineData } from '../core/coastlines';
-import { setMaskMode } from '../core/material';
+import { setMaskMode, setReferenceRotation } from '../core/material';
+import { referenceRotationAt, toRenderFrameRotation, type Quaternion } from '../core/rotation';
 import {
   DepthSlice, DEFAULT_DEPTH_SLICE, sinkingDepthKm, canUseSinkingMode,
   type DepthSliceState,
@@ -49,6 +50,9 @@ export interface GlobeInstanceHooks {
   onAgeChange?(self: GlobeInstance, age: number): void;
   /** Same idea for the depth-slice panel (enabled/depthKm/sinking fields). */
   onDepthSliceChange?(self: GlobeInstance, state: DepthSliceState): void;
+  /** Same idea for Reference Plate: fires only on a real edit through this
+   *  instance's own control, never from a broadcast-driven follower update. */
+  onReferencePlateChange?(self: GlobeInstance, plateId: number): void;
 }
 
 /**
@@ -78,7 +82,7 @@ export class GlobeInstance {
   readonly view: ViewState = {
     modelId: '', variableId: '', colormap: 'RdBu',
     clipMin: -2, clipMax: 2, symmetricClip: true, colorSteps: 0,
-    reconstructionAge: 0, cutDepthKm: 2890, inverted: false,
+    reconstructionAge: 0, referencePlateId: 0, cutDepthKm: 2890, inverted: false,
     surfaceOpacity: 1, surfaceMode: 'topography', showBoundaries: true,
     tool: 'drag', iso: { ...DEFAULT_ISOSURFACE }, depthSlice: { ...DEFAULT_DEPTH_SLICE },
   };
@@ -90,6 +94,17 @@ export class GlobeInstance {
   /** See ageToken in the original main.ts: guards against a slow fetch for an
    *  old age landing after a newer one has already been applied. */
   private ageToken = 0;
+
+  /** See CONTEXT.md's Reference Plate entry and docs/adr/0030. Globe-only
+   *  wrapper (no Plate Carrée here, see ui.ts/main.ts), so unlike
+   *  ClimateInstance there is only ever one rotation-application path per
+   *  layer, not a Projection branch. */
+  private activeReferencePlateId = 0;
+  /** Render-frame rotation (core/rotation.ts's toRenderFrameRotation) --
+   *  recomputed by updateReferenceRotation() whenever age or Reference
+   *  Plate changes. Identity whenever no rotation table is loaded or
+   *  view.referencePlateId is 0. */
+  private qRefRender: Quaternion = [0, 0, 0, 1];
 
   private readonly raycaster = new Raycaster();
   private downPos: { x: number; y: number } | null = null;
@@ -123,6 +138,10 @@ export class GlobeInstance {
       onColorSteps: (n) => { this.view.colorSteps = n; this.applyColorSteps(); },
       onClip: () => this.applyClip(),
       onAge: (age) => { this.applyAge(age); this.hooks.onAgeChange?.(this, age); },
+      onReferencePlate: (id) => {
+        this.setReferencePlate(id);
+        this.hooks.onReferencePlateChange?.(this, id);
+      },
       onCutDepth: () => this.rebuildCutaway(),
       onInvert: () => this.rebuildCutaway(),
       onSurfaceOpacity: (v) => this.setSurfaceOpacity(v),
@@ -166,6 +185,14 @@ export class GlobeInstance {
       this.scene.add(this.coastlines.lines, this.coastlines.land);
       this.coastlines.setAge(this.view.reconstructionAge);
     }
+    // Plate names (the "Australia (801)" style autocomplete) need a
+    // Reconstruction Model's static-polygon manifest, which this wrapper
+    // doesn't load at all today -- see docs/plans/reference-plate.md's
+    // "Not yet resolved" note. Numeric-id-only entry, same as Scotese's own
+    // (empty) name table in the climate viewer -- not a lesser fallback,
+    // just not yet wired here.
+    this.ui.setReferencePlateAvailable(this.availableReferencePlateIds(), {});
+    this.updateReferenceRotation();
 
     this.setSurfaceOpacity(this.view.surfaceOpacity);
     this.applySurfaceMode(this.deps.topography ? this.view.surfaceMode : 'flat');
@@ -429,6 +456,7 @@ export class GlobeInstance {
     const token = ++this.ageToken;
 
     this.coastlines?.setAge(age);
+    this.updateReferenceRotation(); // qRefRender is age-dependent -- see its own doc comment
     this.reconcileSurfaceWithAge(age);
     this.recomputeSinkingDepth();
     void this.boundaries.setAge(age, () => {
@@ -446,6 +474,63 @@ export class GlobeInstance {
       }).catch((e) => this.ui.setStatus(String(e)));
     }
     this.updateTimeInfo();
+  }
+
+  // --- reference plate ------------------------------------------------------
+
+  /** Plate ids with a rotation series in the currently-loaded Reconstruction
+   *  Model -- see CONTEXT.md's Reference Plate entry and docs/adr/0030's
+   *  plate-coverage rule. Sourced straight from coastlineData's own table:
+   *  unlike ClimateInstance, this wrapper has no separate static-polygon
+   *  fetch of its own (see boot()'s own note), and coastlines/cutaway/
+   *  isosurfaces all share the exact same rotation table regardless. */
+  availableReferencePlateIds(): ReadonlySet<number> {
+    const table = this.deps.coastlineData?.table;
+    return table ? new Set(Object.keys(table.plates).map(Number)) : new Set();
+  }
+
+  /** See CONTEXT.md's Reference Plate entry and docs/adr/0030. Reanchors
+   *  coastlines (CPU-side, Coastlines.setReferencePlate) and every
+   *  volume-derived surface (cutaway walls/floor, cutaway outline/handles,
+   *  depth slice, isosurfaces -- via updateReferenceRotation()) into
+   *  `plateId`'s own frame. The
+   *  present-day topography sphere (`surface`) and mantle core sphere
+   *  (`core`) are deliberately left alone -- topography is already
+   *  documented as present-day-only/meaningless past age 0 (see ui.ts's
+   *  SurfaceMode doc comment), and the core has no lon/lat-linked
+   *  markings for a rotation to affect either way. The cutaway polygon
+   *  DRAWING tool (`pickLonLat`, used by onTool) is also left alone -- it
+   *  raycasts against a fixed, unrotated pick sphere, so a click while
+   *  Reference Plate != 0 registers against the wrong visual location.
+   *  This is the same "Required companion change" ADR-0030 flags for
+   *  click-to-LonLat generally; ClimateInstance's Query Point already
+   *  does it (hitToLonLat), this wrapper's draw tool doesn't yet -- a
+   *  known gap, not an oversight, see docs/plans/reference-plate.md. */
+  setReferencePlate(plateId: number): void {
+    if (plateId === this.activeReferencePlateId) return;
+    this.activeReferencePlateId = plateId;
+    this.view.referencePlateId = plateId;
+    this.coastlines?.setReferencePlate(plateId);
+    this.updateReferenceRotation();
+  }
+
+  /** Recompute `qRefRender` from the current age + Reference Plate and
+   *  re-apply it to every volume-derived surface. A no-op identity
+   *  rotation whenever no rotation table is loaded or view.referencePlateId
+   *  is 0. */
+  private updateReferenceRotation(): void {
+    const table = this.deps.coastlineData?.table;
+    const qGeo = table
+      ? referenceRotationAt(table, this.view.referencePlateId, this.view.reconstructionAge)
+      : ([0, 0, 0, 1] as Quaternion);
+    this.qRefRender = toRenderFrameRotation(qGeo);
+    for (const m of this.volumeMaterials()) setReferenceRotation(m, this.qRefRender);
+    this.isosurface.setReferenceRotation(this.qRefRender);
+    this.cutaway.setReferenceRotation(this.qRefRender);
+    // BoundaryOverlay works in the geographic frame (deep-time-map's native
+    // frame, see boundaries.ts's module doc comment), not the render frame
+    // everything else above uses -- pass qGeo, not qRefRender.
+    this.boundaries.setReferenceRotation(qGeo);
   }
 
   // --- cutaway ------------------------------------------------------------

@@ -1,17 +1,20 @@
 # Reference Plate
 
-**Status: built for the climate viewer only** (ADR-0030's mechanism, proven
-end-to-end in BOTH Projections: coastlines, raster field, wind glyphs, and
-Wind Streak all reanchor consistently; Tracked Particle and Query Point
-picking are Globe-only by their own separate, pre-existing designs (see
-trackedParticles.ts/queryPoint.ts), unrelated to Reference Plate. All
-verified live in a browser. Plate Carrée needed real fixes along the way,
-not just wiring -- see "Fixed: Plate Carrée reanchoring" and "Fixed:
-Plate Carrée antimeridian seam" below for anyone touching this code next.
-The other six wrapper types (globe, tomography, valdes, groupGlobe,
-reconstruction, reconstructionGroup), deep-time-map's Boundary Frames/VGP
-layers, and the Multi-Globe sync toggle are not yet wired up. See
-`CONTEXT.md`'s Reference Plate entry for the resolved terminology.
+**Status: built for the climate viewer (both Projections) and started on the
+tomography/mantle viewer (Globe only, partial -- see "Tomography/mantle:
+first pass" below).** ADR-0030's mechanism is proven end-to-end for
+climate: coastlines, raster field, wind glyphs, and Wind Streak all
+reanchor consistently; Tracked Particle and Query Point picking are
+Globe-only by their own separate, pre-existing designs (see
+trackedParticles.ts/queryPoint.ts), unrelated to Reference Plate. Plate
+Carrée needed real fixes along the way, not just wiring -- see "Fixed:
+Plate Carrée reanchoring" and "Fixed: Plate Carrée antimeridian seam"
+below. The UI control itself (autocomplete input) is now shared
+(core/referencePlateControl.ts) rather than reimplemented per wrapper.
+The other five wrapper types (globe, valdes, groupGlobe, reconstruction,
+reconstructionGroup), deep-time-map's Boundary Frames/VGP layers, and the
+Multi-Globe sync toggle are not yet wired up. See `CONTEXT.md`'s Reference
+Plate entry for the resolved terminology.
 
 ## What it is
 
@@ -268,6 +271,119 @@ with Wind Streak active and enlarged (density/size upsized for
 visibility) — no ribbon or coastline segment spanning the map at any of
 them, coastlines and streaks both reanchoring consistently with the
 raster underneath. `npm run typecheck` clean.
+
+## Tomography/mantle: first pass (2026-09-13)
+
+An experiment: wire Reference Plate into a SECOND wrapper (index.html, the
+tomography/mantle viewer -- `GlobeInstance` in tomography/instance.ts) and
+see what breaks, rather than assume the climate viewer's design transfers
+cleanly. Globe-only wrapper (no Plate Carrée toggle exists here at all), so
+no Projection branching is needed -- every layer takes the same forward
+3D-rotation path Globe already used in the climate viewer.
+
+**Works, verified live:**
+- Coastlines (`Coastlines.setReferencePlate`, unchanged from the climate
+  viewer's own use of the same class).
+- Cutaway wall/floor (already used `core/material.ts`'s
+  `createVolumeSurfaceMaterial`, so `setReferenceRotation()` was already
+  there -- just needed calling).
+- Depth slice (same story -- `core/depthSlice.ts` already had
+  `setReferenceRotation()` from the climate viewer's work).
+- Cutaway outline/handles (the drawn polygon's yellow boundary + white
+  vertex markers) -- these use their OWN separate, simpler
+  `createOverlayMaterial` (tomography/cutaway.ts), which had no rotation
+  concept at all before this pass. Without adding one, the outline stayed
+  fixed while the wall/floor it's supposed to trace rotated out from under
+  it -- a visible detachment, fixed by giving OVERLAY_VERT the same
+  `uRefQuat` rotation and a `Cutaway.setReferenceRotation()` to drive it.
+- Isosurfaces -- a harder case worth recording: `Isosurface`'s FRAG shader
+  raymarches the volume directly in world space (`ro = cameraPosition`,
+  `rd = normalize(vWorldPos - cameraPosition)`), with no per-vertex
+  position to rotate at all. Fixed by un-rotating the point INSIDE
+  `sampleVolume(p)` (by `uRefQuat`'s conjugate) before every geographic
+  lookup, rather than rotating the ray in `main()` -- every caller
+  (`marchSegment`, `refine`, `gradient`) keeps reasoning in DISPLAY space
+  (so the hit point, lighting normal, and `gl_FragDepth` all still land
+  correctly relative to the scene's other rotated geometry), and only the
+  TEXTURE LOOKUP itself needs the true, unrotated position. This is the
+  raymarched-implicit-surface equivalent of the Plate Carrée raster fix's
+  fragment-level inverse rotation -- same idea, no lon/lat conversion
+  needed since every point here is already a genuine 3D position.
+- Plate id availability (`availableReferencePlateIds()`) sourced directly
+  from `coastlineData.table.plates` -- this wrapper has no separate
+  static-polygon fetch of its own, unlike the climate viewer.
+- Plate boundaries (`BoundaryOverlay`/`core/boundaries.ts`, the vendored
+  deep-time-map overlay -- a DIFFERENT layer from `Coastlines`, easy to
+  conflate since both draw lines over the globe). Missed in the initial
+  pass above and caught live by the user: everything else visibly rotated
+  together but the boundary lines stayed fixed in the TRUE/pre-rotation
+  frame. Root cause: `ThreeProjector.project(v)` is a per-vector, per-frame
+  screen-space projector called directly by the vendored library (not a
+  mesh with vertices to rotate once), and had no rotation concept at all.
+  Fixed by rotating `v` with the Reference Plate quaternion INSIDE
+  `project()`, after the mask lookup (which must stay in the TRUE frame --
+  the cutaway polygon was rasterised there) but before the
+  geographic-to-three.js permutation and the depth/horizon cull (which
+  must both see the rotated, on-screen position). One subtlety: this class
+  works in the GEOGRAPHIC frame (deep-time-map's native frame, per this
+  file's own module doc comment), not the render frame `uRefQuat` uses
+  everywhere else -- `setReferenceRotation()` takes `qGeo` directly, not
+  `toRenderFrameRotation(qGeo)`. Verified live (2026-09-13): boundary lines
+  now track the same rotated coastline features at Reference Plate 801,
+  age 150 Ma, that they aligned with at Reference Plate 0.
+
+**Deliberately left alone, not bugs:**
+- The present-day topography sphere (`surface`) and mantle core sphere
+  (`core`) don't reanchor -- topography is already documented
+  present-day-only/meaningless past age 0, and the core has no lon/lat
+  markings for rotation to affect.
+- The cutaway polygon DRAWING tool (`pickLonLat`, the raycast the "Draw
+  Polygon"/"Edit Vertices" tools use) still raycasts against a fixed,
+  unrotated pick sphere -- the same "Required companion change" ADR-0030
+  flags for click-to-LonLat generally. ClimateInstance's Query Point
+  already does this (`hitToLonLat`); this wrapper's draw tool doesn't yet.
+  A click while Reference Plate != 0 registers against the wrong visual
+  location.
+- Plate NAMES (the "Australia (801)" autocomplete, as opposed to bare
+  numeric entry) aren't wired up -- would need this wrapper to also fetch
+  the Reconstruction Model's static-polygon manifest
+  (`fetchStaticPolygonData`/`prep_plate_names.py`'s output), which it
+  doesn't do today. Notable because this wrapper's coastlines ARE Müller
+  2019 (confirmed live: "coastlines Müller et al. 2019 v2" in the credit
+  line) -- one of the two models ADR-0031 confirmed actually HAS real
+  names, so this is the nearest this feature has come to exercising a
+  non-empty PlateNameTable end-to-end, just not done yet.
+
+**Found bug, NOT fixed in this pass:** an active cutaway + a visible outer
+surface (any `surfaceMode` except `'none'`) + a non-zero Reference Plate
+combine to show the mantle core through a stray hole. Root cause: the
+outer surface sphere (`globe.ts`'s `SURFACE_FRAG`) and the reconstructed
+land fill (`coastlines.ts`'s `LAND_FRAG`) both punch their "inside the
+cutaway" hole by sampling the SAME mask texture the wall/floor use, but
+neither un-rotates its own fragment position first -- `surface` never
+rotates at all (by design, see above), and `land`'s rotation is baked into
+its vertices on the CPU (unlike the wall/floor's GPU-side `uRefQuat`), so
+in EITHER case the mask lookup lands at the TRUE/original polygon location
+while the wall/floor -- which DOES rotate -- has moved to a new visual
+location. The result: a hole is left behind at the abandoned TRUE-frame
+location (nothing there to fill it, since the wall/floor isn't there
+anymore), exposing the always-present core sphere through it, while the
+wall/floor's NEW location sits over an intact (hole-free) surface that
+just happens to get correctly occluded anyway since the wall is opaque
+and nearer camera. Confirmed live (2026-09-13): a small cutaway wedge
+plus Reference Plate 801 produced a brown crescent (the core's own
+0x5a4636 colour, not land fill) detached from the visibly-correct,
+rotated wall/floor. `surfaceMode: 'none'` (no outer surface/land drawn at
+all) sidesteps it entirely, which is why it wasn't caught until a more
+realistic combination (default `'land'` surface mode) was tried.
+
+Real fix needs both `SURFACE_FRAG` and `LAND_FRAG` to inverse-rotate their
+fragment position specifically for the MASK lookup (their topography
+texture/land colour itself should stay unrotated, matching their
+still-fixed geometry) -- the same fragment-level inverse-rotation pattern
+as the isosurface and Plate Carrée raster fixes above, just applied to a
+THIRD shader family that had no `uRefQuat` concept at all yet. Not
+attempted in this pass; flagging for whoever picks this up next.
 
 ## Not yet resolved
 

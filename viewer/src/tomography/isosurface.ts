@@ -61,15 +61,37 @@ uniform vec3  uLightDir;
 uniform float uSteps;
 uniform float uNormalEps;       // world units
 uniform mat4  uProjectionMatrix;   // three injects viewMatrix, but not this one
+uniform vec4  uRefQuat;         // see CONTEXT.md's Reference Plate entry and docs/adr/0030
 
 varying vec3 vWorldPos;
 
 const int STEP_LIMIT = ${MAX_STEPS};
 const int BISECTIONS = 8;
 
+/**
+ * p arrives in DISPLAY space (the ray this shader marches never moves --
+ * only which volume texel each point along it samples does). Un-rotating it
+ * by uRefQuat's conjugate before the geographic lookup recovers which TRUE
+ * point that display position corresponds to, exactly the fragment-shader
+ * side of core/material.ts's Plate Carrée fix (see
+ * docs/plans/reference-plate.md) -- except every point here is already a
+ * genuine 3D position (raymarched, not a flat map's Cartesian encoding of
+ * lon/lat), so the round-trip is the plain 3D rotation, no lon/lat
+ * conversion needed either side of it.
+ *
+ * Doing this INSIDE sampleVolume (rather than rotating ro/rd once in
+ * main()) is what keeps every caller -- marchSegment(), refine(),
+ * gradient() -- correct for free: they all reason entirely in DISPLAY
+ * space (ray parameter t along the unrotated camera ray), so pHit, the
+ * lighting normal, and the depth written at the end are automatically in
+ * the right place for the scene's other Reference-Plate-rotated geometry
+ * (coastlines, cutaway walls) to sort and align against -- only the
+ * TEXTURE LOOKUP itself needs to land on the true, unrotated data.
+ */
 float sampleVolume(vec3 p) {
-  vec2 ll = worldToGeographic(p);
-  vec3 uvw = volumeUVW(ll, worldDepthKm(p), uDepthMin, uDepthMax, uGrid);
+  vec3 pTrue = rotateByQuat(conjugateQuat(uRefQuat), p);
+  vec2 ll = worldToGeographic(pTrue);
+  vec3 uvw = volumeUVW(ll, worldDepthKm(pTrue), uDepthMin, uDepthMax, uGrid);
   return texture(uVolume, uvw).r;
 }
 
@@ -290,6 +312,7 @@ export class Isosurface {
         // structure rather than quantisation noise.
         uNormalEps: { value: 0.004 },
         uProjectionMatrix: { value: null },
+        uRefQuat: { value: [0, 0, 0, 1] },
       },
     });
 
@@ -325,6 +348,16 @@ export class Isosurface {
   /** Isovalues arrive already mapped into the shader's encoded 0..1 space. */
   setEncodedIso(cold: number, hot: number): void {
     (this.mat.uniforms.uIso.value as Vector2).set(cold, hot);
+  }
+
+  /** See CONTEXT.md's Reference Plate entry and docs/adr/0030 -- `q` must
+   *  already be a render-frame quaternion (core/rotation.ts's
+   *  toRenderFrameRotation()). Unlike core/material.ts's volume-draped
+   *  surfaces, this needs no Projection branch: this wrapper is Globe-only,
+   *  and sampleVolume()'s un-rotate happens on a genuine 3D position either
+   *  way (see the FRAG shader's own doc comment). */
+  setReferenceRotation(q: readonly [number, number, number, number]): void {
+    this.mat.uniforms.uRefQuat.value = q;
   }
 
   /**

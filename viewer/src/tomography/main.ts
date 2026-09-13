@@ -109,6 +109,19 @@ function broadcastDepthSlice(source: GlobeInstance): void {
   });
 }
 
+/** Same "Synced Field" pattern as age/depth slice. `setReferencePlate` is a
+ *  plain state setter, not a lil-gui-bound field, so the follower's own
+ *  displayed text also needs an explicit push -- refreshGUI()'s
+ *  controllersRecursive() walk never touches ReferencePlateControl's native
+ *  input (see core/referencePlateControl.ts). */
+function broadcastReferencePlate(source: GlobeInstance): void {
+  host.broadcast('referencePlate', source, source.view.referencePlateId, (inst, plateId) => {
+    inst.setReferencePlate(plateId);
+    inst.ui.setReferencePlateValue(plateId);
+    refreshGUI(inst);
+  });
+}
+
 function relayout(): void {
   host.relayout();
 }
@@ -123,6 +136,7 @@ function createInstance(label: string, startCollapsed = false): GlobeInstance {
     onRemove: (self) => removeInstance(self),
     onAgeChange: (self) => broadcastAge(self),
     onDepthSliceChange: (self) => broadcastDepthSlice(self),
+    onReferencePlateChange: (self) => broadcastReferencePlate(self),
   }, label, startCollapsed);
   return inst;
 }
@@ -143,11 +157,21 @@ function setSyncDepthSlice(on: boolean): void {
   broadcastDepthSlice(host.lastEditOrFocused('depthSlice')!);
 }
 
+function setSyncReferencePlate(on: boolean): void {
+  host.setSync('referencePlate', on);
+  const cb = document.getElementById('sync-reference') as HTMLInputElement | null;
+  if (cb) cb.checked = on;
+  broadcastReferencePlate(host.lastEditOrFocused('referencePlate')!);
+}
+
 document.getElementById('sync-age')?.addEventListener('change', (e) => {
   setSyncAge((e.target as HTMLInputElement).checked);
 });
 document.getElementById('sync-depth')?.addEventListener('change', (e) => {
   setSyncDepthSlice((e.target as HTMLInputElement).checked);
+});
+document.getElementById('sync-reference')?.addEventListener('change', (e) => {
+  setSyncReferencePlate((e.target as HTMLInputElement).checked);
 });
 
 async function addInstance(): Promise<void> {
@@ -164,6 +188,7 @@ async function addInstance(): Promise<void> {
   // the next drag elsewhere to catch it up.
   broadcastAge(host.lastEditOrFocused('age')!);
   broadcastDepthSlice(host.lastEditOrFocused('depthSlice')!);
+  broadcastReferencePlate(host.lastEditOrFocused('referencePlate')!);
 }
 
 function removeInstance(inst: GlobeInstance): void {
@@ -240,6 +265,23 @@ function findMullerModel(): ArchiveIndex['models'][number] | undefined {
   return deps.archive.models.find((m) => m.id === 'opt1');
 }
 
+/**
+ * Reset per-instance display state a preset must never inherit from whatever
+ * a previous preset or manual edit left on screen -- Reference Plate and the
+ * outer-surface rendering style/opacity. Each preset below calls this for
+ * every instance it touches, BEFORE layering its own specific surfaceMode on
+ * top, so a preset always looks the same regardless of prior state. Reported
+ * live (2026-09-13): switching presets after setting a non-zero Reference
+ * Plate left it non-zero in the new preset, and the REVEAL/UU-P07 depth-slice
+ * preset never set surfaceMode at all, silently inheriting whatever an
+ * earlier preset left it at.
+ */
+function resetInstanceDisplayDefaults(inst: GlobeInstance): void {
+  inst.setReferencePlate(0);
+  inst.ui.setReferencePlateValue(0);
+  inst.setSurfaceOpacity(1);
+}
+
 /** Preset 1: a single globe on the Muller et al. 2022 convection model, with
  *  the outer surface hidden and both isosurfaces on, so the mantle structure
  *  is the very first thing visible. */
@@ -251,6 +293,7 @@ async function applyPresetConvection(): Promise<void> {
   const model = findMullerModel();
   if (model) await inst.selectModel(model.id);
 
+  resetInstanceDisplayDefaults(inst);
   inst.applySurfaceMode('none');
   // A cutaway left open from an earlier preset (the Atlantic comparison)
   // would otherwise still be cut into whatever this preset shows -- same
@@ -299,6 +342,7 @@ async function applyPresetAtlanticComparison(): Promise<void> {
   for (let i = 0; i < models.length; i++) {
     const inst = host.instances[i];
     await inst.selectModel(models[i].id);
+    resetInstanceDisplayDefaults(inst);
     // A consistent surface across all three, regardless of what each
     // instance's surface happened to be left at by earlier interaction (e.g.
     // the convection preset's "none") -- the point of this preset is a
@@ -316,6 +360,7 @@ async function applyPresetAtlanticComparison(): Promise<void> {
     inst.view.depthSlice.enabled = false;
     inst.applyDepthSlice();
     applyCutawayPolygon(inst, ATLANTIC_CUT_POLYGON, ATLANTIC_CUT_DEPTH_KM);
+    refreshGUI(inst);
   }
   host.focused = host.instances[0];
   // One shared camera for every tile: point it at the Atlantic so the cut
@@ -343,10 +388,16 @@ async function applyPresetDepthSliceComparison(): Promise<void> {
   for (let i = 0; i < wanted.length; i++) {
     const inst = host.instances[i];
     await inst.selectModel(wanted[i].id);
+    resetInstanceDisplayDefaults(inst);
     // Same reasoning as the Convection preset's own onKeyEscape() call -- a
     // cutaway left open from the Atlantic comparison would otherwise still
     // be cut into this depth-slice view.
     inst.onKeyEscape();
+    // This preset shows a coloured depth slice IN PLACE OF the outer
+    // surface -- previously left unset here, so an outer surface (e.g. the
+    // Atlantic comparison's 'topography') silently kept covering the slice
+    // until a manual edit turned it off.
+    inst.applySurfaceMode('none');
     inst.view.depthSlice.enabled = true;
     // Both are tomography, so sinking mode (see canUseSinkingMode) applies to
     // either -- ties each one's own slice depth to the shared age via the
@@ -920,7 +971,25 @@ window.__geode = {
   globeCount: () => host.instances.length,
   setSyncAge,
   setSyncDepthSlice,
-  getSyncState: () => ({ syncAge: host.isSynced('age'), syncDepthSlice: host.isSynced('depthSlice') }),
+  setSyncReferencePlate,
+  getSyncState: () => ({
+    syncAge: host.isSynced('age'),
+    syncDepthSlice: host.isSynced('depthSlice'),
+    syncReferencePlate: host.isSynced('referencePlate'),
+  }),
+  /** Apply a Reference Plate to a SPECIFIC instance, broadcasting exactly
+   *  like a real ReferencePlateControl commit would -- the test-hook
+   *  equivalent of setReferencePlateOn's age/depth-slice siblings below. */
+  setReferencePlateOn: (index: number, plateId: number) => {
+    const inst = host.instances[index];
+    if (!inst) return;
+    inst.setReferencePlate(plateId);
+    inst.ui.setReferencePlateValue(plateId);
+    refreshGUI(inst);
+    broadcastReferencePlate(inst);
+  },
+  getReferencePlateOn: (index: number) => host.instances[index]?.view.referencePlateId ?? null,
+  modelIds: () => host.instances.map((i) => i.view.modelId),
   /** Apply age to a SPECIFIC instance, not just primary() -- needed to test
    *  whether an edit on globe 2 does/doesn't propagate to globe 1. Broadcasts
    *  exactly like a real slider drag would, via the same broadcastAge() the

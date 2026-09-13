@@ -6,6 +6,7 @@ import {
   R_SURFACE, densifyPolygon, depthToRadius, lonLatToVec3, type LonLat,
 } from '../core/constants';
 import { createVolumeSurfaceMaterial, passthroughColor, setMaskMode } from '../core/material';
+import { GEOGRAPHIC_GLSL } from '../core/glsl/geographic';
 import { rasteriseMask, MASK_W, MASK_H } from '../core/mask';
 import type { CutawayState } from '../core/types';
 
@@ -41,11 +42,19 @@ bool beyondHorizon(vec3 p) {
 `;
 
 const OVERLAY_VERT = /* glsl */`
+${GEOGRAPHIC_GLSL}
 uniform float uSize;
+// See CONTEXT.md's Reference Plate entry and docs/adr/0030 -- rotates this
+// polygon marker the same way createVolumeSurfaceMaterial's VERT rotates
+// the wall/floor it outlines (core/material.ts), so the drawn cut and its
+// own boundary/handles never visibly detach from each other once
+// Reference Plate != 0. Identity by default, a no-op.
+uniform vec4 uRefQuat;
 varying vec3 vWorldPos;
 void main() {
-  vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  vec3 rotated = rotateByQuat(uRefQuat, position);
+  vWorldPos = (modelMatrix * vec4(rotated, 1.0)).xyz;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(rotated, 1.0);
   gl_PointSize = uSize;
 }
 `;
@@ -67,6 +76,7 @@ function createOverlayMaterial(color: number, size: number): ShaderMaterial {
     uniforms: {
       uColor: { value: passthroughColor(color) },
       uSize: { value: size },
+      uRefQuat: { value: [0, 0, 0, 1] },
     },
   });
 }
@@ -155,6 +165,18 @@ export class Cutaway {
 
   get floorMaterial(): ShaderMaterial {
     return this.floor.material as ShaderMaterial;
+  }
+
+  /** Rotates the outline/handle overlay to match the wall/floor -- those
+   *  already rotate via their own createVolumeSurfaceMaterial uRefQuat
+   *  uniform (see GlobeInstance.volumeMaterials()), so without this the
+   *  drawn polygon marker would visibly detach from the cut it outlines
+   *  the moment Reference Plate != 0. `q` must already be a render-frame
+   *  quaternion (core/rotation.ts's toRenderFrameRotation()). See
+   *  CONTEXT.md's Reference Plate entry and docs/adr/0030. */
+  setReferenceRotation(q: readonly [number, number, number, number]): void {
+    (this.outline.material as ShaderMaterial).uniforms.uRefQuat.value = q;
+    (this.handles.material as ShaderMaterial).uniforms.uRefQuat.value = q;
   }
 
   /** Rebuild everything that derives from the cutaway state. */

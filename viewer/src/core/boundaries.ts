@@ -5,6 +5,7 @@ import { BoundarySeries, DEFAULT_STYLE } from '../../vendor/deep-time-map/js/ind
 import { R_SURFACE } from './constants';
 import { maskAt } from './mask';
 import type { Rect } from './layout';
+import { rotateVector, type Quaternion } from './rotation';
 
 /**
  * Plate boundaries, drawn by the vendored deep-time-map library onto a 2D canvas
@@ -34,6 +35,18 @@ import type { Rect } from './layout';
  * the polarity survives untouched. (A reflection would not -- and would silently
  * mirror every subduction zone.) The conversion happens here, in one place, and
  * the vendored code is not modified.
+ *
+ * ---- Reference Plate --------------------------------------------------------
+ *
+ * The library hands `project()` present-day-rotated geographic-frame vectors
+ * (it does its own age reconstruction internally, upstream of this boundary).
+ * Reference Plate reanchoring is applied here, to that geographic-frame v,
+ * BEFORE the permutation above -- see setReferenceRotation()/rotation.ts's
+ * module doc comment on why geographic- and render-frame quaternions are not
+ * interchangeable. Everything else that reanchors (coastlines, volume
+ * shaders, isosurfaces, cutaway) works in the render frame instead because
+ * that's the frame their own geometry already lives in; this overlay is the
+ * one exception since deep-time-map only ever gives us geographic vectors.
  */
 
 type Projected = [number, number, number] | null;
@@ -48,7 +61,16 @@ export class ThreeProjector {
   /** Current cutaway raster, or null when nothing is cut. */
   mask: Uint8Array | null = null;
 
+  /** Reference Plate rotation, in the GEOGRAPHIC frame (this class's v is
+   *  geographic, unlike everything else that reanchors in the render frame).
+   *  Identity when Reference Plate is 0 or unset. */
+  private qRef: Quaternion = [0, 0, 0, 1];
+
   constructor(private camera: PerspectiveCamera) {}
+
+  setReferenceRotation(q: Quaternion): void {
+    this.qRef = q;
+  }
 
   /** Refresh the per-frame camera terms. Call once before drawing. */
   update(cssWidth: number, cssHeight: number): void {
@@ -64,17 +86,13 @@ export class ThreeProjector {
   }
 
   project(v: ArrayLike<number>): Projected {
-    // Geographic -> three.js. See the note above on why this is orientation-safe.
-    const x = v[0];
-    const y = v[2];
-    const z = -v[1];
-
-    const depth = x * this.camDir.x + y * this.camDir.y + z * this.camDir.z;
-    if (depth <= this.horizon) return null;
-
     if (this.mask) {
-      // lon/lat from the GEOGRAPHIC vector -- constants.vec3ToLonLat expects a
-      // three.js one and would silently swap two axes if used here.
+      // lon/lat from the GEOGRAPHIC vector, BEFORE Reference Plate rotation
+      // -- constants.vec3ToLonLat expects a three.js one and would silently
+      // swap two axes if used here. The cutaway polygon was rasterised
+      // against this same pre-rotation (TRUE) frame (see cutaway.ts's own
+      // doc comment), so the mask lookup must stay here too, not on
+      // wherever Reference Plate has since rotated this point to.
       const lon = Math.atan2(v[1], v[0]) * (180 / Math.PI);
       const lat = Math.asin(Math.max(-1, Math.min(1, v[2]))) * (180 / Math.PI);
       // The overlay has no depth buffer, so where the cutaway has removed the
@@ -82,6 +100,16 @@ export class ThreeProjector {
       // tracePolyline lift the pen, exactly as it does at the horizon.
       if (maskAt(this.mask, lon, lat)) return null;
     }
+
+    const [rx, ry, rz] = rotateVector(this.qRef, v[0], v[1], v[2]);
+
+    // Geographic -> three.js. See the note above on why this is orientation-safe.
+    const x = rx;
+    const y = rz;
+    const z = -ry;
+
+    const depth = x * this.camDir.x + y * this.camDir.y + z * this.camDir.z;
+    if (depth <= this.horizon) return null;
 
     this.p.set(x, y, z).project(this.camera);
     return [
@@ -180,6 +208,12 @@ export class BoundaryOverlay {
 
   setMask(mask: Uint8Array | null): void {
     this.projector.mask = mask;
+  }
+
+  /** Reference Plate rotation, in the GEOGRAPHIC frame -- see
+   *  ThreeProjector.setReferenceRotation()'s doc comment. */
+  setReferenceRotation(q: Quaternion): void {
+    this.projector.setReferenceRotation(q);
   }
 
   /** Detach the overlay canvas. Called when a globe instance is removed. */

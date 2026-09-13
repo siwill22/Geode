@@ -2,6 +2,8 @@ import GUI from 'lil-gui';
 import { MAX_STEPS, type IsosurfaceState } from './isosurface';
 import { SINKING_RATE_PRESETS, CUSTOM_PRESET_ID, type DepthSliceState } from '../core/depthSlice';
 import { clipSliderStep } from '../core/clipRange';
+import { ReferencePlateControl } from '../core/referencePlateControl';
+import type { PlateNameTable } from '../core/plateNames';
 import type { Rect } from '../core/layout';
 import type { ArchiveIndex, Manifest, VariableInfo } from '../core/types';
 
@@ -26,6 +28,9 @@ export interface ViewState {
   symmetricClip: boolean;
   colorSteps: number;   // 0 = continuous ramp, else discrete bands
   reconstructionAge: number;
+  /** Which plate the whole view reanchors around -- see CONTEXT.md's
+   *  Reference Plate entry and GlobeInstance.setReferencePlate(). */
+  referencePlateId: number;
   cutDepthKm: number;
   inverted: boolean;
   surfaceOpacity: number;
@@ -43,6 +48,7 @@ export interface UICallbacks {
   onColorSteps(n: number): void;
   onClip(): void;
   onAge(age: number): void;
+  onReferencePlate(plateId: number): void;
   onCutDepth(km: number): void;
   onInvert(): void;
   onSurfaceOpacity(v: number): void;
@@ -64,6 +70,9 @@ export class UI {
   private variableCtrl!: any;
   private colormapCtrl!: any;
   private ageCtrl!: any;
+  /** Shared across every wrapper's panel -- see core/referencePlateControl.ts's
+   *  own doc comment for why this isn't reimplemented per wrapper. */
+  private referencePlateControl!: ReferencePlateControl;
   private isoColdEnabledCtrl!: any;
   private isoColdCtrl!: any;
   private isoHotEnabledCtrl!: any;
@@ -116,6 +125,12 @@ export class UI {
         archive.coastlines.age_max, 0.5)
       .name('age (Ma)')
       .onChange((v: number) => cb.onAge(v));
+    this.referencePlateControl = new ReferencePlateControl(this.ageCtrl.domElement, {
+      onCommit: (id) => {
+        this.state.referencePlateId = id;
+        cb.onReferencePlate(id);
+      },
+    });
     this.gui.add(this.state.depthSlice, 'enabled')
       .name('depth slice')
       .onChange(() => cb.onDepthSlice());
@@ -370,6 +385,19 @@ export class UI {
     this.isoHotEnabledCtrl.name(`${highLabel} surface`);
     this.isoColdCtrl.name(`${lowLabel} isovalue (${v.units})`);
     this.isoHotCtrl.name(`${highLabel} isovalue (${v.units})`);
+  }
+
+  /** Which plate ids the currently-loaded Reconstruction Model actually has
+   *  a rotation series for, and its plate-name lookup -- see
+   *  core/referencePlateControl.ts's own doc comment. */
+  setReferencePlateAvailable(ids: ReadonlySet<number>, names: PlateNameTable): void {
+    this.referencePlateControl.setAvailable(ids, names);
+  }
+
+  /** Reflect a plate id applied from outside this control (Multi-Globe sync,
+   *  or a preset resetting to 0) -- see ReferencePlateControl.setValue(). */
+  setReferencePlateValue(id: number): void {
+    this.referencePlateControl.setValue(id);
   }
 
   setSurfaceMode(m: SurfaceMode): void {
