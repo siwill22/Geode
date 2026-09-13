@@ -260,6 +260,11 @@ export interface ReconstructionEntry {
    *  with no name data in them at all (Scotese's source shapefile has
    *  none, checked directly -- see prep_plate_names.py). */
   has_plate_names: boolean;
+  /** Mirrors the same Reconstruction Model's own manifest.json field -- see
+   *  ReconstructionManifest and prep_boucot.py. Independent of the other
+   *  `has_*` flags: today only Scotese has this, but nothing ties it to
+   *  static polygons/plate names/boundaries existing too. */
+  has_paleolithology: boolean;
 }
 
 /** A Reconstruction Model's own manifest.json (path from
@@ -291,6 +296,12 @@ export interface ReconstructionManifest {
    *  two sources' plate ids are unioned before it's written, see
    *  prep_reconstruction.py), not a separate rotation table. */
   static_polygons?: StaticPolygonSet;
+  /** Boucot, Chen & Scotese (2013) paleoclimate-lithology-indicator points --
+   *  present only if exported for this Reconstruction Model (Scotese only,
+   *  today) -- see prep_boucot.py and core/pointOverlay.ts. A deep-time-map
+   *  `points.json` payload (categories/rotations baked in at prep time), not
+   *  a separate rotation table of its own. */
+  paleolithology?: { points: string };
 }
 
 export interface ColormapData {

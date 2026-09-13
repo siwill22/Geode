@@ -5,6 +5,7 @@ import { lonLatToVec3 } from '../core/constants';
 import { PALETTE } from '../core/palette';
 import { fetchCoastlineData } from '../core/coastlines';
 import { loadStaticPolygonDataFor } from '../core/staticPolygons';
+import { loadPaleolithologyUrlFor } from '../core/pointOverlay';
 import { loadArchive, loadColormaps } from '../core/volume';
 import type { Rect } from '../core/layout';
 import { MultiInstanceHost } from '../core/multiInstanceHost';
@@ -436,6 +437,130 @@ renderer.domElement.addEventListener('pointerup', (ev) => {
   else void hit.inst.queryAt(ndcFor(hit.rect, ev.clientX, ev.clientY));
 });
 
+/** A Boucot point's own metadata fields (see prep_boucot.py's `fields=`) --
+ *  loosely typed since PointOverlay.pick() is generic over any point
+ *  dataset's schema (core/pointOverlay.ts), not just this one. */
+interface BoucotPoint { type: string; indicator?: string; from?: number; to?: number }
+
+function paleolithologyTooltipLines(p: BoucotPoint): string[] {
+  const lines = [p.indicator ?? p.type];
+  if (p.from != null && p.to != null) lines.push(`${p.to.toFixed(0)}–${p.from.toFixed(0)} Ma`);
+  return lines;
+}
+
+// Boucot paleolithology hover: a passive gesture (no modifier, doesn't
+// compete with orbit/pan) -- unlike shift-click/alt-click above, this runs on
+// every pointer move regardless of button state. Tracks `hoveredInstance` so
+// moving off a tile (or off any point within it) clears exactly the ring
+// highlight/tooltip/fan it set, never a stale one left on some OTHER instance.
+//
+// Spiderfy timing mirrors deep-time-map's own hover.js reference
+// implementation (`considerFan`) -- not reused directly (its
+// getBoundingClientRect()-based coordinate frame doesn't fit Multi-Globe's
+// shared-canvas/per-tile-rect layout), but the same two ideas are load-
+// bearing, not optional: firing instantly made a dense pile flicker open/
+// closed within the same cluster on every sub-pixel jiggle of the pointer --
+// see [[geode_boucot_paleolithology]].
+//   - a DWELL before opening: most pointer positions on a dense map are near
+//     *some* pile, so opening immediately churns the map apart and back
+//     together continuously as the pointer sweeps across it.
+//   - a KEEP RADIUS once open, well past pick()'s own hit radius: closing at
+//     the same boundary that opened it flickers the instant the pointer sits
+//     near that boundary. The fan should survive until the pointer strays
+//     comfortably clear of it, or lands on a point outside it.
+let hoveredInstance: ClimateInstance | null = null;
+let dwellTimer: ReturnType<typeof setTimeout> | null = null;
+let fanInstance: ClimateInstance | null = null;
+let fanAnchor: [number, number] | null = null;
+let fanReach = 0;
+
+const SPIDERFY_DWELL_MS = 150;
+const SPIDERFY_KEEP_PADDING = 26;
+
+function cancelDwell(): void {
+  if (dwellTimer !== null) {
+    clearTimeout(dwellTimer);
+    dwellTimer = null;
+  }
+}
+
+function closeFan(): void {
+  cancelDwell();
+  if (fanInstance) {
+    fanInstance.paleolithology.unspiderfy();
+    fanInstance = null;
+  }
+  fanAnchor = null;
+}
+
+function openFan(inst: ClimateInstance, x: number, y: number): void {
+  const n = inst.paleolithology.spiderfy(x, y);
+  if (!n) return;
+  fanInstance = inst;
+  fanAnchor = [x, y];
+  fanReach = inst.paleolithology.spiderExtent() + SPIDERFY_KEEP_PADDING;
+}
+
+/** Decide what the open fan (if any) should do about this pointer position,
+ *  and arm the dwell for a new one -- see the block comment above. */
+function considerFan(inst: ClimateInstance, x: number, y: number, pickedIndex: number | null): void {
+  if (fanInstance === inst && fanAnchor) {
+    const members = inst.paleolithology.spiderfied;
+    const onMember = !!(members && pickedIndex !== null && members.includes(pickedIndex));
+    // Working inside the fan: stay open, whatever pick() returned exactly --
+    // this is the whole reason for the keep radius.
+    if (onMember) return;
+
+    const strayed = Math.hypot(x - fanAnchor[0], y - fanAnchor[1]) > fanReach;
+    // Inside the keep radius but over nothing in particular: still hovering
+    // the fan's own space, so leave it alone.
+    if (!strayed && pickedIndex === null) return;
+
+    // Pointer wandered off, or landed on a point this fan doesn't own.
+    closeFan();
+    // Fall through so whatever pile is now under the pointer can arm its own
+    // dwell immediately, rather than waiting for the next pointer move.
+  } else if (fanInstance && fanInstance !== inst) {
+    closeFan();
+  }
+
+  cancelDwell();
+  // Only arm where there is actually a pile -- avoids a timer per pointer
+  // move across empty ocean.
+  if (inst.paleolithology.clusterSizeAt(x, y) < 2) return;
+  dwellTimer = setTimeout(() => {
+    dwellTimer = null;
+    openFan(inst, x, y);
+  }, SPIDERFY_DWELL_MS);
+}
+
+renderer.domElement.addEventListener('pointermove', (ev) => {
+  const hit = hitTest(ev.clientX, ev.clientY);
+  if (hoveredInstance && hoveredInstance !== hit?.inst) {
+    closeFan();
+    hoveredInstance.paleolithology.highlight(null);
+    hoveredInstance.ui.hidePointTooltip();
+    hoveredInstance = null;
+  }
+  if (!hit) return;
+
+  const localX = ev.clientX - hit.rect.x;
+  const localY = ev.clientY - hit.rect.y;
+  const overlay = hit.inst.paleolithology;
+  const picked = overlay.pick(localX, localY);
+
+  considerFan(hit.inst, localX, localY, picked ? picked.index : null);
+
+  overlay.highlight(picked ? picked.index : null);
+  if (picked) {
+    hoveredInstance = hit.inst;
+    hit.inst.ui.showPointTooltip(ev.clientX, ev.clientY, paleolithologyTooltipLines(picked.point as BoucotPoint));
+  } else {
+    hit.inst.ui.hidePointTooltip();
+    hoveredInstance = null;
+  }
+});
+
 // --- boot -------------------------------------------------------------------
 
 async function boot(): Promise<void> {
@@ -468,8 +593,18 @@ async function boot(): Promise<void> {
     staticPolygonData = null;
   }
 
+  // Boucot, Chen & Scotese (2013) paleolithology points (see prep_boucot.py) --
+  // same "a layer, not a prerequisite" tolerance as staticPolygonData above.
+  let paleolithologyUrl: string | null = null;
+  try {
+    paleolithologyUrl = await loadPaleolithologyUrlFor(ARCHIVE, archive, { type: 'climate' });
+  } catch (e) {
+    console.error(e);
+    paleolithologyUrl = null;
+  }
+
   deps = {
-    archiveBase: ARCHIVE, archive, colormaps, coastlineData, staticPolygonData,
+    archiveBase: ARCHIVE, archive, colormaps, coastlineData, staticPolygonData, paleolithologyUrl,
   };
 
   // 'climate-monthly' (Valdes/BRIDGE's Atmosphere Layer -- see docs/adr/0008)

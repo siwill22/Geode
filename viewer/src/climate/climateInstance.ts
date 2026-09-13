@@ -21,6 +21,7 @@ import {
 import {
   assignPlate, createPlateFramePoint, positionAt, type PlateFramePoint, type StaticPolygonData,
 } from '../core/staticPolygons';
+import { PointOverlay } from '../core/pointOverlay';
 import {
   FrameCache, loadManifest, loadMask2D, makeColormapTexture, nearestFrame, physicalToEncoded,
 } from '../core/volume';
@@ -45,6 +46,13 @@ export interface ClimateInstanceDeps {
    *  Plate-Frame Point mode just stays unusable, the same "a layer, not a
    *  prerequisite" tolerance `coastlineData` already gets. */
   staticPolygonData: StaticPolygonData | null;
+  /** Boucot, Chen & Scotese (2013) paleolithology points.json URL, resolved
+   *  once at boot -- see climate/main.ts's boot() and
+   *  core/pointOverlay.ts's loadPaleolithologyUrlFor(). Null when unavailable
+   *  (fetch failure, or an archive predating this export): the "Boucot
+   *  paleolithology" toggle just stays hidden, same tolerance as
+   *  `staticPolygonData`/`coastlineData`. */
+  paleolithologyUrl: string | null;
 }
 
 /** Which of the two query gestures shift-click currently performs -- see
@@ -114,6 +122,9 @@ const QUERY_MARKER_R = R_SURFACE * 1.002;
 // sphere's own diameter (0.024), since a flat billboard reads slightly
 // smaller than a lit 3D ball did at the same size.
 const QUERY_MARKER_SIZE = R_SURFACE * 0.03;
+// PointLayer's own default (DEFAULT_OPTIONS.size, 3.4px) read too small
+// against a full-globe scatter of 8698 points -- 50% larger.
+const PALEOLITHOLOGY_SYMBOL_SIZE = 3.4 * 1.5;
 
 /** Builds the query marker's glyph once, shared by every ClimateInstance --
  *  a black dot with a white outline, canvas-drawn so it's crisp at any
@@ -238,6 +249,16 @@ export class ClimateInstance {
    *  animation is on, and vice versa. Alt-click-seeded, see
    *  addTrackedParticleAt() and climate/main.ts's pointer handlers. */
   readonly trackedParticles = new TrackedParticles();
+  /** Boucot, Chen & Scotese (2013) paleolithology indicator points (see
+   *  prep_boucot.py), a 2D-canvas overlay drawn the same way tomography's own
+   *  BoundaryOverlay is -- see core/pointOverlay.ts's class doc comment.
+   *  Independent of `view.layer`, same as `overlay`/`wind` above: it's an
+   *  additive layer, not a Model choice. Works under both Projections (see
+   *  PointOverlay's own doc comment). Assigned in the constructor BODY, not
+   *  as a field initializer -- it needs `this.camera`, and parameter
+   *  properties (the `camera` constructor parameter below) aren't guaranteed
+   *  assigned yet at field-initializer time. */
+  readonly paleolithology: PointOverlay;
   readonly ui: ClimateUI;
   coastlines: Coastlines | null = null;
 
@@ -249,6 +270,10 @@ export class ClimateInstance {
     clipMin: 0, clipMax: 1, overlayOpacity: DEFAULT_OVERLAY_OPACITY, showWind: DEFAULT_WIND_VISIBLE,
     windStyle: DEFAULT_WIND_STYLE, windScale: DEFAULT_WIND_SCALE, windDensity: DEFAULT_WIND_DENSITY,
     referencePlateId: 0,
+    // Off by default, unlike Wind's own default-on -- 8698 circles covering
+    // the whole globe would clutter the default view of the primary climate
+    // field, so this stays an explicit opt-in.
+    showPaleolithology: false,
   };
 
   /** Keyed by model id (not by ClimateLayer) -- 'climate' can now be backed
@@ -398,6 +423,8 @@ export class ClimateInstance {
     label: string,
     startCollapsed = false,
   ) {
+    this.paleolithology = new PointOverlay(this.camera);
+
     this.field.mesh.visible = true;
     this.field.setDepthKm(0); // month 0, until applyMonth() picks a real one
     this.scene.add(this.field.mesh);
@@ -447,6 +474,7 @@ export class ClimateInstance {
       onClip: (lo, hi) => this.applyClip(lo, hi),
       onOverlayOpacity: (v) => this.setOverlayOpacity(v),
       onShowWind: (v) => this.setWindVisible(v),
+      onShowPaleolithology: (v) => this.setPaleolithologyVisible(v),
       onWindStyle: (v) => this.setWindStyle(v),
       onWindScale: (v) => this.setWindScale(v),
       onWindDensity: (v) => this.setWindDensity(v),
@@ -541,6 +569,19 @@ export class ClimateInstance {
     }
     this.ui.setReferencePlateAvailable(this.availableReferencePlateIds(), this.referencePlateNames());
 
+    if (this.deps.paleolithologyUrl) {
+      try {
+        await this.paleolithology.load(this.deps.paleolithologyUrl, {
+          keyline: 'white', lifespan: 'range', size: PALEOLITHOLOGY_SYMBOL_SIZE,
+        });
+        this.paleolithology.setTime(0);
+      } catch (e) {
+        console.error(e); // a layer, not a prerequisite -- the globe still works
+      }
+    }
+    this.paleolithology.visible = this.view.showPaleolithology;
+    this.ui.setPaleolithologyAvailable(!!this.deps.paleolithologyUrl);
+
     const shadeVar = paleogeography.variables.find((v) => v.id === HILLSHADE_VARIABLE_ID);
     this.hasOverlay = !!shadeVar;
     if (shadeVar) {
@@ -582,6 +623,7 @@ export class ClimateInstance {
   }
 
   applyLayout(rect: Rect): void {
+    this.paleolithology.setRect(rect);
     this.ui.setRect(rect);
   }
 
@@ -1012,6 +1054,7 @@ export class ClimateInstance {
     this.wind.setProjection(mode);
     this.windStreaks.setProjection(mode);
     this.trackedParticles.setProjection(mode);
+    this.paleolithology.setCamera(camera, mode);
     // WindGlyphs only reposes on an explicit update() call (unlike
     // WindStreaks, which reposes every frame via tick()) -- without this,
     // arrows would keep showing whatever matrices they last had under the
@@ -1220,6 +1263,7 @@ export class ClimateInstance {
   applyAge(age: number): void {
     this.view.age = age;
     this.coastlines?.setAge(age);
+    this.paleolithology.setTime(age);
     this.updateReferenceRotation(); // qRefRender is age-dependent -- see its own doc comment
     void this.loadFrame(this.view.layer, age);
     if (this.hasOverlay) void this.loadOverlayFrame(age);
@@ -1280,6 +1324,11 @@ export class ClimateInstance {
     this.overlay.setReferenceRotation(this.qRefRender);
     this.windStreaks.setReferenceRotation(this.qRefRender);
     this.trackedParticles.setReferenceRotation(this.qRefRender);
+    // PointOverlay works in the geographic frame (deep-time-map's native
+    // frame, same as tomography's BoundaryOverlay -- see core/boundaries.ts's
+    // module doc comment), not the render frame everything else above uses --
+    // pass qGeo, not qRefRender.
+    this.paleolithology.setReferenceRotation(qGeo);
     if (this.hasWind) this.refreshWindGlyphs();
   }
 
@@ -1305,6 +1354,11 @@ export class ClimateInstance {
   setWindVisible(v: boolean): void {
     this.view.showWind = v;
     this.applyWindVisibility();
+  }
+
+  setPaleolithologyVisible(v: boolean): void {
+    this.view.showPaleolithology = v;
+    this.paleolithology.visible = v;
   }
 
   /** Switch between the two wind display modes -- mutually exclusive, see
@@ -1532,6 +1586,7 @@ export class ClimateInstance {
   render(renderer: WebGLRenderer): void {
     this.updateQueryMarkerVisibility(); // camera may have orbited since the last call, with no other hook
     renderer.render(this.scene, this.camera);
+    this.paleolithology.draw();
   }
 
   /** Same level of thoroughness as GlobeInstance.dispose(): the panel and
@@ -1543,5 +1598,6 @@ export class ClimateInstance {
   dispose(): void {
     this.ui.dispose();
     this.coastlines?.dispose();
+    this.paleolithology.dispose();
   }
 }

@@ -139,12 +139,14 @@ def main():
             "has_boundaries": bool(rm.get("has_boundaries")),
             "has_static_polygons": bool(rm.get("has_static_polygons")),
             "has_plate_names": bool(rm.get("has_plate_names")),
+            "has_paleolithology": bool(rm.get("paleolithology")),
         })
         print(f"  reconstruction {rm['id']:14s} {rm['name']:24s} "
               f"{rm['age_min']:.0f}-{rm['age_max']:.0f} Ma  "
               f"boundaries={'yes' if rm.get('has_boundaries') else 'no'}  "
               f"static_polygons={'yes' if rm.get('has_static_polygons') else 'no'}  "
-              f"plate_names={'yes' if rm.get('has_plate_names') else 'no'}")
+              f"plate_names={'yes' if rm.get('has_plate_names') else 'no'}  "
+              f"paleolithology={'yes' if rm.get('paleolithology') else 'no'}")
     if reconstruction_models:
         index["reconstruction_models"] = reconstruction_models
 

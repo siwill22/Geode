@@ -68,6 +68,16 @@ export class ThreeProjector {
 
   constructor(private camera: PerspectiveCamera) {}
 
+  /** Retarget this projector at a NEW camera object -- needed by any caller
+   *  whose own camera gets reassigned wholesale rather than reconfigured in
+   *  place (e.g. ClimateInstance.setProjection() building a fresh camera per
+   *  Projection, docs/adr/0003). Tomography (this class's original caller)
+   *  never needs this: it has no Projection concept, so its camera reference
+   *  never changes after construction. */
+  setCamera(camera: PerspectiveCamera): void {
+    this.camera = camera;
+  }
+
   setReferenceRotation(q: Quaternion): void {
     this.qRef = q;
   }

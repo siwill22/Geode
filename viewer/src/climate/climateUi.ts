@@ -42,6 +42,10 @@ export interface ClimateViewState {
    *  Reference Plate entry, docs/adr/0030 and ClimateInstance.setReferencePlate().
    *  0 (the prep-time anchor) is the default and means "no reanchoring". */
   referencePlateId: number;
+  /** Boucot, Chen & Scotese (2013) paleolithology indicator points overlay,
+   *  independent of `layer` -- see ClimateInstance's `paleolithology` field
+   *  and core/pointOverlay.ts. */
+  showPaleolithology: boolean;
 }
 
 export interface ClimateUICallbacks {
@@ -58,6 +62,7 @@ export interface ClimateUICallbacks {
   onClip(lo: number, hi: number): void;
   onOverlayOpacity(v: number): void;
   onShowWind(v: boolean): void;
+  onShowPaleolithology(v: boolean): void;
   onWindStyle(style: WindStyle): void;
   onWindScale(v: number): void;
   onWindDensity(v: number): void;
@@ -117,6 +122,7 @@ export class ClimateUI {
   private playTimer: ReturnType<typeof setInterval> | null = null;
   private clipMinCtrl: Controller;
   private clipMaxCtrl: Controller;
+  private paleolithologyCtrl: Controller;
   private showWindCtrl: Controller;
   private windStyleCtrl: Controller;
   private windScaleCtrl: Controller;
@@ -316,6 +322,15 @@ export class ClimateUI {
     this.gui.add(this.state, 'overlayOpacity', 0, 0.8, 0.01)
       .name('relief overlay')
       .onChange((v: number) => cb.onOverlayOpacity(v));
+    // Hidden entirely when the archive has no paleolithology export for the
+    // active Reconstruction Model -- see setPaleolithologyAvailable(), called
+    // from boot() once ClimateInstanceDeps.paleolithologyUrl is known. Not
+    // layer-gated (unlike the climate-model dropdown): this overlay is
+    // independent of whichever layer/variable is primary, same reasoning as
+    // `overlayOpacity`/`showWindCtrl` above.
+    this.paleolithologyCtrl = this.gui.add(this.state, 'showPaleolithology')
+      .name('Boucot paleolithology')
+      .onChange((v: boolean) => cb.onShowPaleolithology(v));
     // Visible whenever the ACTIVE climate model has a wind field -- not
     // every one does (Pohl doesn't), unlike when this was written, when
     // "the climate model" meant exactly one fixed thing. See
@@ -578,6 +593,14 @@ export class ClimateUI {
     this.windDensityCtrl[action]();
   }
 
+  /** Hidden entirely when `ClimateInstanceDeps.paleolithologyUrl` was null at
+   *  boot (an archive with no paleolithology export, or the fetch failed) --
+   *  a dead checkbox with nothing to toggle is worse than no checkbox, same
+   *  "show/hide-when-absent" precedent as `setWindAvailable`/`setResolutions`. */
+  setPaleolithologyAvailable(has: boolean): void {
+    this.paleolithologyCtrl[has ? 'show' : 'hide']();
+  }
+
   /** Populate the resolution dropdown from the paleogeography source's own
    *  `manifest.resolutions` -- called once at boot, not on every layer
    *  switch (see the constructor's comment on `resolutionCtrl`). Labelled by
@@ -675,14 +698,32 @@ export class ClimateUI {
    *  near a tile's own edge. */
   private showTooltip(clientX: number, clientY: number, p: TimeSeriesPoint): void {
     const fmt = (v: number) => (Number.isNaN(v) ? '—' : this.formatTick(v));
-    this.tooltip.replaceChildren();
-    const lines = [
+    this.renderTooltip(clientX, clientY, [
       `${p.age.toFixed(0)} Ma`,
       `median ${fmt(p.p50)}`,
       `IQR ${fmt(p.p25)} – ${fmt(p.p75)}`,
       `5–95th pct ${fmt(p.p5)} – ${fmt(p.p95)}`,
       `mean ${fmt(p.mean)}`,
-    ];
+    ]);
+  }
+
+  /** Same floating tooltip as the Time Series hover above (`this.tooltip`),
+   *  just plain caller-built lines instead of a `TimeSeriesPoint` -- used by
+   *  climate/main.ts's own pointer-hover hit-testing against
+   *  `ClimateInstance.paleolithology` (a Boucot point under the cursor).
+   *  Never shown at the same time as the Time Series tooltip: the two hover
+   *  gestures (a chart row vs. the globe itself) can't both have the pointer
+   *  at once. */
+  showPointTooltip(clientX: number, clientY: number, lines: string[]): void {
+    this.renderTooltip(clientX, clientY, lines);
+  }
+
+  hidePointTooltip(): void {
+    this.hideTooltip();
+  }
+
+  private renderTooltip(clientX: number, clientY: number, lines: string[]): void {
+    this.tooltip.replaceChildren();
     for (const line of lines) {
       const row = document.createElement('div');
       row.textContent = line;
