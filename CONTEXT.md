@@ -563,6 +563,16 @@ dependency now that it exists, just not yet extended past a single click's
 Month Profile / Age Series (see docs/plans/plate-frame-point.md,
 docs/adr/0024, docs/adr/0025).
 
+**The age-validity half of "loading an arbitrary point dataset" is now
+available upstream, even though the feature itself is not built.** A point
+older than the static polygon it would be assigned to cannot be validly
+reconstructed past that polygon's own begin age (ADR-0025's rule, stated
+generally in ADR-0032) — `viewer/vendor/deep-time-map`'s
+`points_from_dataframe()` exposes this as `plate_begin_age` on every point
+(v0.3.0+) so a future prep script does not need to re-derive it. This is
+data availability, not the feature: nothing in `viewer/src` or `prep/`
+consumes it yet.
+
 **Correction, from designing Virtual Geomagnetic Pole:** "loading an
 arbitrary point dataset" turned out not to be one uniform case. A dataset
 whose points are locations *on* a plate (deposits, sample sites) is this
