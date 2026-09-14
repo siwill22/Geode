@@ -87,13 +87,22 @@
          standalone 32x32 top-left circle. Expands #globe-menu into the
          same below-the-row slot #hint/#presets already share (left:12,
          top:44); only one flyout is ever opened at a time in practice, so
-         the shared slot (an existing convention, not new) is fine. */
-      #globe-menu-toggle {
+         the shared slot (an existing convention, not new) is fine.
+         `body` prefix, not a bare `#globe-menu-toggle` override: this and
+         multiGlobeMenu.css's own rule are equal-specificity ID selectors,
+         so whichever comes later in source order wins -- true in dev (this
+         <style> block follows that stylesheet <link>), but `vite build`
+         reinjects the bundled page CSS BEFORE this inline block, silently
+         flipping the cascade in production only. Found live: the deployed
+         globe-menu-toggle rendered at multiGlobeMenu.css's own (12, 8), on
+         top of hint-toggle, instead of here at (76, 12). `body` adds one
+         type selector, beating a lone ID regardless of link/style order. */
+      body #globe-menu-toggle {
         left: 76px; top: 12px;
         width: 24px; height: 24px;
       }
-      #globe-menu-toggle svg { width: 14px; height: 14px; }
-      #globe-menu {
+      body #globe-menu-toggle svg { width: 14px; height: 14px; }
+      body #globe-menu {
         top: 44px;
         width: 200px;
       }
