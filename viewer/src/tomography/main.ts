@@ -4,7 +4,7 @@ import {
 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-import { R_CMB, R_SURFACE, lonLatToVec3, radiusToDepth } from '../core/constants';
+import { LIGHT_DIR, R_CMB, R_SURFACE, lonLatToVec3, radiusToDepth } from '../core/constants';
 import { PALETTE } from '../core/palette';
 import { loadTopography } from './globe';
 import { fetchCoastlineData } from '../core/coastlines';
@@ -820,8 +820,18 @@ window.__geode = {
     const cx = (o.x * 0.5 + 0.5) * w;
     const cy = (o.y * 0.5 + 0.5) * h;
 
+    // Screen-space direction of the key light, so the pixels can be split into
+    // the half that faces it and the half that does not. LIGHT_DIR is a world
+    // direction; in view space its x,y ARE the screen axes, and y is up in both
+    // that space and the bottom-up frame readPixels and cy already use.
+    const lv = LIGHT_DIR.clone().transformDirection(camera.matrixWorldInverse);
+    const lLen = Math.hypot(lv.x, lv.y);
+    const lx = lLen > 1e-6 ? lv.x / lLen : 1;
+    const ly = lLen > 1e-6 ? lv.y / lLen : 0;
+
     let n = 0; let cold = 0; let hotN = 0;
     let sx = 0; let sy = 0; let rMax = 0;
+    let litSum = 0; let litN = 0; let unlitSum = 0; let unlitN = 0;
     for (let i = 0; i < w * h; i++) {
       const r = px[i * 4]; const g = px[i * 4 + 1]; const b = px[i * 4 + 2];
       if (Math.max(Math.abs(r - bg[0]), Math.abs(g - bg[1]), Math.abs(b - bg[2])) < 12) {
@@ -833,6 +843,12 @@ window.__geode = {
       sx += x; sy += y;
       const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
       if (d > rMax) rMax = d;
+      // The rim term is symmetric about the disc centre, so splitting on this
+      // axis cancels it and leaves the diffuse lobe -- which is the thing that
+      // inverts when a surface is shaded with a normal pointing away from us.
+      const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      if ((x + 0.5 - cx) * lx + (y + 0.5 - cy) * ly > 0) { litSum += lum; litN++; }
+      else { unlitSum += lum; unlitN++; }
     }
 
     const d = camera.position.length();
@@ -855,6 +871,8 @@ window.__geode = {
       depthKm: n ? radiusToDepth(toRadius(radiusPx)) : null,
       centroidOffsetX: n ? sx / n - cx : null,
       centroidOffsetY: n ? sy / n - cy : null,
+      litMean: litN ? litSum / litN : 0,
+      unlitMean: unlitN ? unlitSum / unlitN : 0,
       cameraDistance: d,
       fovDeg: camera.fov,
       viewportHeight: h,

@@ -204,11 +204,22 @@ void main() {
 
   vec3 pHit = ro + rd * tHit;
 
-  // The cold surface encloses low values, so its outward normal follows the
-  // gradient; the hot surface encloses high ones, so its outward normal opposes
-  // it. On a first hit from outside, both end up facing the camera.
+  // Shade two-sided. The gradient gives each surface its true outward normal
+  // (the cold surface encloses low values so it follows the gradient; the hot
+  // one encloses high values so it opposes it), but that normal only faces the
+  // camera when the first crossing along the ray is an ENTRY into a blob, and
+  // it often is not: the shell clips blobs open at uRadiusOuter, where the
+  // anomalies are largest, so rays that begin inside one hit its far wall
+  // first. Left unflipped those fragments get ndl inverted -- lit from the
+  // wrong side -- and rim pinned at exactly 1.0 by the max() below, which
+  // paints hollow interiors brighter than any correctly lit exterior.
+  //
+  // Flipping toward the viewer subsumes the outward-normal sign entirely, so
+  // there is no isHot branch here; isHot still picks the COLOUR below, which
+  // is surface identity rather than orientation.
   vec3 g = gradient(pHit, uNormalEps);
-  vec3 n = length(g) < 1e-8 ? -rd : normalize(isHot > 0.5 ? -g : g);
+  vec3 n = length(g) < 1e-8 ? -rd : normalize(g);
+  if (dot(n, rd) > 0.0) n = -n;
 
   vec3 base = isHot > 0.5 ? uHotColor : uColdColor;
   float ndl = dot(n, normalize(uLightDir)) * 0.5 + 0.5;
