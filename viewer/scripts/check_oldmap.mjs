@@ -141,6 +141,42 @@ console.log(`land cull      ${audit.drawn} drawn, ${audit.culled} culled `
   + `of ${audit.visible} on screen`);
 if (audit.drawn < 50) fail(`only ${audit.drawn} glyphs survived the land test`);
 
+// The flicker's cause, measured rather than asserted: hairline gaps between
+// abutting terranes rasterize as enclosed "seas", each growing its own wash and
+// rings, each blinking as sub-pixel geometry shifts. Closing the mask should
+// collapse the count to the few genuine inland seas.
+await page.evaluate((p) => window.__oldmap.setProjection(p), 'robinson');
+await page.evaluate(() => window.__oldmap.setAge(100));
+await stableInkStats('sliver audit');
+const sliv = await page.evaluate(() => window.__oldmap.sliverAudit());
+if (sliv) {
+  console.log(`enclosed seas  ${sliv.open} bodies / ${sliv.openPixels} px raw`
+    + `  ->  ${sliv.closed} / ${sliv.closedPixels} px closed`);
+  if (sliv.closed >= sliv.open) {
+    fail('the morphological closing removed no enclosed ocean at all');
+  }
+}
+
+// Bands are ground distances, so zooming in must make them WIDER on screen.
+// This is the property the first two versions got wrong -- pixel-fixed bands
+// look fine in any single screenshot and silently change what the map says.
+for (const projection of ['robinson', 'globe']) {
+  await page.evaluate((p) => window.__oldmap.setProjection(p), projection);
+  await page.evaluate(() => window.__oldmap.setAge(100));
+  await stableInkStats(`${projection} zoom base`);
+  const base = await page.evaluate(() => window.__oldmap.scale());
+  await page.evaluate(() => window.__oldmap.setZoom(2.5));
+  await stableInkStats(`${projection} zoomed`);
+  const zoomed = await page.evaluate(() => window.__oldmap.scale());
+  const ratio = zoomed / base;
+  console.log(`${projection.padEnd(12)} px/km ${base.toFixed(5)} -> ${zoomed.toFixed(5)}`
+    + `  ratio ${ratio.toFixed(2)} (want 2.50)`);
+  if (Math.abs(ratio - 2.5) > 0.06) {
+    fail(`${projection}: bands did not scale with zoom (ratio ${ratio.toFixed(3)})`);
+  }
+  await page.evaluate(() => window.__oldmap.setZoom(1));
+}
+
 // The subduction debug layer must actually load and draw when asked.
 await page.evaluate(() => window.__oldmap.setLayer('showTrenches', true));
 await page.waitForTimeout(4000);

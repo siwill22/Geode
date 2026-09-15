@@ -255,6 +255,15 @@ window.__oldmap = {
     ui.refreshDisplay();
   },
   mountainAudit: () => overlay.auditMountains(),
+  scale: () => overlay.scalePixelsPerKm,
+  sliverAudit: () => overlay.auditSlivers(),
+  // Drives the camera the way the scroll wheel does, so the zoom assertion
+  // exercises the real path rather than poking the scale directly.
+  setZoom: (z: number) => {
+    const c = camera as unknown as { zoom: number; updateProjectionMatrix(): void };
+    c.zoom = z;
+    c.updateProjectionMatrix();
+  },
   stats: () => ({
     age: state.age,
     projection: mode,

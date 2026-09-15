@@ -398,6 +398,33 @@ which is how Robinson and Plate Carrée came to report byte-identical coverage
 while their screenshots plainly differed. It now waits for two consecutive
 identical reads, and prints the painted bounding box so a stale frame cannot hide.
 
+## 7. Second review: the bands are kilometres again
+
+Three more, and the third reversed a decision.
+
+**The ink is measured in kilometres, not screen pixels.** Pixel-fixed bands kept
+the same size at every zoom, so the ground distance they represented changed as
+you scrolled — the map quietly said something different depending on how closely
+you looked at it. The constants are now the notebook's own values (400 km wash;
+100/200/350/550/800/1200 km rings) converted through one scale taken from the
+projection's live geometry. ADR-0037 is rewritten to record the reversal, and
+`check:oldmap` asserts a 2.5× zoom gives 2.5× the pixels per kilometre in both
+Robinson and the globe. This also made the code smaller, not larger: the pixel
+constants had needed per-projection tuning that kilometres do not.
+
+**The rings were still faceted because the metric was wrong, not the
+resolution.** A ring is a level set of the distance field, so a chamfer's
+octagonal error *is* the ring's shape — raising resolution (the previous round's
+fix) could never help. Replaced with Felzenszwalb's exact Euclidean transform,
+same O(n).
+
+**The flicker was hairline gaps between abutting terranes**, each rasterizing as
+an enclosed sea that grows its own wash and rings and blinks as sub-pixel
+geometry shifts. The previous round's fill-rule fix was real but addressed a
+different symptom. The mask is now morphologically closed first: **61 enclosed
+bodies of ocean at 100 Ma before, 10 after**, the survivors being genuine inland
+seas. `check:oldmap` reports both numbers rather than asserting the fix.
+
 ## Still open from the spec
 
 The four tuning items above are untouched beyond a first pass — the ring offsets,
