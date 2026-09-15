@@ -302,6 +302,21 @@ export interface ReconstructionManifest {
    *  `points.json` payload (categories/rotations baked in at prep time), not
    *  a separate rotation table of its own. */
   paleolithology?: { points: string };
+  /** The Old Map viewer's two exports -- present only if prep/prep_oldmap.py has
+   *  been run for this Reconstruction Model (Merdith2021 only, today). See
+   *  docs/plans/old-map-viewer.md.
+   *
+   *  `mountains` is the glyph series, whose positions are real great-circle
+   *  results (docs/adr/0037). `continents` is a deep-time-map polygon payload,
+   *  produced by that library's own exporter rather than by prep_oldmap.py,
+   *  which is why it is optional independently of `mountains`. */
+  oldmap?: {
+    mountains: string;
+    continents?: string;
+    decay_myr: number;
+    age_min: number;
+    age_max: number;
+  };
 }
 
 export interface ColormapData {

@@ -45,6 +45,22 @@ global raster, using resolved subduction topologies. It is not approximated,
 not moved into the browser, and not expressed in pixels. Glyph *size* is fixed
 in screen pixels, like any map symbol; glyph *position* is not.
 
+## How it is actually drawn
+
+Recorded because the obvious reading of "stroke the coastline repeatedly at
+increasing `lineWidth`" is now wrong, while the decision it justified is not.
+
+That is literally what the first implementation did, and it ran at seconds per
+frame: 26 strokes of a ~32,000-vertex path at widths up to 96 px, with round
+joins. Both elements now come from one chamfer distance field over the land
+silhouette, at half resolution, read on the land side for the wash and the ocean
+side for the rings. Cost scales with pixels instead of with vertices × width.
+
+Nothing above changes. The field is measured in screen pixels, its chamfer
+metric is anisotropic by ~2%, and it is computed on the projected image rather
+than on the sphere — all three are fine precisely because this is decoration,
+and all three are why the rule below still holds.
+
 ## Consequences
 
 - Retuning the map's look means editing an array of pixel widths, with no

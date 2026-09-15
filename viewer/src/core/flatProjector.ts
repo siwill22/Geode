@@ -8,6 +8,9 @@ import { referencePlateProjectedPosition, type ProjectionMode } from './projecti
 
 type Projected = [number, number, number] | null;
 
+/** Passed where a reanchor must NOT happen -- see mapHalfWidth. */
+const IDENTITY_QUAT: Quaternion = [0, 0, 0, 1];
+
 /** Reference Plate 0, the overwhelmingly common case -- worth short-circuiting
  *  the rotate/unrotate round trips it would otherwise make no difference to. */
 function isIdentityQuat(q: Quaternion): boolean {
@@ -114,6 +117,75 @@ export class FlatProjector {
     const { lon, lat } = FlatProjector.geoLonLat(v);
     if (isIdentityQuat(this.qRef)) return { lon, lat };
     return FlatProjector.reanchor(lon, lat, this.qRef);
+  }
+
+  /**
+   * Optional part of deep-time-map's projector contract: how wide half the map
+   * is, in screen pixels, used by `PolygonLayer` to spot a ring whose projected
+   * vertices jump from one edge to the other.
+   *
+   * Without it that layer's `halfWidth` defaults to 0, the jump is never
+   * detected, and a ring straddling the seam is FILLED across the whole map
+   * rather than diverted to an outline -- `seamSplit()` alone does not save it,
+   * because a fill never consults the seam hook. The two belong together.
+   *
+   * Measured through the live camera rather than derived from the world-unit map
+   * width, so it tracks pan and zoom: this is the screen distance between
+   * display longitudes -90 and +90 on the equator, which is exactly half the map
+   * in both flat Projections (their parallels are straight and evenly divided in
+   * longitude). Returns 0 before the first `update()`, which reads as "unknown"
+   * and simply disables the test.
+   *
+   * DISPLAY longitudes, so it deliberately does NOT go through `project()`: that
+   * reanchors by the Reference Plate first, and true ±90 is not display ±90
+   * whenever a rotation is active. The map's edges are fixed in the display
+   * frame, so its width has to be measured there.
+   */
+  get mapHalfWidth(): number {
+    if (!this.w) return 0;
+    return Math.abs(this.screenXOfDisplayLon(90) - this.screenXOfDisplayLon(-90));
+  }
+
+  /** Screen x of a point on the equator at DISPLAY longitude `lon`. */
+  private screenXOfDisplayLon(lon: number): number {
+    return this.screenOfDisplayLonLat(lon, 0)[0];
+  }
+
+  /** Screen position of a DISPLAY (lon, lat) -- i.e. with no Reference Plate
+   *  reanchor, for things fixed to the map rather than to the Earth. */
+  private screenOfDisplayLonLat(lon: number, lat: number): [number, number] {
+    const [x, y, z] = referencePlateProjectedPosition(
+      this.flatMode, lon, lat, IDENTITY_QUAT,
+    );
+    this.p.set(x, y, z).project(this.camera);
+    return [(this.p.x * 0.5 + 0.5) * this.w, (-this.p.y * 0.5 + 0.5) * this.h];
+  }
+
+  /**
+   * The map's own boundary, in screen pixels, walked once anticlockwise.
+   *
+   * This is the edge of the EARTH on this projection, which is not the edge of
+   * the canvas: Robinson's boundary is a curve, so a rectangle covering the map
+   * necessarily includes corners that are not on the planet. A consumer painting
+   * anything derived from "everywhere that is not land" -- an ocean tint, a
+   * distance field, a graticule fill -- needs this to stop at, or it paints the
+   * corners too.
+   *
+   * In the DISPLAY frame, like the seam and for the same reason: the map's edges
+   * do not move when a Reference Plate rotation moves the Earth beneath them.
+   *
+   * `steps` samples per side. Plate Carrée is exact at any value (its boundary
+   * is four straight lines); Robinson's meridians are curved, so this is a
+   * polyline approximation of them, which is why the default is generous.
+   */
+  mapOutline(steps = 96): [number, number][] {
+    const pts: [number, number][] = [];
+    const lerp = (a: number, b: number, i: number): number => a + ((b - a) * i) / steps;
+    for (let i = 0; i < steps; i++) pts.push(this.screenOfDisplayLonLat(180, lerp(-90, 90, i)));
+    for (let i = 0; i < steps; i++) pts.push(this.screenOfDisplayLonLat(lerp(180, -180, i), 90));
+    for (let i = 0; i < steps; i++) pts.push(this.screenOfDisplayLonLat(-180, lerp(90, -90, i)));
+    for (let i = 0; i < steps; i++) pts.push(this.screenOfDisplayLonLat(lerp(-180, 180, i), -90));
+    return pts;
   }
 
   /**

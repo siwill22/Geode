@@ -1,6 +1,10 @@
 # Old Map viewer — spec
 
-Status: **proposed**, resolved through a grilling session 2026-09-15. Nothing built.
+Status: **built** (2026-09-15). `viewer/oldmap.html`, verified by
+`npm run check:oldmap`. The spec below is the design as resolved in the grilling
+session; where the build departed from it, the "What changed in the building"
+section at the end says so and why. Nothing above that section has been
+rewritten to match the outcome.
 
 A new Geode wrapper that draws a plate reconstruction as an aged engraved
 chart: pen lines, a graded coastal wash, hachured mountain ranges standing
@@ -248,3 +252,108 @@ lands it.
 4. **Pen line quality.** A clean stroke will read as CAD, not engraving.
    Whether the coastline needs weight variation is worth a look before
    deciding it needs code.
+
+---
+
+# What changed in the building
+
+Five things came out differently from the spec above. Four were forced by
+measurement; one is a limitation now filed upstream.
+
+## 1. The mountain rule is a nearest-neighbour query, not a raster scan
+
+The spec assumed prep would reuse the notebook's `xrspatial.proximity` distance
+transforms. It does not, because those are **wrong**, and not subtly:
+`prep/prep_oldmap.py --check-distances` measures them against brute force at
+100 Ma and reports a mean error of **+112 km, reaching 4432 km**.
+
+Two independent causes. The scan does not wrap at ±180, so cells near the
+antimeridian cannot see sources across the seam — mean error there is +926 km,
+and that is exactly where Mesozoic mountains live (Aleutians, Kamchatka, the
+Antarctic–Pacific margin). The notebook's `mask_to_da` patches the *mask* seam
+and does nothing for the distance search that runs afterwards. But the scan is
+also order-dependent in the interior: +55 km mean away from the seam, and 13% of
+cells move by more than a kilometre if the grid is merely rolled.
+
+None of it needed solving, because the field was never needed as a field. Only
+~2000 candidate points are ever interrogated, so prep queries a KD-tree of source
+positions in 3D unit-vector space. Chord distance there is monotonic in
+great-circle distance, so the nearest neighbour is **exact** — the check reports
+0.000000 m against brute force — and the antimeridian stops being a special
+place, because it is only special on a grid.
+
+What stays approximate is the source set, not the search, and only on one side:
+trench sources are the tessellated subduction geometry itself (no rasterization
+at all), while coast sources are ocean cell centres from a rasterized land mask,
+quantized to ±14 km at 0.25°. Rasterizing is unavoidable there — the model's
+continent polygons overlap when reconstructed, and the coastline wanted is the
+outline of their merged union.
+
+## 2. The ink is a distance field, not repeated strokes
+
+ADR-0037's screen-space decision stands. Its *implementation* does not: stroking
+the coastline path repeatedly at growing `lineWidth` was the first version and it
+ran at **seconds per frame** — 26 strokes of a ~32,000-vertex path at widths up
+to 96 px, with round joins. It starved the main thread badly enough that
+Playwright could not take a screenshot.
+
+Both elements now come from one chamfer distance field computed at half
+resolution from the land silhouette. The wash reads it on the land side, the
+rings on the ocean side. Cost scales with pixels rather than with vertices ×
+width. This is still screen space and still not a distance, so ADR-0037 is
+unaffected — see `oldMapOverlay.ts` for the full note.
+
+## 3. The globe camera is orthographic, and that is load-bearing
+
+The spec did not say which camera. It has to be orthographic, for a reason that
+is not only aesthetic: `PolygonLayer` fills a limb-straddling continent by
+clamping hidden vertices onto the **great circle** perpendicular to the view
+axis, which is the horizon only under an orthographic camera. Under perspective
+the horizon is a smaller circle at `dot = R/d`, clamped vertices are still behind
+it, and the ring closes across the globe. `ThreeProjector.axis` therefore returns
+`undefined` for a perspective camera on purpose rather than handing back an axis
+that would be silently misused.
+
+This matters more here than it would elsewhere: the coastline path is not merely
+drawn, it is also the clip for the wash and the rings, so a malformed ring puts
+the ink in the wrong place rather than just drawing a wrong outline.
+
+## 4. Two core projectors gained the rest of the contract
+
+`PolygonLayer` needs `axis` (limb clamping) and `mapHalfWidth` (seam detection),
+and Geode's projectors implemented neither — so a seam-crossing ring would have
+been *filled* straight across the map, which `seamSplit` alone does not prevent
+because a fill never consults it. Both are now implemented, in `core/`, and
+`FlatProjector` also grew `mapOutline()`.
+
+That last one fixed a bug visible in the first screenshots: the distance field
+treats "off the map" as ocean, so rings spread across the paper beyond the
+globe's limb and past Robinson's curved boundary. Everything is now clipped to
+the Earth's own outline — except the mountain glyphs, which are symbols standing
+at points and would be sliced in half by it.
+
+Upstream, `PolygonLayer.projectRings()` was added (deep-time-map v0.7.0) so the
+traced rings can be had without the drawing. A recording shim around `draw()`
+cannot work: it cannot separate fillable rings from seam-diverted ones, which is
+the distinction that decides whether a ring may be closed.
+
+## 5. Known gap: rings that enclose a pole
+
+Visible as a smeared band along lat ±90 on both flat Projections. A polygon
+covering a pole has no closed boundary in (lon, lat) — its true boundary runs
+along the pole itself, a segment absent from the source geometry — so it
+projects as a strip across the full width of the map. The globe view of the same
+data is correct, so it is the projection, not the data.
+
+The v0.6.0 seam fix does not catch it: `mapHalfWidth` spots a jump between
+consecutive vertices, and a pole-enclosing ring need not have one. Filed as
+[deep-time-map#11](https://github.com/siwill22/deep-time-map/issues/11); it
+belongs there rather than here, since it affects every flat-map consumer of that
+layer and deep-time reconstructions have polar continents at most ages.
+
+## Still open from the spec
+
+The four tuning items above are untouched beyond a first pass — the ring offsets,
+wash reach, paper parameters and pen weight are all single constants at the top
+of their modules, which is the payoff ADR-0037 predicted. Sutures and
+collisional orogens remain out of scope, as does 200–1000 Ma.

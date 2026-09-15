@@ -18,7 +18,8 @@
     "check:projections": "node scripts/check_projections.mjs shots-projections",
     "check:flat-direction": "node scripts/check_flat_direction.mjs",
     "check:robinson": "cd .. && conda run -n pygmt17 python prep/check_robinson.py",
-    "check:storymaps": "node scripts/check_storymaps.mjs"
+    "check:storymaps": "node scripts/check_storymaps.mjs",
+    "check:oldmap": "node scripts/check_oldmap.mjs"
   },
   "keywords": [],
   "author": "",

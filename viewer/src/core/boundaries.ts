@@ -5,7 +5,7 @@ import { BoundarySeries, DEFAULT_STYLE } from '../../vendor/deep-time-map/js/ind
 import { R_SURFACE } from './constants';
 import { maskAt } from './mask';
 import type { Rect } from './layout';
-import { rotateVector, type Quaternion } from './rotation';
+import { conjugateQuaternion, rotateVector, type Quaternion } from './rotation';
 import { FlatProjector } from './flatProjector';
 import type { ProjectionMode } from './projection';
 
@@ -94,7 +94,42 @@ export class ThreeProjector {
     // dot(v, camDir) > R/d -- NOT dot > 0, which is the orthographic answer.
     // At the default d = 2.6 R the two differ by 23 degrees of arc, a band of
     // the far side that would be drawn over the limb.
-    this.horizon = R_SURFACE / (d || 1);
+    //
+    // An orthographic camera has no eye point, so the cap IS the hemisphere and
+    // the horizon is a great circle. That is the case `axis` below requires.
+    this.horizon = this.isOrthographic ? 0 : R_SURFACE / (d || 1);
+  }
+
+  private get isOrthographic(): boolean {
+    return (this.camera as unknown as { isOrthographicCamera?: boolean }).isOrthographicCamera === true;
+  }
+
+  /**
+   * Optional part of deep-time-map's projector contract: the view axis, in ITS
+   * geographic frame, used by `PolygonLayer` to clamp a vertex behind the
+   * horizon onto the limb so a straddling continent still fills.
+   *
+   * **Undefined under a perspective camera, deliberately.** The library's
+   * `clampToLimb` puts the clamped vertex on the great circle perpendicular to
+   * this axis, which is the horizon only when the camera is orthographic. Under
+   * perspective the true horizon is a smaller circle at dot = R/d, so a vertex
+   * clamped to the great circle is still behind it: `project()` would return
+   * null a second time, the vertex would be dropped anyway, and the ring would
+   * close across the globe -- the exact artefact the clamping exists to prevent,
+   * arrived at more expensively. Returning undefined instead makes PolygonLayer
+   * fall back to polyline behaviour, which is honest about what it can do.
+   *
+   * Frame note: the layer's own vectors are geographic and PRE-Reference-Plate,
+   * while `camDir` is a render-frame direction. So this converts back
+   * (gx, gy, gz) <- (x, -z, y) and then un-rotates by qRef, because rotations
+   * preserve the dot product the layer is about to take: dot(R·v, a) equals
+   * dot(v, R⁻¹·a).
+   */
+  get axis(): number[] | undefined {
+    if (!this.isOrthographic) return undefined;
+    const g: [number, number, number] = [this.camDir.x, -this.camDir.z, this.camDir.y];
+    const [x, y, z] = rotateVector(conjugateQuaternion(this.qRef), g[0], g[1], g[2]);
+    return [x, y, z];
   }
 
   project(v: ArrayLike<number>): Projected {
