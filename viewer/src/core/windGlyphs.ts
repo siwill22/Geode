@@ -4,7 +4,7 @@ import {
 } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { DEG, R_SURFACE, eastNorthAt, lonLatToVec3 } from './constants';
-import { referencePlateFlatSample, type ProjectionMode } from './projection';
+import { referencePlateProjectedSample, type ProjectionMode } from './projection';
 import { texelIndex, texelToPhysical } from './volume';
 import { rotateVector, type Quaternion } from './rotation';
 import type { VariableInfo } from './types';
@@ -213,7 +213,7 @@ export class WindGlyphs {
    *  docs/adr/0030. Applied to each glyph's position AND direction: on the
    *  Globe, directly, by rotating both 3D vectors (rotating a rigid body
    *  rotates its embedded vectors the same way); on Plate Carrée, via
-   *  referencePlateFlatSample()'s round-trip through the sphere, since the
+   *  referencePlateProjectedSample()'s round-trip through the sphere, since the
    *  flat plane's own Cartesian position/basis aren't 3D directions a
    *  quaternion can rotate directly (see that function's doc comment).
    *  Never applied to the (lon, lat) used to sample uData/vData -- the
@@ -242,11 +242,13 @@ export class WindGlyphs {
       // u/v are already components in a local east/north tangent frame --
       // on the globe that frame rotates with position (eastNorthAt), so
       // this sum is a real 3D tangent-plane direction, not a flat
-      // (u, v) -> (x, y) guess. On the flat plane, referencePlateFlatSample
-      // handles east/north itself (constant screen axes there, see its own
-      // doc comment), including the Reference Plate round-trip a flat
-      // plane needs that a 3D rotation of the plane's own position can't
-      // give it (docs/plans/reference-plate.md's "Known issue" postmortem).
+      // (u, v) -> (x, y) guess. On a flat map, referencePlateProjectedSample
+      // handles east/north itself -- NOT as constant screen axes, which only
+      // Plate Carrée has; Robinson's meridians converge, so it asks
+      // flatDirection() where north actually points there (see its own doc
+      // comment). It also does the Reference Plate round-trip a flat map
+      // needs that a 3D rotation of the plane's own position can't give it
+      // (docs/plans/reference-plate.md's "Known issue" postmortem).
       if (this.mode === 'globe') {
         const { east, north } = eastNorthAt(lon, lat);
         this.dir.set(
@@ -263,7 +265,9 @@ export class WindGlyphs {
         this.tmp.position.set(px, py, pz);
         this.dir.set(dx, dy, dz);
       } else {
-        const { position, direction } = referencePlateFlatSample(lon, lat, u, v, qRef, FLAT_GLYPH_Z);
+        const { position, direction } = referencePlateProjectedSample(
+          this.mode, lon, lat, u, v, qRef, FLAT_GLYPH_Z,
+        );
         this.dir.set(direction[0], direction[1], direction[2]);
         if (this.dir.lengthSq() < 1e-8) this.dir.set(0, 1, 0); // calm, same threshold as the globe branch
         else this.dir.normalize();

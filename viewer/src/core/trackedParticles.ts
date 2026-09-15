@@ -1,3 +1,4 @@
+import { isFlat, type ProjectionMode } from './projection';
 import {
   BufferAttribute, BufferGeometry, Color, Line, LineBasicMaterial, Object3D, Points, PointsMaterial,
 } from 'three';
@@ -159,10 +160,14 @@ export class TrackedParticles {
     this.particles.length = 0;
   }
 
-  /** See the class doc comment -- Plate Carrée isn't supported yet, so
-   *  switching to it clears rather than mis-draws every existing path. */
-  setProjection(mode: 'globe' | 'plateCarree'): void {
-    if (mode !== 'globe') this.clear();
+  /** See the class doc comment -- no flat Projection is supported yet, so
+   *  switching to one clears rather than mis-draws every existing path.
+   *  Typed as the full ProjectionMode rather than a two-member subset: the
+   *  `mode !== 'globe'` test was already the right behaviour for any flat
+   *  projection, and the narrow type only meant adding one broke compilation
+   *  here for no reason. */
+  setProjection(mode: ProjectionMode): void {
+    if (isFlat(mode)) this.clear();
   }
 
   /** Advance every non-stalled particle by one animation frame's worth of

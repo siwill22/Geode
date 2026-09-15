@@ -240,20 +240,35 @@ non-opaque hole let Vector Streaks on the far hemisphere show through).
 ## Projection
 
 How the globe's surface is mapped onto the screen: **Globe** (a sphere, viewed
-with a perspective camera and free orbit) or **Plate Carrée** (a flat
-equirectangular plane, viewed with an orthographic camera and pan/zoom, no
-rotation). Applies globally — every tiled instance on screen shares one
-Projection, the same way they already share one camera. Independent of Model,
-Frame, or Reconstruction Age: switching Projection changes how something is
-viewed, not what is being viewed.
+with a perspective camera and free orbit), **Plate Carrée** (a flat
+equirectangular plane, orthographic camera, pan/zoom, no rotation) or
+**Robinson** (a flat compromise projection, same camera treatment). Applies
+globally — every tiled instance on screen shares one Projection, the same way
+they already share one camera. Independent of Model, Frame, or Reconstruction
+Age: switching Projection changes how something is viewed, not what is being
+viewed.
 
-Coastlines and land fill do not reproject with it yet — their CPU build
-pipeline (plate-rotation slerp) is a separate, unrelated piece of work.
-Vector Field overlays (glyphs and streaks) do reproject, including their own
-Plate-Carrée-only concern of a real antimeridian seam a sphere doesn't have.
-More Projections
-(Robinson, Mollweide, Spilhaus) are expected later; Plate Carrée is the
-first.
+**Flat** is the distinction that matters in code, not "is it Plate Carrée" —
+ask `isFlat(mode)`. Everything the flat modes share (orthographic camera, an
+antimeridian seam a sphere doesn't have, reproject-per-vertex rather than
+rotate-in-3D for Reference Plate) they share with each other, and several
+places spelled "not globe" as `=== 'plateCarree'` until a second flat
+projection made each one a bug (see docs/adr/0036).
+
+Robinson is the first Projection with **no closed-form inverse**: it is
+defined by a 19-entry table, so a fragment recovers its latitude by bracketing
+that table (Y is strictly increasing, which is what makes this exact rather
+than iterative) and its longitude from X at that latitude. It is also the
+first that is not **onto**: its boundary is a curve, so a plane large enough to
+hold the map has corners that are not on the Earth, and the shader discards
+there rather than clamping.
+
+Coastlines **and land fill** now both reproject. Land fill did not until
+Robinson arrived — a flat map drew flat coastlines over a spherical blob of
+land, survivable only while every flat view had an opaque raster over the whole
+sphere. Triangles straddling the antimeridian are dropped rather than clipped,
+the same choice the line seam test makes. Vector Field overlays (glyphs and
+streaks) reproject too. Mollweide and Spilhaus are still expected later.
 
 ## Reference Plate
 
@@ -619,3 +634,123 @@ comparison (`gprm.utils.pmag.generate_running_mean_path` /
 `rotate_to_common_reference`). Explicitly deferred, not designed — see
 ADR-0029's Deferred section. Named here only so "Apparent Polar Wander
 Path" is never confused with a VGP itself once this is eventually built.
+
+## Occurrence
+
+One fossil identification, at one place, constrained to an age *interval* —
+never a single age. The interval is the data: a fossil is dated by the
+stratigraphic unit it came from, so an Occurrence carries a maximum and a
+minimum age and the truth lies somewhere between. This makes an Occurrence a
+direct fit for `PointLayer`'s `lifespan: 'range'` and a poor fit for anything
+expecting a point age.
+
+Like an ore deposit or a sample site, an Occurrence is "a location on a plate"
+in Plate-Frame Point's sense — assigned a plate by static-polygon
+partitioning, then rotated — not a VGP-like object with its own separate
+assignment rule.
+
+_Avoid_ "fossil" alone for this: one Occurrence is a taxon recorded in a
+collection, not a specimen, and several Occurrences routinely share a
+locality. Designed in `docs/plans/paleobiology-viewer.md`; not built.
+
+## Grouping
+
+A named categorical partition of a point dataset into a small, bounded set of
+display categories, each with its own palette. A dataset declares two or three;
+exactly one is active at a time, chosen from a dropdown, never overlaid — the
+same shape as Vector Field (ADR-0014), and for the same reason.
+
+Bounded is a requirement, not a preference: an aggregate glyph summarising a
+cell cannot show an unbounded category set, which is what rules out a free
+taxonomic-rank switcher. A Grouping need not be taxonomic at all — the coral
+case study groups by subclass, the Panama case study by which side of the
+gateway a lineage first appears on.
+
+Maps onto a `points.json`'s existing `points[].type` + `categories` fields, so
+it needs nothing new from deep-time-map.
+
+### Observed vs Derived Grouping
+
+Whether a Grouping's categories are **read** from the data or **inferred** by a
+rule. "Which side of the gateway this occurrence is on" is observed — it comes
+straight from the coordinates. "Which continent this genus came from" is
+derived: no source records it, so it is computed (from the continent of the
+genus's oldest occurrence) and is only as good as that rule.
+
+The distinction is in the glossary rather than left implicit because a derived
+category that looks like an observed one is how a viewer ends up asserting what
+it cannot support. A Derived Grouping states its rule in the legend and is
+named for what was measured — "first appears in", never "originated in" — and
+keeps an explicit `ambiguous` category rather than forcing a call.
+
+## Time Bin
+
+The stratigraphic interval a diversity or composition series is computed over —
+ICS stages, of which there are 101 in the Phanerozoic, with durations ranging
+from under 1 Myr to 21.6 Myr.
+
+Distinct from **Sampling Step**, and the two must never collapse into one term.
+A Time Bin is an analytic unit whose boundaries are stratigraphic and whose
+widths are uneven; a Sampling Step is a uniform interval an export is
+precomputed at, purely a rendering convenience (cf. the 5 Myr rotation sampling
+`prep_boucot.py` already uses). Their unevenness is load-bearing in opposite
+directions: a longer Time Bin accumulates more taxa purely by lasting longer,
+which is a bias to show rather than hide, while a Sampling Step's uniformity is
+what makes it invisible.
+
+The *map* needs neither. At a continuous Reconstruction Age, a cell holds every
+Occurrence whose own age interval contains that age — bins are needed only by a
+series that requires discrete x-values.
+
+## Aggregation Cell
+
+An equal-area cell on the sphere that Occurrences are binned into for
+summary display, one glyph per occupied cell. Equal-area (HEALPix, as
+`velocities.json` already samples on) rather than a lon/lat grid, and the
+difference is not cosmetic: a lon/lat grid's cells shrink toward the poles, so
+counting into one would inflate polar density exactly where a latitudinal
+diversity reading is being taken.
+
+Binned in **paleo** coordinates at each time, never present-day ones — a cell
+is a region of the reconstructed globe, so which Occurrences fall in it changes
+as the plates move.
+
+## Paper
+
+The page-space substrate an Old Map view is drawn on — an aged sheet, with its
+own tint, stains, folds and vignette. It belongs to the **page**, not to the
+Earth: it never moves when the globe is dragged or Reconstruction Age is
+scrubbed, while every mark on top of it does.
+
+That separation is what lets one sheet carry any Projection. The paper is
+always a rectangle and the Projection is merely what is drawn on it, so a Globe
+view is a disc of ink on a full page rather than a textured ball — which is how
+an atlas plate actually looks. Under Robinson, whose boundary is a curve, the
+corners of the page are simply paper, and that is correct rather than a gap.
+
+## Orogen Candidate
+
+One of a fixed set of points, generated once on the sphere and assigned a plate
+id, that is reconstructed to every age and tested there against a mountain
+rule. A Candidate is not itself a mountain: it is a place that may or may not
+be carrying one at a given age.
+
+Fixed identity is the whole point. Candidates ride their plates, so a mountain
+drawn on one moves with the continent it sits on, and a glyph that is fading
+has something stable to fade — regenerating the point set per frame instead
+puts glyphs on a fixed global lattice that blinks as the orogenic band sweeps
+past it, which is the failure this concept exists to prevent.
+
+## Orogen Age
+
+Myr since an Orogen Candidate last satisfied the mountain rule — zero while it
+is active, then increasing once the condition that raised it goes away. Drives
+how strongly the glyph is drawn, so orogens age out rather than vanish the
+instant their trench departs.
+
+Distinct from Reconstruction Age, and the two move in opposite directions:
+Reconstruction Age is the age of the view, while Orogen Age is measured
+*backwards from* it, and the same Candidate carries a different Orogen Age at
+every Reconstruction Age. A consequence worth stating: a view's oldest frame
+has no history behind it, so an Orogen Age series is only meaningful where the
+computation began some margin deeper than the range on display.

@@ -5,7 +5,7 @@ import {
   DEG, EARTH_RADIUS_KM, R_SURFACE, eastNorthAt, lonLatToVec3, vec3ToLonLat, wrapLon,
 } from './constants';
 import {
-  FLAT_EAST, lonLatToFlatVec3, referencePlateFlatPosition, type ProjectionMode,
+  flatDirection, lonLatToFlatVec3, referencePlateProjectedPosition, type ProjectionMode,
 } from './projection';
 import { texelIndex, texelToPhysical } from './volume';
 import { rotateVector, type Quaternion } from './rotation';
@@ -283,10 +283,10 @@ export class WindStreaks {
       const [x0, y0, z0] = lonLatToVec3(lon, lat, RIBBON_R);
       [x, y, z] = rotateVector(this.qRef, x0, y0, z0);
     } else {
-      // referencePlateFlatPosition, not a direct rotateVector of the flat
+      // referencePlateProjectedPosition, not a direct rotateVector of the flat
       // Cartesian position -- see its own doc comment and
       // docs/plans/reference-plate.md's "Known issue" postmortem.
-      [x, y, z] = referencePlateFlatPosition(lon, lat, this.qRef, FLAT_RIBBON_Z);
+      [x, y, z] = referencePlateProjectedPosition(this.mode, lon, lat, this.qRef, FLAT_RIBBON_Z);
     }
     for (let k = 0; k < TRAIL_LEN; k++) {
       const base = (p * TRAIL_LEN + k) * 3;
@@ -413,10 +413,11 @@ export class WindStreaks {
 
     // rx/ry/rz are the RENDER (Reference-Plate-rotated) point this tick
     // commits to the trail -- Globe gets there by rotating the true sphere
-    // point directly (rotateVector), Plate Carrée by referencePlateFlatPosition's
-    // round-trip through the sphere, never by rotating the flat plane's own
-    // Cartesian point directly (see that function's doc comment and
-    // docs/plans/reference-plate.md's "Known issue" postmortem).
+    // point directly (rotateVector), a flat map by
+    // referencePlateProjectedPosition's round-trip through the sphere, never by
+    // rotating the flat plane's own Cartesian point directly (see that
+    // function's doc comment and docs/plans/reference-plate.md's "Known issue"
+    // postmortem).
     let rx: number; let ry: number; let rz: number;
     if (this.mode === 'globe') {
       const { east, north } = eastNorthAt(lon, lat);
@@ -431,6 +432,10 @@ export class WindStreaks {
       this.lat[p] = next.lat;
       [rx, ry, rz] = rotateVector(this.qRef, nx, ny, nz);
     } else {
+      // Advection itself is Projection-independent: the Plate Carrée round
+      // trip here cancels, leaving "advance (lon, lat) by (u, v) * step". Only
+      // the DISPLAY position below is per-Projection, which is why this half
+      // is unchanged for Robinson while the line after it is not.
       const [px, py] = lonLatToFlatVec3(lon, lat);
       const nextLon = wrapLon((px + u * step) / (DEG * R_SURFACE));
       if (Math.abs(nextLon - lon) > 180) {
@@ -440,7 +445,7 @@ export class WindStreaks {
       const nextLat = Math.max(-90, Math.min(90, (py + v * step) / (DEG * R_SURFACE)));
       this.lon[p] = nextLon;
       this.lat[p] = nextLat;
-      [rx, ry, rz] = referencePlateFlatPosition(nextLon, nextLat, this.qRef, FLAT_RIBBON_Z);
+      [rx, ry, rz] = referencePlateProjectedPosition(this.mode, nextLon, nextLat, this.qRef, FLAT_RIBBON_Z);
 
       // The check above catches a seam crossing in the TRUE (unrotated)
       // frame, which is all that mattered before Reference Plate existed.
@@ -519,8 +524,20 @@ export class WindStreaks {
       // a zero vector -- it self-corrects within a few ticks as the
       // particle actually moves.
       if (dirLen < 1e-9) {
-        const east = this.mode === 'globe' ? eastNorthAt(this.lon[p], this.lat[p]).east : FLAT_EAST;
-        [dx, dy, dz] = east;
+        const east = this.mode === 'globe'
+          ? eastNorthAt(this.lon[p], this.lat[p]).east
+          // Not a constant +x: east IS +x on Plate Carrée and on Robinson
+          // (whose parallels are straight and horizontal), but asking
+          // flatDirection keeps this correct for a flat projection where it
+          // isn't, and costs nothing on a path that only runs for a calm or
+          // freshly-spawned particle.
+          : flatDirection(this.mode, this.lon[p], this.lat[p], 1, 0);
+        // eastNorthAt returns a unit vector but flatDirection returns a raw
+        // probe difference, and the branch below leaves dx/dy/dz expected to
+        // be unit length -- the cross product further down collapses the
+        // ribbon to nothing if they aren't.
+        const el = Math.hypot(east[0], east[1], east[2]) || 1;
+        dx = east[0] / el; dy = east[1] / el; dz = east[2] / el;
       } else {
         dx /= dirLen; dy /= dirLen; dz /= dirLen;
       }

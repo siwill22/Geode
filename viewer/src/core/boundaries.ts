@@ -1,4 +1,4 @@
-import type { PerspectiveCamera } from 'three';
+import type { Camera, PerspectiveCamera } from 'three';
 import { Vector3 } from 'three';
 import { BoundarySeries, DEFAULT_STYLE } from '../../vendor/deep-time-map/js/index.js';
 
@@ -6,6 +6,8 @@ import { R_SURFACE } from './constants';
 import { maskAt } from './mask';
 import type { Rect } from './layout';
 import { rotateVector, type Quaternion } from './rotation';
+import { FlatProjector } from './flatProjector';
+import type { ProjectionMode } from './projection';
 
 /**
  * Plate boundaries, drawn by the vendored deep-time-map library onto a 2D canvas
@@ -141,6 +143,13 @@ export class BoundaryOverlay {
   readonly canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   readonly projector: ThreeProjector;
+  /** Built lazily, on the first setCamera() that asks for a flat Projection --
+   *  the Globe-only wrappers (tomography, reconstruction, reconstructionGroup)
+   *  never call it and pay nothing. */
+  private flatProjector: FlatProjector | null = null;
+  private mode: ProjectionMode = 'globe';
+  /** Kept so a flat projector built later still gets the current rotation. */
+  private qRef: Quaternion = [0, 0, 0, 1];
   private series: BoundarySeries | null = null;
   /** Time of the frame actually on screen, which need not be the slider's age. */
   frameTime: number | null = null;
@@ -220,10 +229,40 @@ export class BoundaryOverlay {
     this.projector.mask = mask;
   }
 
+  /**
+   * Track the caller's Projection and camera, exactly as PointOverlay and
+   * AggregateOverlay do -- a new camera object is built per Projection, so a
+   * captured reference goes stale on every switch.
+   *
+   * Boundary Frames were Globe-only until deep-time-map v0.6.0, and the reason
+   * was the antimeridian rather than the camera: these are LINES, and a flat
+   * map is cut open somewhere, so a feature spanning the cut drew straight back
+   * across the whole map. Points and aggregate cells never had that problem,
+   * which is why they gained flat support first. The library now takes an
+   * optional `seamSplit` from the projector and breaks the line there, and
+   * FlatProjector supplies it.
+   */
+  setCamera(camera: Camera, mode: ProjectionMode): void {
+    this.mode = mode;
+    this.projector.setCamera(camera as PerspectiveCamera);
+    if (mode !== 'globe') {
+      this.flatProjector = this.flatProjector ?? new FlatProjector(camera);
+      this.flatProjector.setCamera(camera);
+      this.flatProjector.setFlatMode(mode);
+      this.flatProjector.setReferenceRotation(this.qRef);
+    }
+  }
+
+  private get activeProjector(): ThreeProjector | FlatProjector {
+    return this.mode === 'globe' || !this.flatProjector ? this.projector : this.flatProjector;
+  }
+
   /** Reference Plate rotation, in the GEOGRAPHIC frame -- see
    *  ThreeProjector.setReferenceRotation()'s doc comment. */
   setReferenceRotation(q: Quaternion): void {
+    this.qRef = q;
     this.projector.setReferenceRotation(q);
+    this.flatProjector?.setReferenceRotation(q);
   }
 
   /** Detach the overlay canvas. Called when a globe instance is removed. */
@@ -237,7 +276,8 @@ export class BoundaryOverlay {
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     this.ctx.restore();
     if (!this.visible || !this.series) return;
-    this.projector.update(this.rect.width, this.rect.height);
-    this.series.draw(this.ctx, this.projector);
+    const projector = this.activeProjector;
+    projector.update(this.rect.width, this.rect.height);
+    this.series.draw(this.ctx, projector);
   }
 }
