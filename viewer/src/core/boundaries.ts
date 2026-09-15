@@ -231,7 +231,13 @@ export class BoundaryOverlay {
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-  async load(url: string): Promise<void> {
+  /**
+   * `styleOverride` replaces per-type entries wholesale, matching the library's
+   * own shallow merge (see below) -- a caller wanting only one boundary type
+   * visible passes transparent strokes for the others. Omit it for Geode's
+   * house style.
+   */
+  async load(url: string, styleOverride?: Record<string, unknown>): Promise<void> {
     // The library's own default renders subduction zones (and their polarity
     // triangles, which share this colour -- see boundaries.js) in a pale
     // peach; Geode wants them black. Spreading DEFAULT_STYLE.subduction
@@ -240,7 +246,8 @@ export class BoundaryOverlay {
     // entry, not just the field given), so width/label would otherwise be
     // dropped.
     this.series = await BoundarySeries.load(url, {
-      style: { subduction: { ...DEFAULT_STYLE.subduction, stroke: '#000000' } },
+      style: styleOverride
+        ?? { subduction: { ...DEFAULT_STYLE.subduction, stroke: '#000000' } },
     });
   }
 

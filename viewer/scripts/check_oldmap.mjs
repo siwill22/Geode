@@ -30,41 +30,67 @@ await page.waitForTimeout(1200);
 let bad = 0;
 const fail = (msg) => { bad++; console.log(`  FAIL ${msg}`); };
 
-/** Fraction of the ink canvas that is not fully transparent, and how much of
- *  that is the orange wash specifically -- the two things that go silently to
- *  zero when a clip path is wrong. */
+/** Fraction of the ink canvas that is not fully transparent, how much of that is
+ *  the orange wash specifically, and the painted bounding box -- the things that
+ *  go silently wrong when a clip path is. */
 async function inkStats() {
   return page.evaluate(() => {
     const c = document.querySelector('canvas.oldmap-ink');
     if (!c) return null;
-    const ctx = c.getContext('2d');
-    const { data } = ctx.getImageData(0, 0, c.width, c.height);
+    const { data } = c.getContext('2d').getImageData(0, 0, c.width, c.height);
     let painted = 0, warm = 0, total = 0;
-    // Every 4th pixel in each direction: 16x fewer samples, same ratios.
-    for (let i = 0; i < data.length; i += 16 * 4) {
-      total++;
-      const a = data[i + 3];
-      if (a > 8) {
-        painted++;
-        // The wash ramps toward (206,120,44); ink and rings are grey-brown and
-        // much darker, so "clearly redder than it is blue" isolates it.
-        if (data[i] > 150 && data[i] - data[i + 2] > 45) warm++;
+    let minx = 1e9, maxx = -1;
+    for (let y = 0; y < c.height; y += 4) {
+      for (let x = 0; x < c.width; x += 4) {
+        total++;
+        const i = (y * c.width + x) * 4;
+        if (data[i + 3] > 8) {
+          painted++;
+          if (x < minx) minx = x;
+          if (x > maxx) maxx = x;
+          // The wash ramps toward (206,120,44); ink and rings are grey-brown and
+          // much darker, so "clearly redder than it is blue" isolates it.
+          if (data[i] > 150 && data[i] - data[i + 2] > 45) warm++;
+        }
       }
     }
-    return { painted: painted / total, warm: warm / total, w: c.width, h: c.height };
+    return { painted: painted / total, warm: warm / total, minx, maxx, w: c.width };
   });
+}
+
+/**
+ * Read inkStats only once two consecutive reads agree.
+ *
+ * A fixed delay is not enough and quietly corrupted this check: switching
+ * Projection rebuilds the camera and OrbitControls damps into place over several
+ * frames, so a read too soon returns the PREVIOUS projection's ink. That is how
+ * Robinson and Plate Carree came to report byte-identical coverage while their
+ * screenshots plainly differed.
+ */
+async function stableInkStats(label) {
+  let prev = null;
+  for (let i = 0; i < 40; i++) {
+    const s = await inkStats();
+    if (prev && s && Math.abs(s.painted - prev.painted) < 1e-6
+      && s.minx === prev.minx && s.maxx === prev.maxx) return s;
+    prev = s;
+    await page.waitForTimeout(250);
+  }
+  fail(`${label}: ink never settled`);
+  return prev;
 }
 
 for (const projection of ['globe', 'robinson', 'plateCarree']) {
   await page.evaluate((p) => window.__oldmap.setProjection(p), projection);
   await page.evaluate(() => window.__oldmap.setAge(100));
-  await page.waitForTimeout(900);
-
-  const s = await inkStats();
+  const s = await stableInkStats(projection);
   const stats = await page.evaluate(() => window.__oldmap.stats());
   if (!s) { fail(`${projection}: no ink canvas`); continue; }
-  console.log(`${projection.padEnd(12)} painted=${(100 * s.painted).toFixed(1)}%  `
-    + `wash=${(100 * s.warm).toFixed(1)}%  mountains=${stats.mountains}`);
+  console.log(`${projection.padEnd(12)} active=${String(stats.projection).padEnd(12)} `
+    + `painted=${(100 * s.painted).toFixed(2)}%  `
+    + `wash=${(100 * s.warm).toFixed(2)}%  x=${s.minx}..${s.maxx}  `
+    + `mountains=${stats.mountains}`);
+  if (stats.projection !== projection) fail(`asked for ${projection}, got ${stats.projection}`);
 
   // Something, but not everything: a wash that escaped its clip floods the page.
   if (s.painted < 0.01) fail(`${projection}: ink canvas is essentially blank`);
@@ -78,11 +104,9 @@ for (const projection of ['globe', 'robinson', 'plateCarree']) {
 // The wash must respond to its own toggle -- proof the warm pixels above are
 // the wash and not something else that happens to be orange.
 await page.evaluate((p) => window.__oldmap.setProjection(p), 'robinson');
-await page.waitForTimeout(600);
-const withWash = await inkStats();
+const withWash = await stableInkStats('wash on');
 await page.evaluate(() => window.__oldmap.setLayer('showWash', false));
-await page.waitForTimeout(600);
-const withoutWash = await inkStats();
+const withoutWash = await stableInkStats('wash off');
 console.log(`wash toggle   on=${(100 * withWash.warm).toFixed(1)}%  `
   + `off=${(100 * withoutWash.warm).toFixed(1)}%`);
 if (!(withoutWash.warm < withWash.warm * 0.25)) {
@@ -103,6 +127,31 @@ if (new Set(counts).size < 3) fail(`glyph count barely varies with age: ${counts
 if (counts.some((c) => c === 0)) fail('an age produced no glyphs at all');
 
 await page.screenshot({ path: `${SHOTS}/scrub-200.png` });
+
+// Mountains must stand on land. Prep guarantees it at the age the rule last
+// held, but a glyph persists for up to `decay` Myr afterwards and can be carried
+// offshore in that time, so the viewer re-tests against its own land raster.
+// Sampled from the ink canvas: a glyph centre over ocean would sit on a ring or
+// on bare paper rather than on the wash/land side of the coastline.
+await page.evaluate((p) => window.__oldmap.setProjection(p), 'plateCarree');
+await page.evaluate(() => window.__oldmap.setAge(100));
+await stableInkStats('land cull');
+const audit = await page.evaluate(() => window.__oldmap.mountainAudit());
+console.log(`land cull      ${audit.drawn} drawn, ${audit.culled} culled `
+  + `of ${audit.visible} on screen`);
+if (audit.drawn < 50) fail(`only ${audit.drawn} glyphs survived the land test`);
+
+// The subduction debug layer must actually load and draw when asked.
+await page.evaluate(() => window.__oldmap.setLayer('showTrenches', true));
+await page.waitForTimeout(4000);
+const trench = await page.evaluate(() => {
+  const c = [...document.querySelectorAll('canvas')].find((x) => !x.className && x.width > 0);
+  return window.__oldmap.stats().trenches;
+});
+console.log(`trench layer   visible=${trench}`);
+if (!trench) fail('the subduction debug layer did not switch on');
+await page.screenshot({ path: `${SHOTS}/trenches.png` });
+await page.evaluate(() => window.__oldmap.setLayer('showTrenches', false));
 
 const real = errors.filter((e) => !/favicon|404 \(Not Found\)/i.test(e));
 if (real.length) {

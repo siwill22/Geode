@@ -47,16 +47,20 @@ import type { MountainSeries } from './mountains';
  * screenshot. The cost of stroking scales with vertices AND width; the cost of
  * the distance field scales with neither.
  *
- * Half resolution because none of this is a measurement (ADR-0037) and the wash
- * in particular is a soft gradient -- the upscale costs nothing visible and
- * quarters the pixel count. The chamfer's ~2% anisotropy error is, for the same
- * reason, entirely acceptable here in a way it would never be in prep.
+ * The field runs at the tile's CSS resolution. It began at half that, which is
+ * fine for the wash (a soft gradient) and not fine for the rings: a ring's shape
+ * IS a level set of the field, so the field's resolution is the line quality,
+ * and at half resolution they came out visibly angular. The chamfer's ~2%
+ * anisotropy error stays acceptable for the same reason the pixel units are --
+ * none of this is a measurement (ADR-0037).
  */
 
 /** Resolution of the distance field, as a fraction of the tile's CSS pixels.
- *  Halving it quarters the per-frame pixel work; see the class comment on why
- *  that costs nothing visible here. */
-const FIELD_SCALE = 0.5;
+ *  At 0.5 the rings came out visibly angular -- their shape is the field's level
+ *  set, so the field's resolution IS the line quality, and a soft wash tolerates
+ *  what a thin ring does not. 1.0 quadruples the pixel work and is still far
+ *  cheaper than the stroking approach it replaced. */
+const FIELD_SCALE = 1.0;
 
 /** Offsets of the six rings, in CSS px, and half the pen weight they are drawn
  *  with. The notebook's km values (100/200/350/550/800/1200) are the starting
@@ -68,8 +72,10 @@ const RING_OFFSETS = [5, 10, 17, 26, 37, 50];
  *  line -- which is exactly how the first version of this looked. */
 const RING_WEIGHT = 1.9;
 /** Pen weight of the coastline, in CSS px -- see drawCoastline() on why the
- *  stroke is laid down at twice this. */
-const COAST_WEIGHT = 0.75;
+ *  stroke is laid down at twice this. Not thinner: the erase that trims the
+ *  inner half is antialiased, so it eats into whatever is left, and at 0.75 the
+ *  line came out so faint it read as absent. */
+const COAST_WEIGHT = 1.3;
 
 /** How far inland the wash reaches, in CSS px. */
 const WASH_REACH = 26;
@@ -102,12 +108,18 @@ export class OldMapOverlay {
   visible = true;
   private rect: Rect = { x: 0, y: 0, width: innerWidth, height: innerHeight };
 
-  /** Half-resolution scratch for the distance field, reused across frames and
-   *  reallocated only when the tile resizes -- see drawBands(). */
+  /** Scratch for the distance field, reused across frames and reallocated only
+   *  when the tile resizes -- see buildField(). */
   private field: HTMLCanvasElement | null = null;
   private fieldCtx: CanvasRenderingContext2D | null = null;
   private dist: Float32Array | null = null;
   private inside: Uint8Array | null = null;
+  private fieldImage: ImageData | null = null;
+  private hasOcean = false;
+  /** Full-resolution scratch the coastline is composited through -- see
+   *  drawCoastline() on why it cannot be drawn straight onto the ink canvas. */
+  private pen: HTMLCanvasElement | null = null;
+  private penCtx: CanvasRenderingContext2D | null = null;
 
   private camera: Camera;
 
@@ -208,14 +220,50 @@ export class OldMapOverlay {
     ctx.save();
     if (outline) ctx.clip(outline);
 
-    if (this.showWash || this.showRings) this.drawBands(land);
+    const haveField = this.buildField(land);
+    if (haveField && (this.showWash || this.showRings)) this.paintBands();
     this.drawCoastline(land, seam, projector);
     ctx.restore();
 
     // Mountains are drawn OUTSIDE the clip: a glyph is a symbol standing at a
     // point, not a patch of map, and clipping one that happens to sit near the
     // limb would slice it in half.
-    if (this.showMountains) this.drawMountains(projector);
+    if (this.showMountains && haveField) this.drawMountains(projector);
+  }
+
+  /**
+   * Debug/test: of the glyphs in the current frame that project to somewhere on
+   * screen, how many were rejected by the on-land test?
+   *
+   * Reads the field left by the last `draw()`, so it reports exactly what that
+   * frame did rather than recomputing it. `drawn` should always be well above
+   * zero; `culled` is the count prep could not prevent, since a glyph outlives
+   * the age at which the rule last held and can be carried offshore meanwhile.
+   */
+  auditMountains(): { visible: number; drawn: number; culled: number } {
+    const series = this.mountains;
+    const frame = series?.frameAt(this.age);
+    if (!frame || !this.inside) return { visible: 0, drawn: 0, culled: 0 };
+    const projector = this.projector;
+    let visible = 0;
+    let drawn = 0;
+    for (let i = 0; i < frame.orogenAge.length; i++) {
+      const p = projector.project(geoVec(frame.lonlat[i * 2], frame.lonlat[i * 2 + 1]));
+      if (!p) continue;
+      visible++;
+      if (this.isOverLand(p[0], p[1])) drawn++;
+    }
+    return { visible, drawn, culled: visible - drawn };
+  }
+
+  /** Is this screen position over land, per the rasterized silhouette? */
+  private isOverLand(x: number, y: number): boolean {
+    const f = this.field;
+    if (!f || !this.inside) return false;
+    const ix = Math.round((x / this.rect.width) * f.width);
+    const iy = Math.round((y / this.rect.height) * f.height);
+    if (ix < 0 || iy < 0 || ix >= f.width || iy >= f.height) return false;
+    return this.inside[iy * f.width + ix] === 1;
   }
 
   /**
@@ -262,13 +310,17 @@ export class OldMapOverlay {
   }
 
   /**
-   * The wash and the rings, both from one distance field.
+   * Rasterize the land silhouette and run the distance transform over it.
    *
-   * Returns without drawing if the land silhouette is empty (every continent
-   * off-screen or behind the limb), which is a normal state while dragging a
-   * globe rather than an error.
+   * Always run, even with both bands switched off, because the mountain glyphs
+   * are tested against `inside` -- this raster is the only thing on the client
+   * that knows where land actually is, the coastline being a pile of overlapping
+   * terrane rings rather than an outline.
+   *
+   * Returns false if no land is on screen, which is a normal state while a globe
+   * is dragged rather than an error.
    */
-  private drawBands(land: Path2D): void {
+  private buildField(land: Path2D): boolean {
     const { width, height } = this.rect;
     const w = Math.max(1, Math.round(width * FIELD_SCALE));
     const h = Math.max(1, Math.round(height * FIELD_SCALE));
@@ -304,9 +356,24 @@ export class OldMapOverlay {
       inside[i] = on;
       if (on) anyLand = true; else anyOcean = true;
     }
-    if (!anyLand) return;
+    this.hasOcean = anyOcean;
+    this.fieldImage = img;
+    if (!anyLand) return false;
 
     chamferDistance(inside, this.dist!, w, h);
+    return true;
+  }
+
+  /** Paint the wash and the rings from the field `buildField()` left behind. */
+  private paintBands(): void {
+    const { width, height } = this.rect;
+    const w = this.field!.width;
+    const h = this.field!.height;
+    const fctx = this.fieldCtx!;
+    const img = this.fieldImage!;
+    const px = img.data;
+    const inside = this.inside!;
+    const anyOcean = this.hasOcean;
 
     // Thresholds are declared in CSS px; the field is at FIELD_SCALE of that.
     const washReach = WASH_REACH * FIELD_SCALE;
@@ -356,29 +423,52 @@ export class OldMapOverlay {
   /**
    * The pen line itself, including the rings that could not be closed.
    *
-   * Stroked CLIPPED TO THE OCEAN, which is what turns 845 terrane rings into one
-   * coastline. Merdith2021's continent polygons are a mosaic of overlapping
-   * terranes, not a coastline: stroked plainly, every internal block boundary is
-   * drawn too and the continents come out full of lines that no chart would
-   * have. Clipping to the complement of the land removes exactly those -- an
-   * interior boundary lies wholly inside the landmass and vanishes, while the
-   * outer edge keeps the half of its stroke that falls on the ocean side.
+   * Only the OUTER edge of the landmass is wanted. Merdith2021's continent
+   * polygons are a mosaic of overlapping terranes, not a coastline: stroked
+   * plainly, every internal block boundary is drawn too and the continents come
+   * out full of lines no chart would have.
    *
-   * Hence the doubled `lineWidth`: half of it is always clipped away.
+   * So the whole pile is stroked and then the land is erased out from under it
+   * with `destination-out`, leaving only the half of each stroke that fell on
+   * the ocean side. Interior boundaries lie wholly inside the landmass and
+   * vanish. Hence the doubled `lineWidth`: half is always erased.
+   *
+   * ---- Why a scratch canvas, and why not a clip ---------------------------
+   *
+   * The first version clipped to an even-odd path of "viewport minus land",
+   * which is wrong and was visible as flicker: under even-odd, a region covered
+   * by TWO overlapping terranes has even winding and counts as OUTSIDE. Every
+   * overlap between neighbouring polygons therefore read as ocean, so interior
+   * boundaries reappeared there as slivers that popped in and out as the
+   * geometry shifted under them. Land is a `nonzero` union -- that is what makes
+   * abutting terranes one landmass -- and canvas allows only one fill rule per
+   * path, so the complement cannot be expressed as a clip at all.
+   *
+   * `destination-out` respects nonzero, so it can. It also erases whatever is
+   * already on the canvas, which is why this composites through its own layer
+   * rather than drawing straight onto the ink: the wash is drawn first and sits
+   * inside the land, exactly where the erase would fall.
    */
   private drawCoastline(
     land: Path2D, seam: { offset: number; count: number }[],
     projector: ThreeProjector | FlatProjector,
   ): void {
-    const { ctx } = this;
     const { width, height } = this.rect;
+    const dpr = Math.min(devicePixelRatio, 2);
+    const cw = Math.round(width * dpr);
+    const ch = Math.round(height * dpr);
+    if (!this.pen || this.pen.width !== cw || this.pen.height !== ch) {
+      this.pen = document.createElement('canvas');
+      this.pen.width = cw;
+      this.pen.height = ch;
+      this.penCtx = this.pen.getContext('2d')!;
+    }
+    const ctx = this.penCtx!;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, cw, ch);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
     ctx.save();
-
-    const ocean = new Path2D();
-    ocean.rect(0, 0, width, height);
-    ocean.addPath(land);
-    ctx.clip(ocean, 'evenodd');
-
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
     ctx.strokeStyle = INK;
@@ -398,6 +488,19 @@ export class OldMapOverlay {
       ctx.stroke();
     }
     ctx.restore();
+
+    // Erase the land out from under the pen, leaving only the outer edge.
+    // nonzero, so overlapping terranes are one landmass -- the whole point.
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.fillStyle = '#000';
+    ctx.fill(land, 'nonzero');
+    ctx.restore();
+
+    this.ctx.save();
+    this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+    this.ctx.drawImage(this.pen!, 0, 0);
+    this.ctx.restore();
   }
 
   /**
@@ -424,6 +527,13 @@ export class OldMapOverlay {
       const lat = frame.lonlat[i * 2 + 1];
       const p = projector.project(geoVec(lon, lat));
       if (!p) continue;                       // behind the limb
+
+      // On land only. Prep guarantees >300 km inland at the age the rule LAST
+      // held, but a glyph persists for up to `decay` Myr after that, and in
+      // that time its plate can carry it under water or the margin can retreat
+      // past it. Tested against the same silhouette the wash is clipped to, so
+      // a glyph can never appear in the ocean the viewer is drawing.
+      if (!this.isOverLand(p[0], p[1])) continue;
 
       // Fade with age since the rule last held. Floored well above zero: a
       // range that has faded to nothing is better dropped by prep's own decay

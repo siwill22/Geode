@@ -5,11 +5,14 @@ export interface OldMapViewState {
   showWash: boolean;
   showRings: boolean;
   showMountains: boolean;
+  showTrenches: boolean;
 }
+
+export type OldMapToggle = 'showWash' | 'showRings' | 'showMountains' | 'showTrenches';
 
 export interface OldMapUICallbacks {
   onAge(age: number): void;
-  onToggle(key: 'showWash' | 'showRings' | 'showMountains', on: boolean): void;
+  onToggle(key: OldMapToggle, on: boolean): void;
 }
 
 /**
@@ -41,6 +44,11 @@ export class OldMapUI {
       .onChange((v: boolean) => cb.onToggle('showRings', v));
     this.gui.add(this.state, 'showMountains').name('Mountains')
       .onChange((v: boolean) => cb.onToggle('showMountains', v));
+    // Debug: the mountain rule's second criterion is "<800 km from a subduction
+    // zone", and without the trenches on screen there is no way to see whether a
+    // glyph is where the rule says it should be.
+    this.gui.add(this.state, 'showTrenches').name('Subduction zones (debug)')
+      .onChange((v: boolean) => cb.onToggle('showTrenches', v));
 
     this.status = document.createElement('div');
     this.status.className = 'status';

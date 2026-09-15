@@ -11,7 +11,8 @@ import {
 } from '../core/projection';
 import { wireProjectionToggle } from '../core/projectionToggle';
 import { OldMapOverlay } from './oldMapOverlay';
-import { OldMapUI, type OldMapViewState } from './oldMapUi';
+import { OldMapUI, type OldMapToggle, type OldMapViewState } from './oldMapUi';
+import { BoundaryOverlay } from '../core/boundaries';
 import { MountainSeries } from './mountains';
 import { makePaper } from './paper';
 
@@ -48,10 +49,13 @@ document.title = 'Geode — Old Map';
  */
 
 const state: OldMapViewState = {
-  age: 0, showWash: true, showRings: true, showMountains: true,
+  age: 0, showWash: true, showRings: true, showMountains: true, showTrenches: false,
 };
 
-let mode: ProjectionMode = 'globe';
+// Robinson by default: it is the projection the reference notebook renders in
+// (pygmt `N25c`), so the page opens on the look it is reproducing. The Globe and
+// Plate Carree are a click away on the cycle button.
+let mode: ProjectionMode = 'robinson';
 
 /** Orthographic for Globe (see above); core's own camera for the flat
  *  Projections, which are already orthographic and already framed correctly. */
@@ -96,14 +100,40 @@ let controls = makeControls(mode, camera);
 const overlay = new OldMapOverlay(camera);
 overlay.setCamera(camera, mode);
 
+/**
+ * Debug only: the resolved subduction zones the mountain rule was evaluated
+ * against in prep. Off by default.
+ *
+ * Its own BoundaryOverlay rather than anything this wrapper draws, because that
+ * class already knows how to resolve a frame, project it in every Projection and
+ * break it at the seam -- and because the point of a debug layer is to be the
+ * SAME boundaries every other viewer shows, not a second rendering of them that
+ * could differ.
+ *
+ * Every non-subduction type is stroked in `transparent`, which the library
+ * honours as a colour rather than a flag. Ridges and transforms would otherwise
+ * crowd a chart whose whole subject is the trenches.
+ */
+const boundaries = new BoundaryOverlay(camera as never);
+boundaries.visible = false;
+let trenchesLoaded = false;
+
 const ui = new OldMapUI(state, {
   onAge: (age) => applyAge(age),
-  onToggle: (key, on) => {
-    if (key === 'showWash') overlay.showWash = on;
-    else if (key === 'showRings') overlay.showRings = on;
-    else overlay.showMountains = on;
-  },
+  onToggle: (key, on) => applyToggle(key, on),
 }, 'Old Map');
+
+function applyToggle(key: OldMapToggle, on: boolean): void {
+  if (key === 'showWash') overlay.showWash = on;
+  else if (key === 'showRings') overlay.showRings = on;
+  else if (key === 'showMountains') overlay.showMountains = on;
+  else {
+    boundaries.visible = on;
+    // Loaded on first use rather than at boot: this is a debug layer and its
+    // frames are 29 MB of GeoJSON that a normal session never asks for.
+    if (on && !trenchesLoaded) void loadTrenches();
+  }
+}
 
 // --- paper ---------------------------------------------------------------
 // Its own canvas under everything, rebuilt only on resize -- see paper.ts on
@@ -134,6 +164,7 @@ function applyProjection(next: ProjectionMode): void {
   camera = makeCamera(mode, innerWidth / innerHeight);
   controls = makeControls(mode, camera);
   overlay.setCamera(camera, mode);
+  boundaries.setCamera(camera, mode);
   refreshToggle();
 }
 
@@ -146,18 +177,37 @@ const refreshToggle = wireProjectionToggle(
 function applyAge(age: number): void {
   state.age = age;
   overlay.setAge(age);
+  if (trenchesLoaded) void boundaries.setAge(age);
   const n = mountains?.countAt(age) ?? 0;
   ui.setTimeInfo(`${age.toFixed(0)} Ma — ${n} range${n === 1 ? '' : 's'}`);
+}
+
+async function loadTrenches(): Promise<void> {
+  if (trenchesLoaded || !boundariesUrl) return;
+  trenchesLoaded = true;
+  ui.setStatus('loading subduction zones…');
+  const hide = { stroke: 'transparent', width: 0, label: '' };
+  await boundaries.load(boundariesUrl, {
+    subduction: { stroke: '#8c2f16', width: 2.0, label: 'Subduction zone' },
+    ridge: hide,
+    transform: hide,
+    other: hide,
+  });
+  boundaries.setCamera(camera, mode);
+  await boundaries.setAge(state.age);
+  ui.setStatus('');
 }
 
 addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
   updateProjectionCameraAspect(camera, innerWidth / innerHeight);
   overlay.setRect({ x: 0, y: 0, width: innerWidth, height: innerHeight });
+  boundaries.setRect({ x: 0, y: 0, width: innerWidth, height: innerHeight });
   rebuildPaper();
 });
 
 let mountains: MountainSeries | null = null;
+let boundariesUrl: string | null = null;
 
 async function boot(): Promise<void> {
   ui.setStatus('loading…');
@@ -178,6 +228,9 @@ async function boot(): Promise<void> {
     reconstructionAssetUrl(ARCHIVE, manifest, manifest.oldmap.mountains));
   overlay.setMountains(mountains);
 
+  boundariesUrl = manifest.has_boundaries && manifest.boundaries
+    ? reconstructionAssetUrl(ARCHIVE, manifest, manifest.boundaries) : null;
+
   ui.setAgeRange(manifest.oldmap.age_min, manifest.oldmap.age_max, 1);
   ui.setCredit(`${manifest.name} — ${manifest.citation}`);
   applyAge(0);
@@ -196,18 +249,18 @@ window.__oldmap = {
   setAge: (age: number) => { applyAge(age); ui.refreshDisplay(); },
   setProjection: (m: ProjectionMode) => applyProjection(m),
   getProjection: () => mode,
-  setLayer: (key: 'showWash' | 'showRings' | 'showMountains', on: boolean) => {
+  setLayer: (key: OldMapToggle, on: boolean) => {
     state[key] = on;
-    if (key === 'showWash') overlay.showWash = on;
-    else if (key === 'showRings') overlay.showRings = on;
-    else overlay.showMountains = on;
+    applyToggle(key, on);
     ui.refreshDisplay();
   },
+  mountainAudit: () => overlay.auditMountains(),
   stats: () => ({
     age: state.age,
     projection: mode,
     isFlat: isFlat(mode),
     mountains: mountains?.countAt(state.age) ?? 0,
+    trenches: boundaries.visible,
     decayMyr: mountains?.decayMyr ?? null,
     model: mountains?.model ?? null,
   }),
@@ -223,6 +276,7 @@ function animate(): void {
   controls.update();
   renderer.render(emptyScene, camera);
   overlay.draw();
+  boundaries.draw();
 }
 
 boot().catch((e) => {

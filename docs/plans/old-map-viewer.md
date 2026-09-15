@@ -351,6 +351,53 @@ consecutive vertices, and a pole-enclosing ring need not have one. Filed as
 belongs there rather than here, since it affects every flat-map consumer of that
 layer and deep-time reconstructions have polar continents at most ages.
 
+## 6. Five fixes from the first review
+
+All five came from looking at the built page, and two were real bugs rather than
+taste.
+
+**The coastal wash flickered where terranes overlap — a fill-rule bug.** The
+coastline was stroked inside a clip of "viewport minus land" built with the
+`evenodd` rule. Under even-odd, a region covered by *two* overlapping terranes
+has even winding and counts as **outside**, so every overlap between neighbouring
+polygons read as ocean and the interior boundaries reappeared there as slivers
+that popped in and out as the geometry moved. Land is a `nonzero` union — that is
+what makes abutting terranes one landmass — and canvas allows only one fill rule
+per path, so the complement cannot be expressed as a clip at all. It is now
+stroked onto its own layer and the land erased from under it with
+`destination-out`, which does respect nonzero.
+
+**Mountains could stand in the sea.** Prep guarantees >300 km inland *at the age
+the rule last held*, but a glyph persists for up to the decay constant after
+that, and in that time its plate can carry it offshore or the margin can retreat
+past it. Measured: **72 of 305 glyphs at 100 Ma**. The viewer now re-tests every
+glyph against the same land raster the wash is clipped to, so one can never
+appear in ocean the viewer is drawing. `npm run check:oldmap` reports the cull.
+
+**The rings were angular**, because a ring's shape *is* a level set of the
+distance field and the field was at half resolution. Now full resolution. The
+wash never had the problem — it is a soft gradient, which is what made half
+resolution look acceptable in the first place.
+
+**The coastline pen is heavier** (1.3 px, not 0.75). The erase above is
+antialiased and eats into whatever survives it, and at 0.75 px the line read as
+absent.
+
+**Robinson is the default Projection**, since it is what the reference notebook
+renders (pygmt `N25c`) — the page now opens on the look it reproduces.
+
+**A subduction-zone debug toggle** was added, off by default and loaded on first
+use. The mountain rule's second criterion is "<800 km from a subduction zone",
+and without the trenches on screen there is no way to see whether a glyph is
+where the rule says it should be. It reuses `BoundaryOverlay` rather than drawing
+its own lines, so it is necessarily the same geometry every other viewer shows.
+
+One thing that fix found: `check_oldmap.mjs` was reading the canvas on a fixed
+delay after switching Projection, catching the *previous* projection's ink —
+which is how Robinson and Plate Carrée came to report byte-identical coverage
+while their screenshots plainly differed. It now waits for two consecutive
+identical reads, and prints the painted bounding box so a stale frame cannot hide.
+
 ## Still open from the spec
 
 The four tuning items above are untouched beyond a first pass — the ring offsets,
