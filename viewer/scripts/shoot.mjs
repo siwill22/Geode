@@ -352,6 +352,40 @@ check('both isosurfaces drawn, independently',
      / Math.min(chk.coldPixels, chk.hotPixels) < 2.5,
   `cold ${chk.coldPixels} px, hot ${chk.hotPixels} px`);
 
+// 19b. The isosurface must be lit BY the key light, not against it.
+//
+// fixture-ramp rises with depth, so its gradient points radially inward and the
+// cold region is everything ABOVE the isosurface -- the camera ray enters the
+// shell already inside it, and the sphere we see is the far wall of that
+// region, with its outward normal pointing away from us at every pixel. That
+// makes it the purest possible case of the shading the fix addresses: without
+// flipping the normal toward the viewer, ndl inverts and the lit half of the
+// disc renders DARKER than the unlit half (and rim pins to 1.0 everywhere,
+// which is the uniform interior glow the whole thing was reported as).
+//
+// The cutaway, the surface sphere and the boundaries all have to go: this shot
+// is read by eye, and with them left on the frame is mostly cut wall -- the
+// RdBu midpoint on the wall is a white band that looks exactly like the rim
+// artefact being tested for. probeSilhouette hides them for the measurement
+// either way, so this is purely so the picture shows the thing it checks.
+await apply('setModel', 'fixture-ramp');
+await apply('clearPolygon');
+await apply('setSurfaceMode', 'none');
+await apply('setBoundaries', false);
+await apply('setCamera', { lon: 0, lat: 0, dist: 2.6 });
+await call('setIsosurface', {
+  coldEnabled: true, hotEnabled: false, coldValue: 0,
+  depthMinKm: 0, depthMaxKm: 2840, steps: 96,
+});
+await shot('17b-isosurface-lighting');
+const lit = await call('probeSilhouette');
+check('isosurface is lit from the key light, not against it',
+  lit.litMean > lit.unlitMean * 1.15,
+  `lit ${lit.litMean.toFixed(1)} vs unlit ${lit.unlitMean.toFixed(1)}`);
+// Put the scene back the way 19 left it, or the figure at 21 loses its globe.
+await apply('setSurfaceMode', 'topography');
+await apply('setBoundaries', true);
+
 // 20. The isosurface has to follow the time axis, not just the age label. The
 // drift blob sits at lon = age x 0.5, so with the camera between 0 and 100 E
 // its silhouette must cross the centre of the frame as the age is scrubbed. A
