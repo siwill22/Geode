@@ -28,7 +28,7 @@ inside='both')`):
 |---|---|---|---|
 | **Wash** — orange→white fringe | distance **inland from the coast** | 0–400 km, on land | `draw_coastline_blur(prox_ocean, dist_max=400000)` |
 | **Rings** — nested "bathymetric" lines | distance **offshore to nearest land** | 100/200/350/550/800/1200 km, in ocean | `draw_coastline_contours(prox_land, ...)` |
-| **Mountains** — hachure glyphs | both, plus trenches | >300 km inland **and** <800 km from a subduction zone | `mountain_points()` |
+| **Mountains** — hachure glyphs | both, plus trenches | >300 km inland **and** <800 km from a subduction zone **and** on its overriding side | `mountain_points()` (no side test) |
 
 The wash sits on the continental side of the coastline; the rings sit on the
 ocean side. Mountains are the only element needing plate topologies rather
@@ -112,7 +112,8 @@ candidate last satisfied the rule, and drives the fade.
 
 ## The mountain rule
 
-`inland > 300 km AND trench < 800 km`, evaluated per frame — **plus memory**.
+`inland > 300 km AND trench < 800 km AND on the trench's overriding side`,
+evaluated per frame — **plus memory**.
 A glyph switches on when the rule is satisfied, then persists and fades over
 a decay constant (start at 100 Myr) after the trench leaves, so orogens age
 out rather than blink off. A real engraved map still draws the Appalachians.
@@ -129,6 +130,41 @@ Prep, per frame, old → young:
 runs to ~250 Ma while the viewer displays 0–200 Ma. Without the margin every
 orogen comes up at age zero in the first frame.
 
+### The overriding side
+
+Added after v1. Proximity alone says nothing about which plate is being
+shortened, so the first version put glyphs on the downgoing plate as readily as
+on the overriding one — **110 of 270 at 0 Ma**, 22–41% across 0–200 Ma,
+including a band out on the Nazca plate beside the Andes.
+
+The side comes from `gpml:subductionPolarity`, the same datum the map's
+subduction teeth are drawn from, so a mountain can never appear on the opposite
+side from the triangles pointing at it. Comparing the candidate's **plate id**
+against the trench's overriding plate id was tried first and does not work: the
+two come from different vocabularies (continent-polygon terrane ids vs resolved
+topology ids — only 28 of 426 overlap at 0 Ma, 6 of 426 at 200 Ma), so an
+equality test deletes nearly every mountain.
+
+The polarity-derived side is corroborated per segment against
+`find_overriding_and_subducting_plates()` and flipped where they disagree. They
+can: both start from the polarity, but one uses the resolved geometry's vertex
+order and the other the topology's winding. On Merdith2021, 3 of 260 segments
+disagree — two are slivers a few hundred metres long at triple junctions, but
+one is 1.34° and survives a 27× finer probe, so it is a real inconsistency in
+the model rather than a resolution artefact. `--check-polarity` verifies the
+exported vectors end to end; 2 points of ~1495 sampled remain flipped and are
+reported rather than hidden.
+
+**Known and accepted: no collisional term, now in a second sense.** Continental
+collision builds mountains on *both* plates, and this rule allows them only on
+the overriding one — so at 0 Ma the Atlas, the Zagros and the Indian-plate side
+of the Himalaya are gone, because Africa, Arabia and India are the downgoing
+plates there. The simple global rule was chosen deliberately over a
+continent–continent special case (allow the downgoing side wherever the crust on
+both sides of the trench is continental, which the land mask could support).
+That compounds with the suture gap noted below: the rule is now weakest exactly
+where the most famous mountains are, for two independent reasons.
+
 **Known gap, accepted for v1.** The rule has no collisional term — a belt
 fades as its trench is consumed, which is weakest exactly where the most
 famous mountains are. `~/GIT/StoryMaps/tectonic-co2/data/Merdith2021/sutures.json`
@@ -136,6 +172,61 @@ is a 115-suture compilation, reconstructed 0–1000 Ma, each named, referenced
 and carrying magmatic/metamorphic age windows. That is the obvious v2, and
 the reason to note it here is that the data already exists for the model we
 just committed to.
+
+## The volcano layer
+
+Added after the mountains, as a fourth style element. `prep_oldmap_volcanoes.py`
+exports three populations and `oldMapOverlay.drawVolcanoes()` draws them; the
+glyph is hand-authored (`volcanoGlyph.ts`) rather than ported, because the
+reference notebook has no volcano to port.
+
+| population | where | source |
+|---|---|---|
+| **ridge** | evenly spaced along resolved mid-ocean ridges, 500 km apart | plate topology, per frame |
+| **plume** | deep hotspots, ocean only | Whittaker `PlumeType` ∈ {Deep, Potentially Deep}; positions from Torsvik & Cocks `Hotspot_Surface_Motion_PD2012` |
+| **lip** | Large Igneous Province eruption sites, ±5 Myr of their age | Ernst & Youbi / Park et al. 2020 outlines |
+
+Three things worth knowing:
+
+**Plumes are in the MANTLE frame and are never reconstructed with a plate.**
+`PLATEID1` is 0 throughout the motion model. Rotating them would drag Hawaii
+across the Pacific with the Pacific plate and destroy the one thing a hotspot
+track records.
+
+**A LIP needs no plume.** The first version paired each province to a hotspot
+geometrically and then drew the pair; it found an age for 1 of 16, because the
+LIP outlines are rotated by Merdith2021 while the hotspot tracks were built in
+their own publication's absolute frame. The residual grows at ~35 km/Myr
+(r = 0.80, intercept −29 km), which is frame divergence, not plume-head radius.
+A LIP compilation already records where a province is and how old it is, so the
+matcher was a way of losing LIPs rather than of placing them. Deleted.
+
+**Which plumes are deep is not a judgement made here.** It is Whittaker's
+`PlumeType`, whose `Type_1` column is exactly the Deep + Potentially Deep pair
+across all 68 records, each row citing Montelli et al. 2006, Courtillot et al.
+2003, Anderson & Schramm 2005 or Steinberger et al. 2000.
+
+### Known issues, first cut
+
+1. **The LIP window is centred on the eruption age**, so a province appears
+   5 Myr *before* it erupts. Probably wrong — an eruption should begin at its
+   age and persist.
+2. **Plumes stop at ~125 Ma** as the hotspot tracks end, and nothing on screen
+   says so. 17 at 0 Ma, 11 at 50, 4 at 100, zero from 125.
+3. **No test asserts anything about volcanoes.** `check:oldmap` covers mountains,
+   land culling, seams and scale; a volcano regression would be silent.
+4. **Size is the only channel separating the three populations** (190 / 340 /
+   760 km ground width, each clamped), so the ratios compress at zoom extremes.
+5. **Multi-lobe LIPs draw as clusters** — CAMP is four cones, Paraná-Etendeka
+   four. That is the compilation's own structure, not a bug, but it reads as
+   several eruptions.
+6. **`Bouvet_Shona → Meteor` is an alias this code chose**, at 257 km under a
+   400 km / 3× rule. They are arguably distinct hotspots and it is load-bearing
+   (deep and LIPAss). `--alias` overrides it; `--resolve-names` prints every
+   accepted and rejected pairing with its distance.
+7. **Ridge volcanoes sit on continental crust** at Afar and the Red Sea, because
+   Merdith2021 types those boundaries as `gpml:MidOceanRidge`. No ocean mask is
+   applied to ridges.
 
 ## Two notebook bugs that must not be ported
 

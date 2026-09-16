@@ -9,6 +9,8 @@ import type { Quaternion } from '../core/rotation';
 import type { Rect } from '../core/layout';
 import { MOUNTAIN_ASPECT, mountainGlyph } from './mountainGlyph';
 import type { MountainSeries } from './mountains';
+import { VOLCANO_ASPECT, volcanoCone, volcanoSmoke } from './volcanoGlyph';
+import type { VolcanoSeries } from './volcanoes';
 
 /**
  * Every mark on the map: the graded coastal wash, the nested offshore rings, the
@@ -87,6 +89,25 @@ const COAST_WEIGHT = 1.3;
 const MOUNTAIN_WIDTH_KM = 620;
 const MOUNTAIN_PX_RANGE: [number, number] = [7, 64];
 
+/**
+ * Ground width of each volcano population, in KM, with its own pixel clamp --
+ * same scale-with-the-map-but-stay-legible treatment the mountains get.
+ *
+ * The three sizes ARE the encoding: ridge volcanoes are many and incidental,
+ * plumes are few and named, and a LIP is a once-in-an-era event that should
+ * read at a glance. Nothing else distinguishes them, so the ratios matter more
+ * than the absolute numbers.
+ *
+ * Smoke is drawn only above SMOKE_MIN_PX. Below that a curl is a smudge, and a
+ * ridge crowded with smudges reads as a dirty plate rather than as volcanoes.
+ */
+const VOLCANO_WIDTH_KM = { ridge: 190, plume: 340, lip: 760 };
+const VOLCANO_PX_RANGE: Record<string, [number, number]> = {
+  ridge: [4, 20], plume: [7, 34], lip: [14, 72],
+};
+const SMOKE_MIN_PX = 13;
+const VOLCANO_INK: [number, number, number] = [74, 38, 22];
+
 /** Radius, in px, of the morphological closing that removes sub-pixel gaps
  *  between abutting terranes. 2 is enough for the slivers actually seen. */
 const CLOSE_RADIUS = 2;
@@ -109,11 +130,13 @@ export class OldMapOverlay {
   private mode: ProjectionMode = 'globe';
   private coastLayer: PolygonLayer | null = null;
   private mountains: MountainSeries | null = null;
+  private volcanoes: VolcanoSeries | null = null;
   private age = 0;
 
   showWash = true;
   showRings = true;
   showMountains = true;
+  showVolcanoes = true;
   visible = true;
   private rect: Rect = { x: 0, y: 0, width: innerWidth, height: innerHeight };
 
@@ -153,6 +176,7 @@ export class OldMapOverlay {
   }
 
   setMountains(series: MountainSeries | null): void { this.mountains = series; }
+  setVolcanoes(series: VolcanoSeries | null): void { this.volcanoes = series; }
   setReferenceRotation(q: Quaternion): void {
     this.globeProjector.setReferenceRotation(q);
     this.flatProjector.setReferenceRotation(q);
@@ -266,6 +290,12 @@ export class OldMapOverlay {
     // Outside the clip: a glyph is a symbol standing at a point, not a patch of
     // map, and clipping one near the limb would slice it in half.
     if (this.showMountains && haveField) this.drawMountains(projector);
+    // Outside the clip for the same reason as the mountains, and NOT gated on
+    // haveField: a volcano is not tested against the land raster the way a
+    // mountain is. Ridge and plume symbols are in the ocean by construction and
+    // a LIP site is drawn wherever its province was, so an all-ocean view with
+    // no land on screen must still show them.
+    if (this.showVolcanoes) this.drawVolcanoes(projector);
   }
 
   /**
@@ -470,6 +500,60 @@ export class OldMapOverlay {
       ctx.translate(0, MOUNTAIN_ASPECT / 3);
       ctx.fillStyle = `rgba(${MOUNTAIN_INK[0]}, ${MOUNTAIN_INK[1]}, ${MOUNTAIN_INK[2]}, ${alpha.toFixed(3)})`;
       ctx.fill(glyph);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  /**
+   * The three volcano populations.
+   *
+   * Drawn largest-first so a LIP's big cone sits UNDER the small ridge symbols
+   * rather than blotting them out where a province erupted near a spreading
+   * centre -- which is most of them.
+   */
+  private drawVolcanoes(projector: ThreeProjector | FlatProjector): void {
+    const frame = this.volcanoes?.frameAt(this.age);
+    if (!frame) return;
+    const ppk = this.pixelsPerKm();
+    for (const kind of ['lip', 'plume', 'ridge'] as const) {
+      const lonlat = kind === 'ridge' ? frame.ridge : frame[kind].lonlat;
+      if (!lonlat.length) continue;
+      const [lo, hi] = VOLCANO_PX_RANGE[kind];
+      const size = Math.max(lo, Math.min(hi, VOLCANO_WIDTH_KM[kind] * ppk));
+      this.drawVolcanoGroup(projector, lonlat, size, kind === 'lip' ? 0.88 : 0.72);
+    }
+  }
+
+  private drawVolcanoGroup(
+    projector: ThreeProjector | FlatProjector,
+    lonlat: number[], size: number, alpha: number,
+  ): void {
+    const { ctx } = this;
+    const cone = volcanoCone();
+    const smoke = volcanoSmoke();
+    const withSmoke = size >= SMOKE_MIN_PX;
+    const [r, g, b] = VOLCANO_INK;
+
+    ctx.save();
+    ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha.toFixed(3)})`;
+    ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${(alpha * 0.7).toFixed(3)})`;
+    for (let i = 0; i < lonlat.length; i += 2) {
+      const p = projector.project(geoVec(lonlat[i], lonlat[i + 1]));
+      if (!p) continue;                                  // behind the limb
+      ctx.save();
+      ctx.translate(p[0], p[1]);
+      ctx.scale(size, size);
+      // Stand ON the point, nudged up so the cone straddles it -- the same
+      // treatment drawMountains() gives the hachured ranges.
+      ctx.translate(0, VOLCANO_ASPECT / 3);
+      ctx.fill(cone);
+      if (withSmoke) {
+        // Line width is in the SCALED space, so it must be divided back out or
+        // a 70 px LIP cone gets a 70 px-wide wisp.
+        ctx.lineWidth = 1.1 / size;
+        ctx.stroke(smoke);
+      }
       ctx.restore();
     }
     ctx.restore();

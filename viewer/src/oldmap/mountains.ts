@@ -28,6 +28,15 @@ interface MountainPayload {
   decay_myr: number;
   min_inland_m: number;
   max_trench_m: number;
+  /**
+   * Whether the export applied the overriding-side condition.
+   *
+   * Recorded because a glyph set built without it looks entirely plausible: the
+   * count barely changes, and what differs is which SIDE of each trench the
+   * mountains sit on. An export predating the rule has no such field, which is
+   * why this is optional rather than required.
+   */
+  overriding_side_only?: boolean;
   candidate_count: number;
   count: number;
   frames: Record<string, MountainFrame>;
@@ -47,6 +56,11 @@ export class MountainSeries {
   get ageMax(): number { return this.data.age_max; }
   get decayMyr(): number { return this.data.decay_myr; }
   get timeStep(): number { return this.data.time_step; }
+
+  /** False for exports predating the overriding-side rule -- see the field's
+   *  own note. Surfaced so a viewer or check can say which rule it is showing
+   *  rather than assume the current one. */
+  get overridingSideOnly(): boolean { return this.data.overriding_side_only === true; }
 
   /**
    * The frame nearest `age`, or null outside the exported range.

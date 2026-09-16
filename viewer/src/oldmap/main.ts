@@ -14,6 +14,7 @@ import { OldMapOverlay } from './oldMapOverlay';
 import { OldMapUI, type OldMapToggle, type OldMapViewState } from './oldMapUi';
 import { BoundaryOverlay } from '../core/boundaries';
 import { MountainSeries } from './mountains';
+import { VolcanoSeries } from './volcanoes';
 import { makePaper } from './paper';
 
 const ARCHIVE = import.meta.env.VITE_ARCHIVE_BASE ?? `${import.meta.env.BASE_URL}archive`;
@@ -49,7 +50,8 @@ document.title = 'Geode — Old Map';
  */
 
 const state: OldMapViewState = {
-  age: 0, showWash: true, showRings: true, showMountains: true, showTrenches: false,
+  age: 0, showWash: true, showRings: true, showMountains: true,
+  showVolcanoes: true, showTrenches: false,
 };
 
 // Robinson by default: it is the projection the reference notebook renders in
@@ -127,6 +129,7 @@ function applyToggle(key: OldMapToggle, on: boolean): void {
   if (key === 'showWash') overlay.showWash = on;
   else if (key === 'showRings') overlay.showRings = on;
   else if (key === 'showMountains') overlay.showMountains = on;
+  else if (key === 'showVolcanoes') overlay.showVolcanoes = on;
   else {
     boundaries.visible = on;
     // Loaded on first use rather than at boot: this is a debug layer and its
@@ -207,6 +210,7 @@ addEventListener('resize', () => {
 });
 
 let mountains: MountainSeries | null = null;
+let volcanoes: VolcanoSeries | null = null;
 let boundariesUrl: string | null = null;
 
 async function boot(): Promise<void> {
@@ -227,6 +231,13 @@ async function boot(): Promise<void> {
   mountains = await MountainSeries.load(
     reconstructionAssetUrl(ARCHIVE, manifest, manifest.oldmap.mountains));
   overlay.setMountains(mountains);
+  // Optional: an older export predates the volcano pass, and the map is still
+  // a map without it.
+  if (manifest.oldmap.volcanoes) {
+    volcanoes = await VolcanoSeries.load(
+      reconstructionAssetUrl(ARCHIVE, manifest, manifest.oldmap.volcanoes));
+    overlay.setVolcanoes(volcanoes);
+  }
 
   boundariesUrl = manifest.has_boundaries && manifest.boundaries
     ? reconstructionAssetUrl(ARCHIVE, manifest, manifest.boundaries) : null;
@@ -269,6 +280,7 @@ window.__oldmap = {
     projection: mode,
     isFlat: isFlat(mode),
     mountains: mountains?.countAt(state.age) ?? 0,
+    volcanoes: volcanoes?.countsAt(state.age) ?? null,
     trenches: boundaries.visible,
     decayMyr: mountains?.decayMyr ?? null,
     model: mountains?.model ?? null,
