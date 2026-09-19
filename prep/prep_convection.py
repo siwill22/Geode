@@ -145,7 +145,9 @@ def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("--input", type=Path, required=True)
+    ap.add_argument("--input", type=Path, default=None,
+                    help="directory of temperature grids; if omitted, the Muller et al. "
+                         "(2022) OPT1 grids are downloaded from Zenodo and cached")
     ap.add_argument("--id", required=True)
     ap.add_argument("--name", required=True)
     ap.add_argument("--source", default="")
@@ -171,6 +173,10 @@ def main():
     ap.add_argument("--out", type=Path, default=Path("archive"))
     ap.add_argument("--validate", action="store_true")
     args = ap.parse_args()
+
+    if args.input is None:
+        from _inputs import fetch_opt1_grids
+        args.input = fetch_opt1_grids()
 
     colormap = choose_colormap(args.colormap, args.high_means, args.out, True)
 

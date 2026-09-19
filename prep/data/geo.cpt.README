@@ -1,0 +1,9 @@
+geo.cpt is GMT's global relief colour table, vendored here (1.1 kB) so that building the
+topography texture does not require a GMT installation just to read one small text file.
+
+Source:  GMT (Generic Mapping Tools), share/cpt/geo.cpt
+Design:  P. Wessel, SOEST
+Licence: GMT is released under the LGPL; the CPT is a data table distributed with it.
+
+It combines the gebco and dem1 CPTs with a hard hinge at 0, which is why the raster's
+shoreline always agrees with the coastline vectors drawn over it.

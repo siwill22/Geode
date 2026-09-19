@@ -74,6 +74,7 @@ not attempted here.
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -89,13 +90,19 @@ EARTH_RADIUS_KM = EARTH_RADIUS_M / 1000.0
 # Torsvik & Cocks (2017) hotspot surface-motion model, as cached by gprm. Named
 # explicitly rather than discovered by glob: a different hotspot file with the
 # same columns would change every plume position with nothing on screen to say so.
-HOTSPOT_SHP = (Path.home() / 'Library' / 'Caches' / 'gprm' / 'TorsvikCocks2017'
-               / 'Hotspot_Surface_Motion_PD2012.shp')
+# Asked of gprm rather than written out: the cache is ~/Library/Caches/gprm on macOS
+# but ~/.cache/gprm on Linux, so a literal path silently fails on the wrong platform.
+from gprm.datasets import cache_path  # noqa: E402
+
+HOTSPOT_SHP = cache_path('TorsvikCocks2017', 'Hotspot_Surface_Motion_PD2012.shp')
 
 # LIP compilations exported by the StoryMaps LIPs build, all reconstructed under
 # Merdith2021 -- the same model the Old Map viewer uses, which is what makes it
 # legitimate to pair them (ADR-0004).
-LIP_DIR = Path.home() / 'GIT' / 'StoryMaps' / 'lips' / 'data'
+#
+# NOT self-contained: this is a separate, unpublished repo. Override with $GEODE_LIP_DIR.
+LIP_DIR = Path(os.environ.get('GEODE_LIP_DIR',
+                              Path.home() / 'GIT' / 'StoryMaps' / 'lips' / 'data'))
 
 # Whittaker's hotspot catalogue -- what says a plume is DEEP, and the reason this
 # script does not guess. A second copy exists at
@@ -104,8 +111,13 @@ LIP_DIR = Path.home() / 'GIT' / 'StoryMaps' / 'lips' / 'data'
 # only field it adds is Region, which this file already carries as DESCR, and
 # joining the two on FEATURE_ID fails because not every record in that copy has
 # one. One file, no join, no partial merge.
-WHITTAKER_JW = (Path.home() / 'data' / 'LIPs' / 'Shapefiles' / 'HotSpotCatalogue'
-                / 'JW_HotspotCatalogue.shp')
+#
+# NOT self-contained: a local copy with no recorded provenance. Override with
+# $GEODE_WHITTAKER_HOTSPOTS.
+WHITTAKER_JW = Path(os.environ.get(
+    'GEODE_WHITTAKER_HOTSPOTS',
+    Path.home() / 'data' / 'LIPs' / 'Shapefiles' / 'HotSpotCatalogue'
+    / 'JW_HotspotCatalogue.shp'))
 
 # PlumeType values counted as deep by default. The catalogue's own Type_1 column
 # is exactly this pair -- verified across all 68 records, 13 'Deep' and 10
