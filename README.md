@@ -411,36 +411,41 @@ Most inputs download themselves on first use and are cached alongside gprm's dat
 | Reconstruction models, coastlines, palaeogeography | `gprm.datasets` | fetched per model |
 | Muller et al. (2022) OPT1 mantle temperature grids | Zenodo [6622194](https://zenodo.org/records/6622194), one file of ten | 2.3 GB |
 | Surface topography | NOAA ETOPO 2022 60 arc-second | 478 MB |
+| REVEAL tomography anomalies | Zenodo [13991965](https://doi.org/10.5281/zenodo.13991965), one member of one zip | 4.6 GB transferred |
 
-**One input is not yet self-serving.** `prep_model.py` needs a tomography volume on a regular
-lon/lat/depth grid; the build used `REVEAL_anomaly.nc` (4.98 GB). REVEAL ships natively on an
-unstructured Salvus mesh, so a regular grid is a derived product. Pass it with `--input`. See
-*Unresolved inputs* below.
+**Every input now fetches itself.** The tomography grid was the last holdout, and it is the
+awkward one: Schouten et al. (2024), *Sci. Rep.* **14**, 26708 is published as a **single
+18.97 GB zip** with no per-file URLs, of which `Models/REVEAL_anomaly.nc` (4.98 GB) is the only
+part this build wants.
 
-The source is the supplementary data of Schouten et al. (2024), *Sci. Rep.* **14**, 26708 —
-Zenodo [10.5281/zenodo.13235438](https://doi.org/10.5281/zenodo.13235438) (latest version
-[13991965](https://doi.org/10.5281/zenodo.13991965)), whose data availability statement lists
-"tomographic models (netCDF4 format)". Not yet wired into `prep/_inputs.py`: the per-file URL,
-size and checksum still need reading off the Zenodo API, and it is worth confirming that the
-4.98 GB file is published there rather than derived locally. Note that a
-`REVEAL_downsampled_anomaly.nc` (84 MB, 23 depth levels) sits beside it — too coarse for
-`DEFAULT_NDEPTH = 192`, but useful for a smoke test.
+`prep/_inputs.py` extracts just that member using HTTP range requests. A zip keeps its index at
+the end, so three small reads (about 160 kB) give the byte offset and length of every member;
+the one wanted is then fetched as a byte range and inflated on the fly. The transfer is **4.6 GB
+instead of 19 GB**, and the member is verified against the CRC32 recorded in the archive's own
+directory, which is a stronger guarantee than a checksum over a file that is never downloaded
+whole. Verified byte-identical (md5) against a manually downloaded copy.
 
-Do not confuse this with Zenodo [10684325](https://zenodo.org/records/10684325), the dataset of
-the REVEAL model paper itself (Thrastarson et al. 2024) — that is 49.3 GB of benchmark
-seismograms and contains no tomography grid. ETH also publishes REVEAL directly in netCDF
+`prep_model.py --downsampled` fetches `REVEAL_downsampled_anomaly.nc` instead: 84 MB, same seven
+variables, but 23 depth levels rather than 342. Too coarse for the default `--ndepth 192`, and
+useful for exercising the pipeline without a 4.6 GB download.
+
+REVEAL ships natively on an unstructured Salvus mesh, so this regular lon/lat/depth grid is a
+derived product of the Schouten paper rather than part of the REVEAL release. Two near misses
+worth recording: Zenodo [10684325](https://zenodo.org/records/10684325) is the dataset of the
+REVEAL *model* paper (Thrastarson et al. 2024) — 49.3 GB of benchmark seismograms, no tomography
+grid; and ETH publishes REVEAL directly in netCDF
 (400 MB, [cos.ethz.ch/models.html](https://cos.ethz.ch/models.html)), but as absolute velocities
-rather than the `vs_anomaly`/`vp_anomaly` this pipeline reads, and from a polybox share with no
-DOI or checksum.
+rather than the `vs_anomaly`/`vp_anomaly` this pipeline reads, from a polybox share with no DOI
+or checksum.
 
 ### Build
 
 ```bash
 conda run -n pygmt17 python prep/prep_colormaps.py
 
-# --input is required: see 'Unresolved inputs'
+# extracts REVEAL_anomaly.nc from the Schouten Zenodo zip on first run (4.6 GB);
+# add --downsampled for the 84 MB version, or --input for your own grid
 conda run -n pygmt17 python prep/prep_model.py \
-    --input /path/to/REVEAL_anomaly.nc \
     --id reveal --name REVEAL \
     --var vs_anomaly:vs:"Vs anomaly" \
     --var vp_anomaly:vp:"Vp anomaly" \
@@ -471,12 +476,11 @@ conda run -n pygmt17 python prep/build_archive_index.py
 
 ### Unresolved inputs
 
-These still need a path supplied, because no public source is recorded for them. Everything
-else in the pipeline is self-serving.
+These still need a path supplied, because no public source is recorded for them. Both are used
+only by the Old Map viewer; **the core build is now entirely self-serving.**
 
 | Input | Needed by | Override |
 |---|---|---|
-| `REVEAL_anomaly.nc` (or any regular-grid tomography volume) — Zenodo [13235438](https://doi.org/10.5281/zenodo.13235438), not yet automated | `prep_model.py` | `--input` |
 | StoryMaps LIP export | `prep_oldmap_volcanoes.py` (Old Map viewer only) | `$GEODE_LIP_DIR` |
 | `JW_HotspotCatalogue.shp` | `prep_oldmap_volcanoes.py` (Old Map viewer only) | `$GEODE_WHITTAKER_HOTSPOTS` |
 

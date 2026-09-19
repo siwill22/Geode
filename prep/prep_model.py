@@ -414,7 +414,14 @@ def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("--input", type=Path, required=True)
+    ap.add_argument("--input", type=Path, default=None,
+                    help="tomography volume, or a directory of per-depth slices. If omitted, "
+                         "the REVEAL anomaly grid is extracted from the Schouten et al. (2024) "
+                         "Zenodo archive and cached")
+    ap.add_argument("--downsampled", action="store_true",
+                    help="with no --input, fetch the 84 MB 23-level REVEAL grid rather than "
+                         "the 4.98 GB 342-level one. Too coarse for the default --ndepth, but "
+                         "it exercises the pipeline without a 4.6 GB download")
     ap.add_argument("--id", required=True, help="model id, e.g. reveal")
     ap.add_argument("--name", required=True, help="display name, e.g. REVEAL")
     ap.add_argument("--source", default="", help="citation")
@@ -452,6 +459,10 @@ def main():
     ap.add_argument("--out", type=Path, default=Path("archive"))
     ap.add_argument("--validate", action="store_true")
     args = ap.parse_args()
+
+    if args.input is None:
+        from _inputs import fetch_reveal
+        args.input = fetch_reveal(downsampled=args.downsampled)
 
     dmin, dmax = args.depth_range
     diverging = not args.sequential
