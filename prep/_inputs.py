@@ -61,6 +61,21 @@ def fetch_opt1_grids():
     return grid_files[0].parent
 
 
+def _require_partial_content(response, url):
+    """Fail fast if the server answered a range request with the whole file.
+
+    Observed in practice against Zenodo: a request that should have returned 128 bytes
+    instead began streaming all 19 GB. Every range read therefore checks for 206 before
+    any of the body is consumed.
+    """
+    if response.status_code != 206:
+        raise RuntimeError(
+            '{} answered a range request with HTTP {} rather than 206 Partial Content, i.e. '
+            'it is sending the whole archive. Extracting a single member is only possible '
+            'with range support; retry, or download the archive and unzip it by hand.'.format(
+                url, response.status_code))
+
+
 def _read_zip_directory(url, session):
     """Read a remote zip's central directory with range requests, without downloading it.
 
@@ -73,14 +88,14 @@ def _read_zip_directory(url, session):
     total = int(session.head(url, allow_redirects=True, timeout=60).headers['content-length'])
 
     def read(start, end):
-        response = session.get(url, headers={'Range': 'bytes={}-{}'.format(start, end)},
-                               timeout=300)
-        response.raise_for_status()
-        if response.status_code != 206:
-            raise RuntimeError(
-                '{} ignored a range request and returned the whole file. Fetching one member '
-                'of this archive is only possible with range support.'.format(url))
-        return response.content
+        # Streamed, so that the status can be checked before the body is pulled down. A
+        # server that ignores the Range header answers 200 with the whole archive, and this
+        # one is 19 GB: reading .content first would download all of it before complaining.
+        with session.get(url, headers={'Range': 'bytes={}-{}'.format(start, end)},
+                         stream=True, timeout=300) as response:
+            response.raise_for_status()
+            _require_partial_content(response, url)
+            return response.content
 
     tail = read(max(0, total - 65557), total - 1)
     eocd = tail.rfind(b'PK\x05\x06')
@@ -167,9 +182,12 @@ def fetch_zip_member(url, member, fname=None, path=None, progressbar=True):
 
     # The local header repeats the name and extra fields, and its extra field can be a
     # different length from the central directory's, so the data offset must be read from it.
-    local = session.get(url, headers={'Range': 'bytes={}-{}'.format(entry['offset'],
-                                                                    entry['offset'] + 29)},
-                        timeout=300).content
+    with session.get(url, headers={'Range': 'bytes={}-{}'.format(entry['offset'],
+                                                                 entry['offset'] + 29)},
+                     stream=True, timeout=300) as response:
+        response.raise_for_status()
+        _require_partial_content(response, url)
+        local = response.content
     if local[:4] != b'PK\x03\x04':
         raise RuntimeError('No local file header for {!r} at offset {}'.format(
             member, entry['offset']))
@@ -195,6 +213,7 @@ def fetch_zip_member(url, member, fname=None, path=None, progressbar=True):
     with session.get(url, headers={'Range': 'bytes={}-{}'.format(start, end)},
                      stream=True, timeout=600) as response:
         response.raise_for_status()
+        _require_partial_content(response, url)
         with open(partial, 'wb') as handle:
             for chunk in response.iter_content(1 << 20):
                 block = decompressor.decompress(chunk) if decompressor else chunk
