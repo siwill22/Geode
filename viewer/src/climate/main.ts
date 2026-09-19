@@ -2,7 +2,7 @@ import { Clock, Color, Vector2, WebGLRenderer, type Camera } from 'three';
 import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 import { lonLatToVec3 } from '../core/constants';
-import { PALETTE } from '../core/palette';
+import { DEFAULT_THEME, resolveTheme } from '../core/theme';
 import { fetchCoastlineData } from '../core/coastlines';
 import { loadStaticPolygonDataFor } from '../core/staticPolygons';
 import { loadPaleolithologyUrlFor } from '../core/pointOverlay';
@@ -44,7 +44,10 @@ let camera: Camera = createProjectionCamera(projectionMode, innerWidth / innerHe
 const renderer = new WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
-renderer.setClearColor(new Color(PALETTE.background));
+// Themes are not yet wired into this wrapper's UI -- it boots on the
+// default Theme's page colour. See docs/adr/0038 for the intended
+// always-present control, and themelab/ for the built one.
+renderer.setClearColor(new Color(resolveTheme(DEFAULT_THEME).page));
 document.body.appendChild(renderer.domElement);
 
 let controls: OrbitControls = createProjectionControls(projectionMode, camera, renderer.domElement);
@@ -422,7 +425,7 @@ function paleolithologyTooltipLines(p: BoucotPoint): string[] {
 // moving off a tile (or off any point within it) clears exactly the ring
 // highlight/tooltip/fan it set, never a stale one left on some OTHER instance.
 //
-// Spiderfy timing mirrors deep-time-map's own hover.js reference
+// Spiderfy timing mirrors petrify's own hover.js reference
 // implementation (`considerFan`) -- not reused directly (its
 // getBoundingClientRect()-based coordinate frame doesn't fit Multi-Globe's
 // shared-canvas/per-tile-rect layout), but the same two ideas are load-

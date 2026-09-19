@@ -27,7 +27,7 @@ import type { PaleobioDataset, PaleobioIndex, PaleobioViewState } from './types'
 const LAND_FILL_COLOR = 0x6f6a60;
 
 /** Both panels, explicitly, so they cannot drift apart. Geode is present-left
- *  everywhere (core/timeSeriesPanel.ts, and every age slider); deep-time-map
+ *  everywhere (core/timeSeriesPanel.ts, and every age slider); petrify
  *  defaults to oldest-left. Leaving either on its default is what made the two
  *  charts run in opposite directions. */
 const TIME_DIRECTION: TimeDirection = 'present-left';

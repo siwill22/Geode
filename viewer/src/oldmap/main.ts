@@ -36,7 +36,7 @@ document.title = 'Geode — Old Map';
  * page. Perspective foreshortening reads as a rendered 3-D ball, which is the
  * look this viewer is trying not to have.
  *
- * The load-bearing one: deep-time-map's `PolygonLayer` fills a continent that
+ * The load-bearing one: petrify's `PolygonLayer` fills a continent that
  * straddles the limb by clamping its hidden vertices onto the limb, and its
  * `clampToLimb` puts them on the GREAT CIRCLE perpendicular to the view axis.
  * That is the horizon only under an orthographic camera; under perspective the

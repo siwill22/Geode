@@ -98,7 +98,7 @@ plainly rather than attempting it.
 
 This skill shells out to `generator/validateRecipe.mjs` and
 `generator/scaffoldRepo.mjs` and copies from `viewer/src/core/` (which now
-unconditionally includes the tiny vendored `deep-time-map` JS library —
+unconditionally includes the tiny vendored `petrify` JS library —
 see `core/boundaries.ts` — regardless of wrapperType) plus whichever
 wrapper directory the recipe needs (`viewer/src/globe/` + `viewer/globe.html`
 for `single-model-globe`; `viewer/src/groupGlobe/` + `viewer/groupGlobe.html`
@@ -409,7 +409,7 @@ The `gh` CLI must be authenticated as the user who will own the new repo
    monorepo beyond the files it copied — exactly one wrapper directory
    (`globe/`, `groupGlobe/`, `reconstruction/`, or `reconstructionGroup/`,
    per `wrapperType`) plus `core/` (which always brings the small vendored
-   `deep-time-map` library along, whether or not this recipe's wrapper
+   `petrify` library along, whether or not this recipe's wrapper
    type uses it).
 
 9. **Sanity-build it locally** before publishing anything: in `<tmpDir>`,

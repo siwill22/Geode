@@ -1,7 +1,7 @@
 import { Clock, Color, Vector2, WebGLRenderer, type Camera } from 'three';
 import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-import { PALETTE } from '../core/palette';
+import { DEFAULT_THEME, resolveTheme } from '../core/theme';
 import { fetchCoastlineData } from '../core/coastlines';
 import { loadArchive, loadColormaps } from '../core/volume';
 import { tileGrid, type Rect } from '../core/layout';
@@ -24,7 +24,10 @@ let camera: Camera = createProjectionCamera(projectionMode, innerWidth / innerHe
 const renderer = new WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
-renderer.setClearColor(new Color(PALETTE.background));
+// Themes are not yet wired into this wrapper's UI -- it boots on the
+// default Theme's page colour. See docs/adr/0038 for the intended
+// always-present control, and themelab/ for the built one.
+renderer.setClearColor(new Color(resolveTheme(DEFAULT_THEME).page));
 document.body.appendChild(renderer.domElement);
 
 let controls: OrbitControls = createProjectionControls(projectionMode, camera, renderer.domElement);

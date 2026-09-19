@@ -1,3 +1,4 @@
+import type { ResolvedTheme } from './theme';
 import {
   BufferAttribute, BufferGeometry, Color, DoubleSide, Mesh, MeshBasicMaterial,
 } from 'three';
@@ -63,8 +64,12 @@ const SPEED_CLIP_MS = 20;
 const STREAK_SPEED_SCALE = 45000;
 const EARTH_RADIUS_M = EARTH_RADIUS_KM * 1000;
 
-const CALM_COLOR = new Color(0x1f5c7a);
-const FAST_COLOR = new Color(0xeaffff);
+/** The rampFlow role's two ends. Instance state, not module constants: two
+ *  wrappers can show different Themes at once (see the theme lab), and a
+ *  module-level colour is shared by every instance in the page. Seeded to the
+ *  default Theme's own rampFlow so a wrapper that never calls applyTheme()
+ *  still renders. */
+const DEFAULT_FLOW_RAMP: [number, number] = [0x1f5c7a, 0xeaffff];
 
 /** Static (built once) index buffer: 2 triangles per trail segment, for
  *  every particle slot up to MAX_PARTICLES. Vertex data changes every tick;
@@ -103,6 +108,19 @@ function buildIndex(): Uint32Array {
  * resulting positions become ribbon geometry.
  */
 export class WindStreaks {
+  /** The active speed ramp's two ends. See DEFAULT_FLOW_RAMP for why these are
+   *  per-instance rather than module constants. */
+  private calmColor = new Color(DEFAULT_FLOW_RAMP[0]);
+  private fastColor = new Color(DEFAULT_FLOW_RAMP[1]);
+
+  /** Re-colour to a Theme. Only the ramp is claimed here; positions, lifetimes
+   *  and seeding are untouched, so a Theme switch never disturbs an animation
+   *  already in flight. */
+  applyTheme(theme: ResolvedTheme): void {
+    this.calmColor.setHex(theme.rampFlow[0]);
+    this.fastColor.setHex(theme.rampFlow[1]);
+  }
+
   readonly mesh: Mesh;
   private readonly geometry: BufferGeometry;
   private readonly positions: Float32Array;
@@ -499,9 +517,11 @@ export class WindStreaks {
     const c = this.cursor[p];
     const halfWidth = BASE_HALF_WIDTH * this.sizeScale;
     const t = Math.min(this.speed[p], SPEED_CLIP_MS) / SPEED_CLIP_MS;
-    const r = CALM_COLOR.r + (FAST_COLOR.r - CALM_COLOR.r) * t;
-    const g = CALM_COLOR.g + (FAST_COLOR.g - CALM_COLOR.g) * t;
-    const b = CALM_COLOR.b + (FAST_COLOR.b - CALM_COLOR.b) * t;
+    const calm = this.calmColor;
+    const fast = this.fastColor;
+    const r = calm.r + (fast.r - calm.r) * t;
+    const g = calm.g + (fast.g - calm.g) * t;
+    const b = calm.b + (fast.b - calm.b) * t;
 
     for (let k = full ? 0 : TRAIL_LEN - 1; k < TRAIL_LEN; k++) {
       const ringIdx = (c + 1 + k) % TRAIL_LEN; // k=0 oldest (tail) .. k=TRAIL_LEN-1 newest (head)

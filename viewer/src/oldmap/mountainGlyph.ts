@@ -14,7 +14,7 @@
  * the glyph sits ON that point rather than being centred on it, which is how a
  * mountain symbol reads on a map.
  *
- * Why not deep-time-map's `points.js`: that ships six abstract symbols at ~3.4
+ * Why not petrify's `points.js`: that ships six abstract symbols at ~3.4
  * px sized for a scatter of observations, and these are per-frame paleo-
  * coordinate lists that need none of PointLayer's rotation or lifespan
  * machinery. See docs/plans/old-map-viewer.md.

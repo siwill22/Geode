@@ -36,6 +36,7 @@ export default defineConfig({
         reconstructionGroup: fileURLToPath(new URL('reconstructionGroup.html', import.meta.url)),
         paleobio: fileURLToPath(new URL('paleobio.html', import.meta.url)),
         oldmap: fileURLToPath(new URL('oldmap.html', import.meta.url)),
+        themelab: fileURLToPath(new URL('themelab.html', import.meta.url)),
       },
       output: {
         // Every entry point shares three/lil-gui -- name that shared chunk

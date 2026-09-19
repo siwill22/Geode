@@ -6,7 +6,7 @@ import {
 import { passthroughColor } from '../core/material';
 import { GEOGRAPHIC_GLSL } from '../core/glsl/geographic';
 import { R_CMB, R_SURFACE, LIGHT_DIR } from '../core/constants';
-import { PALETTE } from '../core/palette';
+import { DEFAULT_THEME, resolveTheme } from '../core/theme';
 
 const SHARED_VERT = /* glsl */ `
 varying vec3 vWorldPos;
@@ -73,7 +73,7 @@ export function createSurfaceSphere(maskTexture: Texture): Surface {
     uniforms: {
       uMask: { value: maskTexture },
       uTopography: { value: null as Texture | null },
-      uColor: { value: passthroughColor(PALETTE.ocean) },
+      uColor: { value: passthroughColor(resolveTheme(DEFAULT_THEME).water) },
       uOpacity: { value: 1.0 },
       uUseMask: { value: 1 },
       uUseTopography: { value: 0 },

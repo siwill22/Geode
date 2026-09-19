@@ -1,5 +1,5 @@
 /**
- * Typed shims for deep-time-map's two DOM panel modules.
+ * Typed shims for petrify's two DOM panel modules.
  *
  * Both are plain JavaScript with destructured, `null`-defaulted options
  * (`onSeek = null, onRender = null, ...`), so TypeScript infers those
@@ -12,15 +12,15 @@
  * means a change upstream shows up as a compile error in one file instead of
  * a runtime surprise spread across the instance.
  */
-import { attachLatitudePanel as attachLatitudePanelJs } from '../../vendor/deep-time-map/js/latitude-panel.js';
-import { attachTimeSeries as attachTimeSeriesJs } from '../../vendor/deep-time-map/js/timeseries-panel.js';
+import { attachLatitudePanel as attachLatitudePanelJs } from '../../vendor/petrify/js/latitude-panel.js';
+import { attachTimeSeries as attachTimeSeriesJs } from '../../vendor/petrify/js/timeseries-panel.js';
 
 /**
  * Which end of a panel's age axis the present sits at.
  *
  * Geode is 'present-left' everywhere -- `core/timeSeriesPanel.ts` maps
  * `(age - ageMin) / span`, and every lil-gui age slider runs its minimum on the
- * left. deep-time-map defaults to 'oldest-left' instead, so BOTH panels are set
+ * left. petrify defaults to 'oldest-left' instead, so BOTH panels are set
  * explicitly rather than one being left on its default: two charts stacked on
  * what reads as one shared axis must not run opposite ways.
  */

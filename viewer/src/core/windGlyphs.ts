@@ -1,3 +1,4 @@
+import type { ResolvedTheme } from './theme';
 import {
   BufferGeometry, ConeGeometry, CylinderGeometry, InstancedMesh, MeshBasicMaterial,
   Object3D, Vector3,
@@ -123,6 +124,16 @@ const UP = new Vector3(0, 1, 0);
  * touching geometry or material.
  */
 export class WindGlyphs {
+  private material!: MeshBasicMaterial;
+
+  /** Re-colour to a Theme. Glyphs claim `accentCool`, the same role velocity
+   *  arrows take in petrify: both are "an arrow showing a vector field",
+   *  and giving them one role is what stops a future overlay inventing a tenth
+   *  colour. */
+  applyTheme(theme: ResolvedTheme): void {
+    this.material.color.setHex(theme.accents.cool);
+  }
+
   readonly mesh: InstancedMesh;
   private lattice = buildLattice();
   private latStep = BASE_LAT_STEP_DEG;
@@ -136,7 +147,8 @@ export class WindGlyphs {
 
   constructor() {
     const geo = makeArrowGeometry();
-    const mat = new MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 });
+    this.material = new MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 });
+    const mat = this.material;
     // Allocated for the DENSEST setDensity() can go, in EITHER Projection
     // (an InstancedMesh's instance count is fixed at construction, unlike a
     // plain BufferGeometry array) -- setDensity()/setProjection() then

@@ -75,7 +75,7 @@ What is used instead is the geometric side, taken from gpml:subductionPolarity:
 Three reasons this is the right primitive rather than a fallback:
 
   - It is the SAME datum the map's subduction teeth are drawn from (see
-    deep_time_map/boundaries.py and its verify.check_polarity), so a mountain
+    petrify/boundaries.py and its verify.check_polarity), so a mountain
     can never appear on the opposite side from the triangles pointing at it.
   - It is always available: 100% of subduction sub-segments carry Left or Right
     at 0, 50, 100, 150 and 200 Ma, where the overriding plate id fails to
@@ -297,7 +297,7 @@ def trench_sources(model, time, tessellate_deg=0.1):
 
             # v x tangent is left-of-travel on the sphere: at a point on the
             # equator heading north it points west. Same construction as
-            # deep_time_map.verify.check_polarity, which is what validates it.
+            # petrify.verify.check_polarity, which is what validates it.
             left = np.cross(v, t)
             s = (left if polarity == 'Left' else -left)
 
@@ -603,7 +603,7 @@ def update_manifest(model_dir, args):
     an extra export hung off an already-cataloged model, not a change to it.
 
     `continents` is recorded but NOT produced here -- it comes from
-    deep-time-map's own polygon exporter (see docs/plans/old-map-viewer.md), and
+    petrify's own polygon exporter (see docs/plans/old-map-viewer.md), and
     the field is written only if that file is actually present, so the manifest
     never promises something the archive does not have.
     """

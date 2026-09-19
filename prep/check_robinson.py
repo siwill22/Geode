@@ -10,7 +10,7 @@ What matters is how big that disagreement is, and nothing asserted it until
 this existed. It is quoted in core/robinson.ts's doc comment, so it should be
 measured rather than believed.
 
-The table now lives upstream in deep-time-map (one copy, two consumers -- see
+The table now lives upstream in petrify (one copy, two consumers -- see
 its CHANGELOG for v0.6.0), and is read from there rather than retyped here:
 a check with its own third transcription of the numbers would pass while the
 shipped ones were wrong.
@@ -27,7 +27,7 @@ from pathlib import Path
 import numpy as np
 from pyproj import CRS, Transformer
 
-JS = Path(__file__).resolve().parents[1] / "viewer/vendor/deep-time-map/js/robinson.js"
+JS = Path(__file__).resolve().parents[1] / "viewer/vendor/petrify/js/robinson.js"
 
 # As a fraction of the map's half-extent. A full-screen map is ~2000 px across,
 # so half-width is ~1000 px and one pixel is ~1e-3.

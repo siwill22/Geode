@@ -5,7 +5,7 @@ import {
 import { passthroughColor } from './material';
 import { GEOGRAPHIC_GLSL } from './glsl/geographic';
 import { R_SURFACE, LIGHT_DIR, vec3ToLonLat } from './constants';
-import { PALETTE } from './palette';
+import type { ResolvedTheme } from './theme';
 import { fetchVolumeBytes } from './volume';
 import { composeQuaternions, referenceRotationAt, rotationAt } from './rotation';
 import {
@@ -179,7 +179,11 @@ export class Coastlines {
      *  grey continents, see docs/plans/deformation-viewer.md) passes
      *  LAND_R_UNDER_SURFACE and a plain grey landColor. */
     private readonly landRadius: number = LAND_R,
-    private readonly landColor: number = PALETTE.land,
+    /** Initial land fill. Usually superseded immediately by applyTheme(); a
+     *  caller that wants land OUTSIDE the Theme system (the deformation
+     *  viewer's plain grey continents) passes one and never calls
+     *  applyTheme. */
+    private readonly landColor: number = 0x808080,
   ) {
     // Allocate once at maximum size. The visible set changes with age, so we
     // update the draw range rather than rebuilding the buffers.
@@ -209,7 +213,7 @@ export class Coastlines {
       fragmentShader: LINE_FRAG,
       uniforms: {
         uMask: { value: maskTexture },
-        uColor: { value: passthroughColor(PALETTE.coastline) },
+        uColor: { value: passthroughColor(0xffffff) },
         uUseMask: { value: 1 },
         uOpacity: { value: 1 },
       },
@@ -242,6 +246,49 @@ export class Coastlines {
   }
 
   set landVisible(v: boolean) { this.land.visible = v; }
+
+  /** Whether the CURRENT Theme provides a pen at all (false for Outline
+   *  Treatment 'none'). */
+  private themeHasPen = true;
+  /** Whether the USER wants edges drawn. Separate from the Theme's own
+   *  treatment because they answer different questions -- "does this look draw
+   *  continent edges" versus "do I want to see them right now" -- and the pen
+   *  is drawn only when both say yes. A single flag would mean switching to a
+   *  'none' Theme and back silently discarded the user's choice. */
+  private penWanted = true;
+
+  /** Show or hide the continent-polygon edges, independently of the Theme.
+   *  A Theme whose Outline Treatment is 'none' has no pen colour to draw in,
+   *  so it stays hidden regardless and this records intent for the next Theme
+   *  that does have one. */
+  set penVisible(v: boolean) {
+    this.penWanted = v;
+    this.updatePenVisibility();
+  }
+
+  get penVisible(): boolean { return this.penWanted; }
+
+  private updatePenVisibility(): void {
+    this.lines.visible = this.themeHasPen && this.penWanted;
+  }
+
+  /**
+   * Re-colour to a Theme. Land takes `land`, the pen takes the resolved
+   * outline -- which is null for Outline Treatment 'none', and then the pen is
+   * HIDDEN rather than painted in the fill colour: an invisible seam still
+   * costs a draw call and still writes depth.
+   *
+   * Nothing is rebuilt. Both colours are shader uniforms and the geometry is
+   * unchanged, so a Theme switch is a uniform write per material.
+   */
+  applyTheme(theme: ResolvedTheme): void {
+    this.landMat.uniforms.uColor.value = passthroughColor(theme.land);
+    if (theme.outline !== null) {
+      this.lineMat.uniforms.uColor.value = passthroughColor(theme.outline);
+    }
+    this.themeHasPen = theme.outline !== null;
+    this.updatePenVisibility();
+  }
 
   /** Change which plate the whole set reanchors around, and re-render the
    *  current age with it -- see CONTEXT.md's Reference Plate entry. */

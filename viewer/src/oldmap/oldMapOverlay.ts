@@ -1,5 +1,5 @@
 import { Vector3, type Camera, type PerspectiveCamera } from 'three';
-import { PolygonLayer, tracePolyline } from '../../vendor/deep-time-map/js/index.js';
+import { PolygonLayer, tracePolyline } from '../../vendor/petrify/js/index.js';
 
 import { R_SURFACE } from '../core/constants';
 import { ThreeProjector } from '../core/boundaries';
@@ -662,7 +662,7 @@ export class OldMapOverlay {
 
 // --- geometry helpers ------------------------------------------------------
 
-/** deep-time-map's geographic frame: z through the north pole. */
+/** petrify's geographic frame: z through the north pole. */
 function geoVec(lon: number, lat: number): [number, number, number] {
   const la = lat * (Math.PI / 180);
   const lo = lon * (Math.PI / 180);

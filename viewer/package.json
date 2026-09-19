@@ -14,12 +14,15 @@
     "check:static-polygons": "node scripts/check_static_polygons.mjs",
     "check:render": "node scripts/shoot.mjs shots",
     "check:paleobio": "node scripts/check_paleobio.mjs shots-paleobio",
-    "check:boundaries": "cd .. && PYTHONPATH=\"$PYTHONPATH:$PWD/viewer/vendor/deep-time-map/python\" conda run -n pygmt17 python prep/check_boundaries.py",
+    "check:boundaries": "cd .. && PYTHONPATH=\"$PYTHONPATH:$PWD/viewer/vendor/petrify/python\" conda run -n pygmt17 python prep/check_boundaries.py",
     "check:projections": "node scripts/check_projections.mjs shots-projections",
     "check:flat-direction": "node scripts/check_flat_direction.mjs",
     "check:robinson": "cd .. && conda run -n pygmt17 python prep/check_robinson.py",
     "check:storymaps": "node scripts/check_storymaps.mjs",
-    "check:oldmap": "node scripts/check_oldmap.mjs"
+    "check:oldmap": "node scripts/check_oldmap.mjs",
+    "check:themes": "node scripts/check_themes.mjs",
+    "check:theme-roles": "node scripts/check_theme_roles.mjs",
+    "check:themelab": "node scripts/check_themelab.mjs shots-themelab"
   },
   "keywords": [],
   "author": "",

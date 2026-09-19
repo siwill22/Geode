@@ -11,10 +11,10 @@ Two case studies, deliberately not one dataset with a switch:
           faunas diverge) at the same moment.
 
 Everything domain-specific lives here; everything generic lives upstream in
-`deep_time_map` (its ADR-0001 names "querying a live species database" as the
+`petrify` (its ADR-0001 names "querying a live species database" as the
 worked example of that split). This script produces the plain payloads
 `PointLayer`, `AggregateLayer` and `attachLatitudePanel` already know how to
-render, and nothing in `viewer/vendor/deep-time-map/js` knows what a coral is.
+render, and nothing in `viewer/vendor/petrify/js` knows what a coral is.
 
 ---- Why paleocoordinates are recomputed, not taken from PBDB ------------------
 
@@ -71,8 +71,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-DEEP_TIME_MAP_PY = Path(__file__).parent.parent / "viewer" / "vendor" / "deep-time-map" / "python"
-sys.path.insert(0, str(DEEP_TIME_MAP_PY))
+PETRIFY_PY = Path(__file__).parent.parent / "viewer" / "vendor" / "petrify" / "python"
+sys.path.insert(0, str(PETRIFY_PY))
 
 PBDB = "https://paleobiodb.org/data1.2"
 CACHE = Path(__file__).parent / "cache" / "pbdb"
@@ -450,8 +450,8 @@ def write_json(path, payload, gzip_it=True):
 
 
 def build_dataset(key, cfg, out_root, rings):
-    from deep_time_map.aggregate import build_aggregates, build_latitude, EqualAreaGrid
-    from deep_time_map.points import points_from_dataframe, build_points, rotation_block
+    from petrify.aggregate import build_aggregates, build_latitude, EqualAreaGrid
+    from petrify.points import points_from_dataframe, build_points, rotation_block
     from gprm.datasets import Reconstructions
 
     print(f"\n=== {key}: {cfg['name']} ===")

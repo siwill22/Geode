@@ -1324,7 +1324,7 @@ export class ClimateInstance {
     this.overlay.setReferenceRotation(this.qRefRender);
     this.windStreaks.setReferenceRotation(this.qRefRender);
     this.trackedParticles.setReferenceRotation(this.qRefRender);
-    // PointOverlay works in the geographic frame (deep-time-map's native
+    // PointOverlay works in the geographic frame (petrify's native
     // frame, same as tomography's BoundaryOverlay -- see core/boundaries.ts's
     // module doc comment), not the render frame everything else above uses --
     // pass qGeo, not qRefRender.

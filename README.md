@@ -68,8 +68,8 @@ npm run dev   # http://localhost:5173                        mantle viewer
               # http://localhost:5173/reconstructionGroup.html     generated: reconstruction-group-globe
 ```
 
-Plate boundaries are drawn by [deep-time-map](https://github.com/siwill22/deep-time-map),
-a submodule at `viewer/vendor/deep-time-map`. `git submodule update --init` if
+Plate boundaries are drawn by [petrify](https://github.com/siwill22/petrify),
+a submodule at `viewer/vendor/petrify`. `git submodule update --init` if
 you cloned without `--recurse-submodules`.
 
 The archive is generated, not tracked — see *Regenerating the archive*. It is
@@ -309,7 +309,7 @@ from the mantle viewer's coastline prep, just pointed at Scotese's continent
 polygons and rotation file instead of Müller's — produces the reconstructed
 continent-outline overlay. There is no plate-boundary layer here: Scotese's
 model does not resolve topologies the way Müller 2022 does, so unlike the
-mantle viewer there is nothing for deep-time-map to draw.
+mantle viewer there is nothing for petrify to draw.
 
 Age range is bounded by the **climate manifest's own frame range**, 0-540 Ma.
 Unlike the mantle viewer's Müller coastlines (capped at 200 Ma), the Scotese
@@ -389,37 +389,96 @@ wind glyphs pointing in globe-relative directions on a flat map.
 
 ## Regenerating the archive
 
-Everything runs in the `pygmt17` conda environment.
+### Environment
+
+```bash
+conda env create -f environment.yml
+conda activate geode
+```
+
+`environment.yml` pins everything the prep scripts need, including GMT — the one dependency
+pip cannot provide, since `pygmt` wraps the GMT C library rather than bundling it. The
+commands below say `-n pygmt17` because that is the environment they were developed in;
+`-n geode` works identically.
+
+### Inputs
+
+Most inputs download themselves on first use and are cached alongside gprm's datasets
+(`python -c "from gprm.datasets import cache_path; print(cache_path())"`):
+
+| Input | Source | Size |
+|---|---|---|
+| Reconstruction models, coastlines, palaeogeography | `gprm.datasets` | fetched per model |
+| Muller et al. (2022) OPT1 mantle temperature grids | Zenodo [6622194](https://zenodo.org/records/6622194), one file of ten | 2.3 GB |
+| Surface topography | NOAA ETOPO 2022 60 arc-second | 478 MB |
+
+**One input is not yet self-serving.** `prep_model.py` needs a tomography volume on a regular
+lon/lat/depth grid; the build used `REVEAL_anomaly.nc` (4.98 GB). REVEAL ships natively on an
+unstructured Salvus mesh, so a regular grid is a derived product. Pass it with `--input`. See
+*Unresolved inputs* below.
+
+The source is the supplementary data of Schouten et al. (2024), *Sci. Rep.* **14**, 26708 —
+Zenodo [10.5281/zenodo.13235438](https://doi.org/10.5281/zenodo.13235438) (latest version
+[13991965](https://doi.org/10.5281/zenodo.13991965)), whose data availability statement lists
+"tomographic models (netCDF4 format)". Not yet wired into `prep/_inputs.py`: the per-file URL,
+size and checksum still need reading off the Zenodo API, and it is worth confirming that the
+4.98 GB file is published there rather than derived locally. Note that a
+`REVEAL_downsampled_anomaly.nc` (84 MB, 23 depth levels) sits beside it — too coarse for
+`DEFAULT_NDEPTH = 192`, but useful for a smoke test.
+
+Do not confuse this with Zenodo [10684325](https://zenodo.org/records/10684325), the dataset of
+the REVEAL model paper itself (Thrastarson et al. 2024) — that is 49.3 GB of benchmark
+seismograms and contains no tomography grid. ETH also publishes REVEAL directly in netCDF
+(400 MB, [cos.ethz.ch/models.html](https://cos.ethz.ch/models.html)), but as absolute velocities
+rather than the `vs_anomaly`/`vp_anomaly` this pipeline reads, and from a polybox share with no
+DOI or checksum.
+
+### Build
 
 ```bash
 conda run -n pygmt17 python prep/prep_colormaps.py
 
+# --input is required: see 'Unresolved inputs'
 conda run -n pygmt17 python prep/prep_model.py \
-    --input /Users/simon/Data/SeismicTomography/Schouten_Supplementary_material/Models/REVEAL_anomaly.nc \
+    --input /path/to/REVEAL_anomaly.nc \
     --id reveal --name REVEAL \
     --var vs_anomaly:vs:"Vs anomaly" \
     --var vp_anomaly:vp:"Vp anomaly" \
     --validate
 
+# downloads the OPT1 grids from Zenodo on first run
 conda run -n pygmt17 python prep/prep_convection.py \
-    --input /Users/simon/Data/zenodo/OPT1_temperature_anomaly_grids_dimensional \
     --id opt1 --name "Muller 2022 OPT1" --age-max 200 --validate
 
 # Coastline GEOMETRY from Muller 2019 v2, ROTATIONS from Muller 2022. See below.
-CACHE=~/Library/Caches/gprm
+# Both models are fetched by gprm; run these once to populate the cache:
+#   python -c "from gprm.datasets import Reconstructions as R; R.fetch_Muller2019(); R.fetch_Muller2022()"
+CACHE=$(conda run -n pygmt17 python -c "from gprm.datasets import cache_path; print(cache_path())")
 conda run -n pygmt17 python prep/prep_coastlines.py \
     --coastlines "$CACHE/Muller2019/Muller_etal_2019_PlateMotionModel_v2.0_Tectonics/StaticGeometries/Coastlines/Global_coastlines_2019_v1_low_res.shp" \
     --rotations  "$CACHE/Muller2022/optimisation/1000_0_rotfile_MantleOpt.rot" \
     --age-max 200
 
-PYTHONPATH="$PYTHONPATH:$PWD/viewer/vendor/deep-time-map/python" \
-conda run -n pygmt17 python -m deep_time_map.export \
+PYTHONPATH="$PYTHONPATH:$PWD/viewer/vendor/petrify/python" \
+conda run -n pygmt17 python -m petrify.export \
     --model Muller2022 --end 200 --out archive/boundaries
 
+# downloads ETOPO 2022 on first run
 conda run -n pygmt17 python prep/prep_topography.py
 conda run -n pygmt17 python test-data/make_fixtures.py
 conda run -n pygmt17 python prep/build_archive_index.py
 ```
+
+### Unresolved inputs
+
+These still need a path supplied, because no public source is recorded for them. Everything
+else in the pipeline is self-serving.
+
+| Input | Needed by | Override |
+|---|---|---|
+| `REVEAL_anomaly.nc` (or any regular-grid tomography volume) — Zenodo [13235438](https://doi.org/10.5281/zenodo.13235438), not yet automated | `prep_model.py` | `--input` |
+| StoryMaps LIP export | `prep_oldmap_volcanoes.py` (Old Map viewer only) | `$GEODE_LIP_DIR` |
+| `JW_HotspotCatalogue.shp` | `prep_oldmap_volcanoes.py` (Old Map viewer only) | `$GEODE_WHITTAKER_HOTSPOTS` |
 
 `prep_convection.py` exists separately from `prep_model.py` because one volume
 here is 65 files and the series is another 11 on top of that, where a tomography
@@ -579,7 +638,7 @@ entirely plausible on screen.
 
 ### Plate boundaries
 
-Drawn by [deep-time-map](https://github.com/siwill22/deep-time-map) onto a 2D
+Drawn by [petrify](https://github.com/siwill22/petrify) onto a 2D
 canvas over the WebGL globe. That library talks to its host through exactly one
 method, `project(vec3) -> [x, y, depth] | null`, so integrating it costs a
 projector and nothing else — the subduction-polarity triangles, the pixel-spaced
@@ -588,7 +647,7 @@ already verified.
 
 Three things the projector has to get right:
 
-**The frames differ but are compatible.** deep-time-map works in the geographic
+**The frames differ but are compatible.** petrify works in the geographic
 frame (Z through the pole); Geode works in three.js Y-up. The map between them
 is a permutation with determinant **+1** — a rotation, not a reflection — so the
 `a x tangent` cross product that decides which side the triangles go on survives
@@ -664,7 +723,7 @@ npm run check:static-polygons  # Plate-Frame Point assignment + trajectory
 ```
 
 **Always run `check:boundaries` through the wrapper, never
-`deep_time_map.verify` directly.** Its CLI takes `--model`, defaulting to
+`petrify.verify` directly.** Its CLI takes `--model`, defaulting to
 `Merdith2021`, and does not read the model name from the export's manifest. Aim
 it at a Müller 2022 export and it resolves Merdith topologies instead. Because
 the two models share Merdith's topologies — identical feature counts — the only
@@ -749,22 +808,7 @@ Cloud only.
 ### One-time setup
 
 1. Repo **Settings → Pages → Source: GitHub Actions**.
-2. A **read-only deploy key** for the submodule. `deep-time-map` is a separate
-   private repo, and a workflow's `GITHUB_TOKEN` is scoped to this one, so
-   `checkout` cannot fetch it — the failure reads `Repository not found`, which
-   looks like a bad URL rather than a permissions problem. A deploy key grants
-   read on exactly that one repo, where a PAT would carry the whole account's
-   access into CI:
-
-```bash
-ssh-keygen -t ed25519 -N "" -C geode-ci-readonly -f /tmp/dtm_key
-gh api -X POST repos/siwill22/deep-time-map/keys \
-    -f title="Geode CI (read-only)" -f key="$(cat /tmp/dtm_key.pub)" -F read_only=true
-gh secret set DTM_DEPLOY_KEY --repo siwill22/Geode < /tmp/dtm_key
-rm /tmp/dtm_key /tmp/dtm_key.pub
-```
-
-3. Pack and upload the data:
+2. Pack and upload the data:
 
 ```bash
 node prep/pack_deploy.mjs
@@ -859,7 +903,7 @@ viewer/src/groupGlobe/           model-group-globe wrapper
 viewer/src/reconstruction/       single-reconstruction-globe wrapper
 viewer/src/reconstructionGroup/  reconstruction-group-globe wrapper
 viewer/src/generated/            per-recipe config the generator overwrites (checked in with real defaults)
-viewer/vendor/                   deep-time-map submodule
+viewer/vendor/                   petrify submodule
 test-data/                       synthetic fixtures and the pygplates cross-check
 docs/adr/                        architecture decisions
 docs/plans/                      design docs for individual features
@@ -873,7 +917,7 @@ docs/plans/                      design docs for individual features
 ramps from matplotlib. Coastline geometry from Müller et al. 2019 v2.
 Rotations, plate boundaries and the OPT1 convection run from Müller et al.
 2022. Plate boundary rendering by
-[deep-time-map](https://github.com/siwill22/deep-time-map). Tomography models
+[petrify](https://github.com/siwill22/petrify). Tomography models
 are cited per-model in each `manifest.json`.
 
 **Paleoclimate viewer.** Climate simulations from Li, X., Hu, Y. et al. 2022,

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify the exported plate boundaries, against the model they came from.
 
-deep_time_map.verify does the actual checking. This wrapper exists for one
+petrify.verify does the actual checking. This wrapper exists for one
 reason: its CLI takes `--model`, defaulting to `Merdith2021`, and does NOT read
 the model name from the export's own manifest. Point it at a Muller2022 export
 and it silently resolves Merdith2021 topologies instead, then reports the
@@ -44,7 +44,7 @@ def main():
     manifest = json.loads((args.data / "boundaries.json").read_text())
     model = manifest["model"]
 
-    from deep_time_map import verify
+    from petrify import verify
 
     print(f"{model}, {len(manifest['frames'])} frames, "
           f"anchor plate {manifest['anchor_plate_id']}")

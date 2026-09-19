@@ -6,7 +6,7 @@ import {
   type ProjectionMode,
 } from '../core/projection';
 import { loadArchive, loadColormaps } from '../core/volume';
-import { fetchMaybeGzippedJSON } from '../../vendor/deep-time-map/js/gzipFetch.js';
+import { fetchMaybeGzippedJSON } from '../../vendor/petrify/js/gzipFetch.js';
 import { BACKGROUND, PaleobioInstance } from './paleobioInstance';
 import type { PaleobioIndex } from './types';
 
