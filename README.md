@@ -429,6 +429,26 @@ whole. Verified byte-identical (md5) against a manually downloaded copy.
 variables, but 23 depth levels rather than 342. Too coarse for the default `--ndepth 192`, and
 useful for exercising the pipeline without a 4.6 GB download.
 
+> **Known issue — the full 4.6 GB fetch has not been run end to end.**
+>
+> Every part of it is exercised by the 84 MB member, which goes through identical code, and the
+> resume path is tested by injecting a mid-stream failure. But a one-hour transfer is the only
+> thing that tests a one-hour transfer, and it has not been done.
+>
+> There is a specific reason to be wary. During development Zenodo answered a request for
+> **128 bytes** by beginning to send the whole archive, and the connection broke after 11.27 GB
+> (`IncompleteRead(11268954172 bytes read, 7585292681 more expected)`). This could not be
+> reproduced afterwards: 15 consecutive range requests, and a replay of the exact sequence that
+> failed, all returned clean `206 Partial Content`. The cause is unknown and assumed transient.
+>
+> Two mitigations are in place. A response that is not `206` is rejected before any of the body
+> is read, so an ignored `Range` header costs a second rather than 19 GB. And the transfer
+> resumes from the compressed byte it stopped at, retrying up to six times with exponential
+> backoff, so a dropped connection does not restart it.
+>
+> If a real run does fail, `--downsampled` will confirm whether the problem is the transfer size
+> or the code. Please record what happened here.
+
 REVEAL ships natively on an unstructured Salvus mesh, so this regular lon/lat/depth grid is a
 derived product of the Schouten paper rather than part of the REVEAL release. Two near misses
 worth recording: Zenodo [10684325](https://zenodo.org/records/10684325) is the dataset of the
