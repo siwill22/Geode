@@ -18,12 +18,31 @@ Nothing here is imported at module load; call the functions. Each returns a path
 so a second call is free.
 """
 import struct
+import time
 import zlib
 from pathlib import Path
 
 # Written into the same cache gprm uses, so that one directory holds everything the build
 # downloads and `gprm.datasets.cache_path()` finds it.
 CACHE_SUBDIR = 'geode'
+
+# Transfers here run to gigabytes, and a dropped connection partway through was observed
+# against Zenodo in practice, so every read retries with exponential backoff.
+MAX_ATTEMPTS = 6
+
+
+def _request_failures():
+    """Exception types worth retrying: transport-level, not a 4xx from the server.
+
+    Built on demand rather than at import, so that this module stays importable without
+    requests installed (only the zip-member fetcher needs it).
+    """
+    import requests
+
+    return (requests.exceptions.ChunkedEncodingError,
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            ConnectionResetError)
 
 
 def _cache_dir():
@@ -85,17 +104,30 @@ def _read_zip_directory(url, session):
 
     :returns: dict keyed by member name, with offset, compressed/uncompressed size and CRC.
     """
-    total = int(session.head(url, allow_redirects=True, timeout=60).headers['content-length'])
+    head = session.head(url, allow_redirects=True, timeout=60)
+    head.raise_for_status()
+    if 'content-length' not in head.headers:
+        raise RuntimeError(
+            '{} reports no content-length, so its size is unknown and the zip index at the '
+            'end of it cannot be located. Check the URL points at the archive itself rather '
+            'than at a landing page.'.format(url))
+    total = int(head.headers['content-length'])
 
     def read(start, end):
         # Streamed, so that the status can be checked before the body is pulled down. A
         # server that ignores the Range header answers 200 with the whole archive, and this
         # one is 19 GB: reading .content first would download all of it before complaining.
-        with session.get(url, headers={'Range': 'bytes={}-{}'.format(start, end)},
-                         stream=True, timeout=300) as response:
-            response.raise_for_status()
-            _require_partial_content(response, url)
-            return response.content
+        for attempt in range(MAX_ATTEMPTS):
+            try:
+                with session.get(url, headers={'Range': 'bytes={}-{}'.format(start, end)},
+                                 stream=True, timeout=300) as response:
+                    response.raise_for_status()
+                    _require_partial_content(response, url)
+                    return response.content
+            except _request_failures():
+                if attempt == MAX_ATTEMPTS - 1:
+                    raise
+                time.sleep(2 ** attempt)
 
     tail = read(max(0, total - 65557), total - 1)
     eocd = tail.rfind(b'PK\x05\x06')
@@ -198,9 +230,17 @@ def fetch_zip_member(url, member, fname=None, path=None, progressbar=True):
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_suffix(destination.suffix + '.part')
 
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    # A multi-gigabyte transfer takes long enough that a dropped connection is a question of
+    # when, not whether -- one was observed against this very archive after 11 GB. Rather
+    # than start over, the resume loop re-requests from the compressed byte it stopped at and
+    # keeps feeding the *same* decompressor, whose state carries across the break.
     decompressor = zlib.decompressobj(-15) if entry['method'] == 8 else None
+    consumed = 0          # compressed bytes fed to the decompressor
     crc = 0
-    written = 0
+    written = 0           # uncompressed bytes written
+
     bar = None
     if progressbar:
         try:
@@ -210,19 +250,39 @@ def fetch_zip_member(url, member, fname=None, path=None, progressbar=True):
         except ImportError:
             pass
 
-    with session.get(url, headers={'Range': 'bytes={}-{}'.format(start, end)},
-                     stream=True, timeout=600) as response:
-        response.raise_for_status()
-        _require_partial_content(response, url)
+    try:
         with open(partial, 'wb') as handle:
-            for chunk in response.iter_content(1 << 20):
-                block = decompressor.decompress(chunk) if decompressor else chunk
-                if block:
-                    handle.write(block)
-                    crc = zlib.crc32(block, crc)
-                    written += len(block)
-                    if bar:
-                        bar.update(len(block))
+            for attempt in range(MAX_ATTEMPTS):
+                if consumed >= entry['compressed']:
+                    break
+                try:
+                    with session.get(
+                            url,
+                            headers={'Range': 'bytes={}-{}'.format(start + consumed, end)},
+                            stream=True, timeout=600) as response:
+                        response.raise_for_status()
+                        _require_partial_content(response, url)
+                        for chunk in response.iter_content(1 << 20):
+                            consumed += len(chunk)
+                            block = decompressor.decompress(chunk) if decompressor else chunk
+                            if block:
+                                handle.write(block)
+                                crc = zlib.crc32(block, crc)
+                                written += len(block)
+                                if bar:
+                                    bar.update(len(block))
+                    break
+                except _request_failures() as err:
+                    if attempt == MAX_ATTEMPTS - 1:
+                        raise
+                    handle.flush()
+                    delay = 2 ** attempt
+                    print('\n  transfer interrupted after {:.2f} GB ({}); resuming in {}s '
+                          '[attempt {} of {}]'.format(consumed / 1e9, type(err).__name__,
+                                                      delay, attempt + 2, MAX_ATTEMPTS),
+                          flush=True)
+                    time.sleep(delay)
+
             if decompressor:
                 block = decompressor.flush()
                 if block:
@@ -231,8 +291,9 @@ def fetch_zip_member(url, member, fname=None, path=None, progressbar=True):
                     written += len(block)
                     if bar:
                         bar.update(len(block))
-    if bar:
-        bar.close()
+    finally:
+        if bar:
+            bar.close()
 
     if written != entry['uncompressed'] or crc != entry['crc']:
         partial.unlink(missing_ok=True)
