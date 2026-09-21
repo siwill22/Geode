@@ -145,8 +145,20 @@ if (index.scotese_coastlines) {
   index.scotese_coastlines = packCoastlineSet('', index.scotese_coastlines);
 }
 if (index.native_coastlines) {
+  // A native coastline set only exists to be looked up by a model's own
+  // lowercased reconstruction_model (see resolveCoastlineSet() in
+  // core/coastlines.ts). Drop any entry no remaining model references, so
+  // an --exclude of every model under a given reconstruction_model doesn't
+  // leave a dead pointer into a directory this script never copied.
+  const liveKeys = new Set(
+    index.models.map((m) => m.reconstruction_model?.toLowerCase()).filter(Boolean),
+  );
   for (const key of Object.keys(index.native_coastlines)) {
-    index.native_coastlines[key] = packCoastlineSet('', index.native_coastlines[key]);
+    if (!liveKeys.has(key)) {
+      delete index.native_coastlines[key];
+    } else {
+      index.native_coastlines[key] = packCoastlineSet('', index.native_coastlines[key]);
+    }
   }
 }
 if (index.boundaries) {

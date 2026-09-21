@@ -18,27 +18,25 @@ export interface GroupGlobeConfig {
 /**
  * The one file generator/scaffoldRepo.mjs overwrites for a `model-group-globe`
  * recipe (see viewer/src/generated/config.ts's identical role for
- * `single-model-globe`). Checked in with the real Cao2024/Muller2019
- * deformation comparison so this monorepo's own `npm run dev`/`typecheck`/
- * `check:render` have something concrete to boot groupGlobe/main.ts
- * against without running the generator first.
+ * `single-model-globe`). Normally checked in with a real, working default so
+ * this monorepo's own `npm run dev`/`typecheck`/`check:render` have something
+ * concrete to boot groupGlobe/main.ts against without running the generator
+ * first -- but the comparison family that used to serve that role (a
+ * Cao2024/Muller2019 deformation comparison) has been pulled out of this
+ * repo's own archive into a separate private one, and it was the ONLY
+ * comparison family in the catalog. Deliberately left with no working
+ * default rather than fabricating a fake comparison family out of unrelated
+ * Models: `npm run dev`/`groupGlobe.html` will throw
+ * (groupGlobeInstance.ts's loadCell(): "no model in archive with id ...")
+ * until a real one exists. Tracked in issue #26.
  */
 export const GROUP_GLOBE_CONFIG: GroupGlobeConfig = {
-  title: 'Crustal Deformation Comparison',
+  title: 'Model Comparison',
   tools: ['legend', 'age-slider', 'no-data-toggle', 'query-point'],
   axisALabel: 'reconstruction',
   axisBLabel: 'role',
-  grid: {
-    Cao2024: {
-      Deformation: 'cao2024-deformation',
-      'Age & Heat Flux': 'cao2024-age-heatflux',
-    },
-    Muller2019: {
-      Deformation: 'muller2019-deformation',
-      'Age & Heat Flux': 'muller2019-age-heatflux',
-    },
-  },
-  defaultAxisA: 'Cao2024',
-  defaultAxisB: 'Deformation',
+  grid: {},
+  defaultAxisA: '',
+  defaultAxisB: '',
   multiGlobe: { syncAge: false },
 };

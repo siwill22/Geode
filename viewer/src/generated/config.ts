@@ -15,7 +15,7 @@ export interface GlobeConfig {
  * viewer/globe/main.ts against without running the generator first.
  */
 export const GLOBE_CONFIG: GlobeConfig = {
-  modelId: 'cao2024-deformation',
+  modelId: 'opt1',
   title: 'Geode Globe',
   tools: ['legend', 'age-slider', 'no-data-toggle', 'query-point'],
   multiGlobe: { syncAge: false },
