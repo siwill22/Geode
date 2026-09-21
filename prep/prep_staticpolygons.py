@@ -54,10 +54,38 @@ from prep_coastlines import finite_or
 # -- the literal same shapefile, no oceanic coverage at all -- so every feature
 # there is continental by construction, not by a feature-type check (None
 # means exactly that, not "unknown").
+#
+# Merdith2021 needed nine types, not one, and the check that established them is
+# worth recording because it is the strongest form this test can take: that
+# model ships BOTH a static-polygon file and a separate continents file, and
+# comparing the two settles the question from the model's own statement rather
+# than from the type names. Measured over every polygon in each file:
+#
+#   - gpml:Basin covers 58.99% of the globe in the static polygons (named
+#     'Pacific', 'Panthalassa', ...) and appears ZERO times in the continents
+#     file. It is the model's oceanic crust.
+#   - All nine other types appear in the continents file with matching areas,
+#     summing to 41.04% of the globe -- high against today's ~29%, as expected
+#     for a compilation that includes submerged and stretched continental crust.
+#   - The two files' non-Basin contents differ by exactly one polygon and a
+#     batch of Tien Shan renames/plate-id swaps, all ClosedContinentalBoundary
+#     on both sides. No type-level disagreement at all.
+#
+# So the mapping below is the complement of {gpml:Basin}. It is written out
+# positively anyway, to keep one schema for every model and because an unknown
+# future type defaulting to oceanic is the safer of the two failure modes.
+# Note Merdith2021 counts gpml:IslandArc (Tonga, Kermadec) as continental --
+# that is the model's call, not ours.
 CONTINENTAL_FEATURE_TYPES = {
     "Muller2019": {"gpml:ClosedContinentalBoundary"},
     "Seton2012": {"gpml:ContinentalFragment"},
     "Scotese": None,
+    "Merdith2021": {
+        "gpml:ClosedContinentalBoundary", "gpml:UnclassifiedFeature",
+        "gpml:Craton", "gpml:IslandArc", "gpml:Coastline",
+        "gpml:TerraneBoundary", "gpml:InferredPaleoBoundary",
+        "gpml:ContinentalFragment", "gpml:PassiveContinentalBoundary",
+    },
 }
 
 

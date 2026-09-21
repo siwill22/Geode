@@ -5,7 +5,7 @@ import {
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 import { LIGHT_DIR, R_CMB, R_SURFACE, lonLatToVec3, radiusToDepth } from '../core/constants';
-import { PALETTE } from '../core/palette';
+import { DEFAULT_THEME, resolveTheme } from '../core/theme';
 import { loadTopography } from './globe';
 import { fetchCoastlineData } from '../core/coastlines';
 import {
@@ -48,7 +48,10 @@ const renderer = new WebGLRenderer({
 });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
-renderer.setClearColor(new Color(PALETTE.background));
+// Themes are not yet wired into this wrapper's UI -- it boots on the
+// default Theme's page colour. See docs/adr/0038 for the intended
+// always-present control, and themelab/ for the built one.
+renderer.setClearColor(new Color(resolveTheme(DEFAULT_THEME).page));
 document.body.appendChild(renderer.domElement);
 
 const controls = new OrbitControls(camera, renderer.domElement);

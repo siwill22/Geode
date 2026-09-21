@@ -13,8 +13,9 @@ The hillshade matters for more than looks. A flat-shaded sphere reads as a
 disc; relief that catches a light gives the eye something to resolve curvature
 from, which is the whole point of drawing a globe rather than a map.
 
-Default source is the GEBCO One Minute Grid (21601 x 10801), decimated to the
-output size.
+Default source is NOAA's ETOPO 2022 60 arc-second global relief (21600 x 10800),
+downloaded on first use and cached. Any other equirectangular elevation grid works
+via --input; the GEBCO One Minute Grid was the original source and is equivalent.
 """
 
 import argparse
@@ -25,10 +26,9 @@ import xarray as xr
 from PIL import Image
 from scipy.interpolate import interp1d
 
-GEBCO = Path("/Users/simon/Data/SedThickness/GEBCO1m/GridOne.nc")
-GEO_CPT = Path(
-    "/Users/simon/anaconda3/envs/pygmt17/share/gmt/cpt/gmt/geo.cpt"
-)
+# GMT's geo relief palette, vendored so that building this texture needs no GMT
+# installation just to read a 1 kB text file. See prep/data/geo.cpt.README.
+GEO_CPT = Path(__file__).parent / "data" / "geo.cpt"
 
 
 def _parse_colour(tok):
@@ -209,7 +209,8 @@ def validate(out_path, z, lon_full, lat_full, width, height,
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--input", type=Path, default=GEBCO)
+    ap.add_argument("--input", type=Path, default=None,
+                    help="elevation grid; if omitted, ETOPO 2022 60s is downloaded and cached")
     ap.add_argument("--cpt", type=Path, default=GEO_CPT)
     ap.add_argument("--width", type=int, default=4096)
     ap.add_argument("--height", type=int, default=2048)
@@ -224,6 +225,10 @@ def main():
     ap.add_argument("--max-offset-deg", type=float, default=0.75,
                     help="fail if any band's best-fit offset exceeds this")
     args = ap.parse_args()
+
+    if args.input is None:
+        from _inputs import fetch_etopo
+        args.input = fetch_etopo()
 
     print(f"reading {args.input.name}")
     ds = xr.open_dataset(args.input, decode_cf=False)

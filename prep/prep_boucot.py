@@ -2,8 +2,8 @@
 """Export the Boucot, Chen & Scotese (2013) paleolithology indicator points
 for the climate viewer's "Boucot paleolithology" overlay toggle.
 
-Uses the deep-time-map generic point pipeline (points_from_dataframe/
-build_points, see viewer/vendor/deep-time-map/python/deep_time_map/points.py)
+Uses the petrify generic point pipeline (points_from_dataframe/
+build_points, see viewer/vendor/petrify/python/petrify/points.py)
 -- the same primitive CONTEXT.md's Plate-Frame Point entry names for "a
 dataset whose points are locations on a plate": present-day coordinates with
 no plate id of their own, assigned one by partitioning against a
@@ -35,8 +35,8 @@ from pathlib import Path
 
 import numpy as np
 
-DEEP_TIME_MAP_PY = Path(__file__).parent.parent / "viewer" / "vendor" / "deep-time-map" / "python"
-sys.path.insert(0, str(DEEP_TIME_MAP_PY))
+PETRIFY_PY = Path(__file__).parent.parent / "viewer" / "vendor" / "petrify" / "python"
+sys.path.insert(0, str(PETRIFY_PY))
 
 DEFAULT_CPT = Path("/Users/simon/GIT/pygplates-paleo/Boucot/boucot_paleolithology_cpt.cpt")
 
@@ -85,7 +85,7 @@ def main():
         raise SystemExit(
             f"{manifest_path} not found -- run prep_reconstruction.py --model Scotese first")
 
-    from deep_time_map.points import points_from_dataframe, build_points
+    from petrify.points import points_from_dataframe, build_points
 
     from gprm.datasets import Reconstructions
     from gprm.datasets.Strat import PaleoLithology

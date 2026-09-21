@@ -2,7 +2,7 @@ import { Clock, Color, Vector2, WebGLRenderer, type Camera } from 'three';
 import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 import { lonLatToVec3 } from '../core/constants';
-import { PALETTE } from '../core/palette';
+import { DEFAULT_THEME, resolveTheme } from '../core/theme';
 import { fetchCoastlineData } from '../core/coastlines';
 import { loadStaticPolygonDataFor } from '../core/staticPolygons';
 import { loadPaleolithologyUrlFor } from '../core/pointOverlay';
@@ -13,6 +13,7 @@ import {
   createProjectionCamera, createProjectionControls, updateProjectionCameraAspect,
   type ProjectionMode,
 } from '../core/projection';
+import { wireProjectionToggle } from '../core/projectionToggle';
 import {
   ClimateInstance, type ClimateInstanceDeps, type ClimateLayer, type WindStyle,
 } from './climateInstance';
@@ -43,7 +44,10 @@ let camera: Camera = createProjectionCamera(projectionMode, innerWidth / innerHe
 const renderer = new WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
-renderer.setClearColor(new Color(PALETTE.background));
+// Themes are not yet wired into this wrapper's UI -- it boots on the
+// default Theme's page colour. See docs/adr/0038 for the intended
+// always-present control, and themelab/ for the built one.
+renderer.setClearColor(new Color(resolveTheme(DEFAULT_THEME).page));
 document.body.appendChild(renderer.domElement);
 
 let controls: OrbitControls = createProjectionControls(projectionMode, camera, renderer.domElement);
@@ -333,47 +337,14 @@ document.getElementById('preset-koppen-comparison')?.addEventListener('click', (
 
 const projectionToggle = document.getElementById('projection-toggle');
 
-// Small inline sketches (graticule only -- no landmass shapes, since a
-// stylised continent reads as a claim about geography this icon isn't
-// making), not plain geometric glyphs either (a bare circle/rectangle
-// character reads as unrelated to "map projection"). The icon swap below
-// still encodes the click TARGET, just with each shape looking like a
-// gridded globe/map rather than a random glyph.
-const PROJECTION_ICON_GLOBE = `
-<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
-  <circle cx="12" cy="12" r="9"/>
-  <ellipse cx="12" cy="12" rx="4" ry="9"/>
-  <path d="M3 12h18"/>
-  <path d="M4.5 7.5c4 2 10.5 2 14.5 0"/>
-  <path d="M4.5 16.5c4-2 10.5-2 14.5 0"/>
-</svg>`.trim();
-const PROJECTION_ICON_FLAT = `
-<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
-  <rect x="3" y="6" width="18" height="12" rx="1.5"/>
-  <path d="M3 10h18"/>
-  <path d="M3 14h18"/>
-  <path d="M9 6v12"/>
-  <path d="M15 6v12"/>
-</svg>`.trim();
-
-function updateProjectionToggle(): void {
-  if (!projectionToggle) return;
-  const flat = projectionMode === 'plateCarree';
-  // The icon shows what clicking switches TO, not the current shape --
-  // flat now means the click target is Globe, so the icon is a globe.
-  projectionToggle.innerHTML = flat ? PROJECTION_ICON_GLOBE : PROJECTION_ICON_FLAT;
-  const label = flat ? 'Switch to Globe projection' : 'Switch to Plate Carrée projection';
-  projectionToggle.setAttribute('aria-label', label);
-  projectionToggle.setAttribute('title', label);
-}
-// Paint the real icon immediately -- climate.html's static markup only has
-// a placeholder glyph so the button isn't empty before this module runs.
-updateProjectionToggle();
-
-projectionToggle?.addEventListener('click', () => {
-  setProjection(projectionMode === 'globe' ? 'plateCarree' : 'globe');
-  updateProjectionToggle();
-});
+// One cycling button over every Projection in PROJECTION_ORDER, shared with
+// Valdes -- see core/projectionToggle.ts for the icons and why this stopped
+// being a two-state toggle written out per wrapper.
+const refreshProjectionToggle = wireProjectionToggle(
+  projectionToggle,
+  () => projectionMode,
+  (mode) => setProjection(mode),
+);
 
 // --- interaction ---------------------------------------------------------
 //
@@ -454,7 +425,7 @@ function paleolithologyTooltipLines(p: BoucotPoint): string[] {
 // moving off a tile (or off any point within it) clears exactly the ring
 // highlight/tooltip/fan it set, never a stale one left on some OTHER instance.
 //
-// Spiderfy timing mirrors deep-time-map's own hover.js reference
+// Spiderfy timing mirrors petrify's own hover.js reference
 // implementation (`considerFan`) -- not reused directly (its
 // getBoundingClientRect()-based coordinate frame doesn't fit Multi-Globe's
 // shared-canvas/per-tile-rect layout), but the same two ideas are load-
@@ -654,6 +625,15 @@ function primary(): ClimateInstance { return host.instances[0]; }
 
 window.__climate = {
   ready: false,
+  // Drives the same path the button does, and repaints it afterwards -- a
+  // screenshot check can't click through a cycle to reach the third
+  // Projection, and a hook that set the mode without refreshing the icon
+  // would leave the button describing the wrong next step.
+  setProjection: (mode: ProjectionMode) => {
+    setProjection(mode);
+    refreshProjectionToggle();
+  },
+  getProjection: () => projectionMode,
   setAge: async (age: number) => {
     const inst = primary();
     inst.applyAge(age);

@@ -199,7 +199,7 @@ function tsconfigJson() {
       esModuleInterop: true,
       allowSyntheticDefaultImports: true,
       isolatedModules: true,
-      // core/boundaries.ts imports the vendored deep-time-map JS library
+      // core/boundaries.ts imports the vendored petrify JS library
       // (no .d.ts of its own) -- without this, `tsc --noEmit` fails on
       // that file even in a repo whose wrapperType never imports it,
       // since `include` below type-checks everything under src/ whether
@@ -425,15 +425,15 @@ export async function scaffoldRepo(recipePath, outDir, validateSource) {
 
   cpSync(path.join(VIEWER_ROOT, 'src', 'core'), path.join(outDir, 'src', 'core'), { recursive: true });
   cpSync(path.join(VIEWER_ROOT, 'src', wrapperDir), path.join(outDir, 'src', wrapperDir), { recursive: true });
-  // core/boundaries.ts imports the vendored deep-time-map JS library
+  // core/boundaries.ts imports the vendored petrify JS library
   // unconditionally (see that file) -- copied for every wrapperType, not
   // just the two that use it, so core/ never has a dangling import
   // regardless of which wrapper a future recipe adds it to. Dependency-free
   // and ~36 kB; not worth branching on.
-  mkdirSync(path.join(outDir, 'vendor', 'deep-time-map', 'js'), { recursive: true });
+  mkdirSync(path.join(outDir, 'vendor', 'petrify', 'js'), { recursive: true });
   cpSync(
-    path.join(VIEWER_ROOT, 'vendor', 'deep-time-map', 'js'),
-    path.join(outDir, 'vendor', 'deep-time-map', 'js'),
+    path.join(VIEWER_ROOT, 'vendor', 'petrify', 'js'),
+    path.join(outDir, 'vendor', 'petrify', 'js'),
     { recursive: true },
   );
 

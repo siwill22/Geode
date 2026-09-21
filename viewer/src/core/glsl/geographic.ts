@@ -1,4 +1,7 @@
 import { EARTH_RADIUS_KM, R_SURFACE } from '../constants';
+import {
+  ROBINSON_KX, ROBINSON_KY, ROBINSON_STEP, ROBINSON_X, ROBINSON_Y, robinsonGlslTable,
+} from '../robinson';
 
 /**
  * The world -> geographic -> texture mapping, in GLSL, written exactly once.
@@ -52,6 +55,54 @@ vec2 geographicToUV(vec2 ll) {
  */
 vec2 worldToGeographicFlat(vec3 p) {
   return vec2(p.x / R_SURFACE, p.y / R_SURFACE);
+}
+
+${robinsonGlslTable('ROBINSON_X', ROBINSON_X)}
+${robinsonGlslTable('ROBINSON_Y', ROBINSON_Y)}
+const float ROBINSON_KX = ${ROBINSON_KX};
+const float ROBINSON_KY = ${ROBINSON_KY};
+const float ROBINSON_STEP = ${ROBINSON_STEP.toFixed(1)};
+
+/**
+ * World position -> (lon, lat) in radians on the Robinson map plane, or a
+ * sentinel outside it.
+ *
+ * The GLSL twin of core/robinson.ts's robinsonInverse(); the table literals
+ * above are generated FROM that module's own arrays, so there is one set of
+ * numbers rather than two transcriptions that can drift.
+ *
+ * Robinson is tabulated and has no closed form, but Y(lat) is strictly
+ * increasing, so latitude comes from an exact table bracket and longitude from
+ * evaluating X at the recovered latitude -- no iteration, which is what makes it
+ * affordable per fragment.
+ *
+ * Returns lon outside [-PI, PI] to signal "off the map". The caller MUST
+ * discard there and must not clamp: Robinson's boundary is a curve, so a
+ * rectangular plane large enough to hold the map has corners that are not on
+ * the Earth at all, and clamping grows rectangular ears of smeared polar data
+ * where the map should simply end.
+ */
+vec2 worldToGeographicRobinson(vec3 p) {
+  float ay = abs(p.y) / (ROBINSON_KY * R_SURFACE);
+  if (ay > ROBINSON_Y[18]) return vec2(10.0, 0.0);
+
+  int i = 17;
+  for (int k = 0; k < 18; k++) {
+    if (ay <= ROBINSON_Y[k + 1]) { i = k; break; }
+  }
+  float span = ROBINSON_Y[i + 1] - ROBINSON_Y[i];
+  float f = span == 0.0 ? 0.0 : (ay - ROBINSON_Y[i]) / span;
+
+  float latDeg = (float(i) + f) * ROBINSON_STEP * (p.y < 0.0 ? -1.0 : 1.0);
+  float xf = ROBINSON_X[i] + (ROBINSON_X[i + 1] - ROBINSON_X[i]) * f;
+  float lon = p.x / (ROBINSON_KX * R_SURFACE * xf);
+  if (abs(lon) > PI) return vec2(10.0, 0.0);
+  return vec2(lon, latDeg * PI / 180.0);
+}
+
+/** True where worldToGeographicRobinson returned its off-the-map sentinel. */
+bool robinsonOffMap(vec2 ll) {
+  return abs(ll.x) > PI + 1.0;
 }
 
 /** World position -> depth below the surface, in km. No vertical exaggeration. */

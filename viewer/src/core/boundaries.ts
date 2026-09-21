@@ -1,14 +1,17 @@
-import type { PerspectiveCamera } from 'three';
+import type { Camera, PerspectiveCamera } from 'three';
 import { Vector3 } from 'three';
-import { BoundarySeries, DEFAULT_STYLE } from '../../vendor/deep-time-map/js/index.js';
+import { BoundarySeries, DEFAULT_STYLE } from '../../vendor/petrify/js/index.js';
 
 import { R_SURFACE } from './constants';
 import { maskAt } from './mask';
 import type { Rect } from './layout';
-import { rotateVector, type Quaternion } from './rotation';
+import { conjugateQuaternion, rotateVector, type Quaternion } from './rotation';
+import { FlatProjector } from './flatProjector';
+import type { ResolvedTheme } from './theme';
+import type { ProjectionMode } from './projection';
 
 /**
- * Plate boundaries, drawn by the vendored deep-time-map library onto a 2D canvas
+ * Plate boundaries, drawn by the vendored petrify library onto a 2D canvas
  * over the WebGL globe.
  *
  * That library talks to its host through exactly one method:
@@ -23,7 +26,7 @@ import { rotateVector, type Quaternion } from './rotation';
  *
  * ---- Two frames, and why mixing them is safe ------------------------------
  *
- * deep-time-map works in the geographic frame, (cos.lat cos.lon, cos.lat
+ * petrify works in the geographic frame, (cos.lat cos.lon, cos.lat
  * sin.lon, sin.lat), with Z through the north pole. Geode works in three.js's
  * Y-up frame, where the same point is (cos.lat cos.lon, sin.lat, -cos.lat
  * sin.lon). The map between them, (gx, gy, gz) -> (gx, gz, -gy), is a
@@ -46,7 +49,7 @@ import { rotateVector, type Quaternion } from './rotation';
  * interchangeable. Everything else that reanchors (coastlines, volume
  * shaders, isosurfaces, cutaway) works in the render frame instead because
  * that's the frame their own geometry already lives in; this overlay is the
- * one exception since deep-time-map only ever gives us geographic vectors.
+ * one exception since petrify only ever gives us geographic vectors.
  */
 
 type Projected = [number, number, number] | null;
@@ -92,7 +95,42 @@ export class ThreeProjector {
     // dot(v, camDir) > R/d -- NOT dot > 0, which is the orthographic answer.
     // At the default d = 2.6 R the two differ by 23 degrees of arc, a band of
     // the far side that would be drawn over the limb.
-    this.horizon = R_SURFACE / (d || 1);
+    //
+    // An orthographic camera has no eye point, so the cap IS the hemisphere and
+    // the horizon is a great circle. That is the case `axis` below requires.
+    this.horizon = this.isOrthographic ? 0 : R_SURFACE / (d || 1);
+  }
+
+  private get isOrthographic(): boolean {
+    return (this.camera as unknown as { isOrthographicCamera?: boolean }).isOrthographicCamera === true;
+  }
+
+  /**
+   * Optional part of petrify's projector contract: the view axis, in ITS
+   * geographic frame, used by `PolygonLayer` to clamp a vertex behind the
+   * horizon onto the limb so a straddling continent still fills.
+   *
+   * **Undefined under a perspective camera, deliberately.** The library's
+   * `clampToLimb` puts the clamped vertex on the great circle perpendicular to
+   * this axis, which is the horizon only when the camera is orthographic. Under
+   * perspective the true horizon is a smaller circle at dot = R/d, so a vertex
+   * clamped to the great circle is still behind it: `project()` would return
+   * null a second time, the vertex would be dropped anyway, and the ring would
+   * close across the globe -- the exact artefact the clamping exists to prevent,
+   * arrived at more expensively. Returning undefined instead makes PolygonLayer
+   * fall back to polyline behaviour, which is honest about what it can do.
+   *
+   * Frame note: the layer's own vectors are geographic and PRE-Reference-Plate,
+   * while `camDir` is a render-frame direction. So this converts back
+   * (gx, gy, gz) <- (x, -z, y) and then un-rotates by qRef, because rotations
+   * preserve the dot product the layer is about to take: dot(R·v, a) equals
+   * dot(v, R⁻¹·a).
+   */
+  get axis(): number[] | undefined {
+    if (!this.isOrthographic) return undefined;
+    const g: [number, number, number] = [this.camDir.x, -this.camDir.z, this.camDir.y];
+    const [x, y, z] = rotateVector(conjugateQuaternion(this.qRef), g[0], g[1], g[2]);
+    return [x, y, z];
   }
 
   project(v: ArrayLike<number>): Projected {
@@ -141,7 +179,16 @@ export class BoundaryOverlay {
   readonly canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   readonly projector: ThreeProjector;
+  /** Built lazily, on the first setCamera() that asks for a flat Projection --
+   *  the Globe-only wrappers (tomography, reconstruction, reconstructionGroup)
+   *  never call it and pay nothing. */
+  private flatProjector: FlatProjector | null = null;
+  private mode: ProjectionMode = 'globe';
+  /** Kept so a flat projector built later still gets the current rotation. */
+  private qRef: Quaternion = [0, 0, 0, 1];
   private series: BoundarySeries | null = null;
+  /** The Theme to apply as soon as a series exists -- see applyTheme(). */
+  private pendingTheme: ResolvedTheme | null = null;
   /** Time of the frame actually on screen, which need not be the slider's age. */
   frameTime: number | null = null;
   visible = true;
@@ -187,7 +234,13 @@ export class BoundaryOverlay {
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-  async load(url: string): Promise<void> {
+  /**
+   * `styleOverride` replaces per-type entries wholesale, matching the library's
+   * own shallow merge (see below) -- a caller wanting only one boundary type
+   * visible passes transparent strokes for the others. Omit it for Geode's
+   * house style.
+   */
+  async load(url: string, styleOverride?: Record<string, unknown>): Promise<void> {
     // The library's own default renders subduction zones (and their polarity
     // triangles, which share this colour -- see boundaries.js) in a pale
     // peach; Geode wants them black. Spreading DEFAULT_STYLE.subduction
@@ -196,7 +249,27 @@ export class BoundaryOverlay {
     // entry, not just the field given), so width/label would otherwise be
     // dropped.
     this.series = await BoundarySeries.load(url, {
-      style: { subduction: { ...DEFAULT_STYLE.subduction, stroke: '#000000' } },
+      style: styleOverride
+        ?? { subduction: { ...DEFAULT_STYLE.subduction, stroke: '#000000' } },
+    });
+    // A Theme set before the frames arrived still wins -- see applyTheme().
+    if (this.pendingTheme) this.applyTheme(this.pendingTheme);
+  }
+
+  /**
+   * Re-colour and re-weight the boundary lines for a Theme.
+   *
+   * Held as `pendingTheme` when no series is loaded yet, because load() is
+   * async and a wrapper legitimately sets its Theme before its Boundary Frames
+   * have arrived -- dropping it there would leave the boundaries on the default
+   * palette until the next Theme change, which for a viewer booted into a
+   * non-default Theme is "for ever".
+   */
+  applyTheme(theme: ResolvedTheme): void {
+    this.pendingTheme = theme;
+    this.series?.restyle({
+      style: theme.boundaryStyle,
+      ...theme.boundaryDecoration,
     });
   }
 
@@ -220,10 +293,40 @@ export class BoundaryOverlay {
     this.projector.mask = mask;
   }
 
+  /**
+   * Track the caller's Projection and camera, exactly as PointOverlay and
+   * AggregateOverlay do -- a new camera object is built per Projection, so a
+   * captured reference goes stale on every switch.
+   *
+   * Boundary Frames were Globe-only until petrify v0.6.0, and the reason
+   * was the antimeridian rather than the camera: these are LINES, and a flat
+   * map is cut open somewhere, so a feature spanning the cut drew straight back
+   * across the whole map. Points and aggregate cells never had that problem,
+   * which is why they gained flat support first. The library now takes an
+   * optional `seamSplit` from the projector and breaks the line there, and
+   * FlatProjector supplies it.
+   */
+  setCamera(camera: Camera, mode: ProjectionMode): void {
+    this.mode = mode;
+    this.projector.setCamera(camera as PerspectiveCamera);
+    if (mode !== 'globe') {
+      this.flatProjector = this.flatProjector ?? new FlatProjector(camera);
+      this.flatProjector.setCamera(camera);
+      this.flatProjector.setFlatMode(mode);
+      this.flatProjector.setReferenceRotation(this.qRef);
+    }
+  }
+
+  private get activeProjector(): ThreeProjector | FlatProjector {
+    return this.mode === 'globe' || !this.flatProjector ? this.projector : this.flatProjector;
+  }
+
   /** Reference Plate rotation, in the GEOGRAPHIC frame -- see
    *  ThreeProjector.setReferenceRotation()'s doc comment. */
   setReferenceRotation(q: Quaternion): void {
+    this.qRef = q;
     this.projector.setReferenceRotation(q);
+    this.flatProjector?.setReferenceRotation(q);
   }
 
   /** Detach the overlay canvas. Called when a globe instance is removed. */
@@ -237,7 +340,8 @@ export class BoundaryOverlay {
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     this.ctx.restore();
     if (!this.visible || !this.series) return;
-    this.projector.update(this.rect.width, this.rect.height);
-    this.series.draw(this.ctx, this.projector);
+    const projector = this.activeProjector;
+    projector.update(this.rect.width, this.rect.height);
+    this.series.draw(this.ctx, projector);
   }
 }

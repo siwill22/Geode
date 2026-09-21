@@ -1,6 +1,8 @@
 import { type Camera, type PerspectiveCamera, Scene, type WebGLRenderer } from 'three';
 
-import { Coastlines, LAND_R_UNDER_SURFACE, fetchCoastlineData } from '../core/coastlines';
+import { Coastlines, fetchCoastlineData } from '../core/coastlines';
+import { OceanSurface } from '../core/oceanSurface';
+import { DEFAULT_THEME, resolveTheme } from '../core/theme';
 import { createMaskTexture } from '../core/mask';
 import { BoundaryOverlay } from '../core/boundaries';
 import { reconstructionAssetPath, reconstructionAssetUrl } from '../core/reconstructions';
@@ -8,7 +10,6 @@ import type { ReconstructionManifest } from '../core/types';
 import type { Rect } from '../core/layout';
 import { ReconstructionUI, type ReconstructionViewState } from './reconstructionUi';
 
-const LAND_FILL_COLOR = 0x808080;
 
 export interface ReconstructionInstanceDeps {
   archiveBase: string;
@@ -35,6 +36,10 @@ export class ReconstructionInstance {
   readonly scene = new Scene();
   readonly ui: ReconstructionUI;
   readonly boundaries: BoundaryOverlay;
+  /** A solid ocean, always present: continents previously sat straight on
+   *  the page colour, so the globe read as a cut-out and the far
+   *  hemisphere's coastlines showed through. */
+  readonly ocean = new OceanSurface('globe');
   /** Built in boot() once the geometry has been fetched -- every
    *  Reconstruction Model has coastlines (unlike Boundary Frames, never
    *  optional), so this is always assigned before any other method runs. */
@@ -67,10 +72,23 @@ export class ReconstructionInstance {
       reconstructionAssetPath(m, m.coastlines.rotations),
     );
     const maskTexture = createMaskTexture();
-    this.coastlines = new Coastlines(data.lines, data.table, maskTexture, LAND_R_UNDER_SURFACE, LAND_FILL_COLOR);
+    // Default land radius, not LAND_R_UNDER_SURFACE: there is an opaque
+    // ocean at R_SURFACE now, and land beneath it would be inside the
+    // sphere. Land colour comes from the Theme rather than a local grey.
+    this.coastlines = new Coastlines(data.lines, data.table, maskTexture);
     this.coastlines.setMaskEnabled(false);
     this.coastlines.landVisible = true;
-    this.scene.add(this.coastlines.lines, this.coastlines.land);
+    this.scene.add(this.ocean.mesh, this.coastlines.lines, this.coastlines.land);
+    // No Theme control in this wrapper yet (docs/adr/0038 wants one); it
+    // renders the default Theme's furniture until that lands.
+    const theme = resolveTheme(DEFAULT_THEME);
+    this.ocean.applyTheme(theme);
+    this.coastlines.applyTheme(theme);
+    // Boundaries too, or they keep the pre-Theme black subduction stroke --
+    // which was already weak on a black page and is invisible against a solid
+    // ocean. Safe to call before load(): BoundaryOverlay holds it as
+    // pendingTheme and applies it when the frames arrive.
+    this.boundaries.applyTheme(theme);
 
     this.view.age = m.age_min;
     this.ui.setAgeRange(m.age_min, m.age_max);
@@ -109,6 +127,7 @@ export class ReconstructionInstance {
 
   dispose(): void {
     this.ui.dispose();
+    this.ocean.dispose();
     this.coastlines?.dispose();
     this.boundaries.dispose();
   }

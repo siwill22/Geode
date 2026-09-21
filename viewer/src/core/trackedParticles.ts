@@ -1,3 +1,5 @@
+import type { ResolvedTheme } from './theme';
+import { isFlat, type ProjectionMode } from './projection';
 import {
   BufferAttribute, BufferGeometry, Color, Line, LineBasicMaterial, Object3D, Points, PointsMaterial,
 } from 'three';
@@ -18,8 +20,11 @@ const HEAD_SIZE = R_SURFACE * 0.018;
 // Preallocated per-particle capacity -- see compact() for what happens once
 // a long-running particle fills it, rather than growing this unboundedly.
 const MAX_PATH_POINTS = 4000;
-const CALM_COLOR = new Color(0x2ea043);
-const FAST_COLOR = new Color(0xe6ffe9);
+/** The rampTrack role's two ends -- deliberately distinct from windStreaks'
+ *  rampFlow, because tracked particles and wind streaks are simultaneously
+ *  visible in the Valdes and climate viewers and have to stay tellable apart.
+ *  Instance state for the same reason as there. */
+const DEFAULT_TRACK_RAMP: [number, number] = [0x2ea043, 0xe6ffe9];
 // Same clip as windStreaks.ts's SPEED_CLIP_MS -- one outlier shouldn't wash
 // out the colour ramp.
 const SPEED_CLIP_MS = 20;
@@ -80,6 +85,19 @@ interface Particle {
  * than draw them incorrectly.
  */
 export class TrackedParticles {
+  /** The active speed ramp's two ends. See DEFAULT_TRACK_RAMP for why these are
+   *  per-instance rather than module constants. */
+  private calmColor = new Color(DEFAULT_TRACK_RAMP[0]);
+  private fastColor = new Color(DEFAULT_TRACK_RAMP[1]);
+
+  /** Re-colour to a Theme. Only the ramp is claimed here; positions, lifetimes
+   *  and seeding are untouched, so a Theme switch never disturbs an animation
+   *  already in flight. */
+  applyTheme(theme: ResolvedTheme): void {
+    this.calmColor.setHex(theme.rampTrack[0]);
+    this.fastColor.setHex(theme.rampTrack[1]);
+  }
+
   readonly group = new Object3D();
   private readonly particles: Particle[] = [];
   /** Reference Plate rotation, already in the render frame (see
@@ -119,7 +137,7 @@ export class TrackedParticles {
     const [x0, y0, z0] = lonLatToVec3(at.lon, at.lat, PATH_R);
     const [x, y, z] = rotateVector(this.qRef, x0, y0, z0);
     positions[0] = x; positions[1] = y; positions[2] = z;
-    colors[0] = CALM_COLOR.r; colors[1] = CALM_COLOR.g; colors[2] = CALM_COLOR.b;
+    colors[0] = this.calmColor.r; colors[1] = this.calmColor.g; colors[2] = this.calmColor.b;
 
     const geometry = new BufferGeometry();
     geometry.setAttribute('position', new BufferAttribute(positions, 3));
@@ -159,10 +177,14 @@ export class TrackedParticles {
     this.particles.length = 0;
   }
 
-  /** See the class doc comment -- Plate Carrée isn't supported yet, so
-   *  switching to it clears rather than mis-draws every existing path. */
-  setProjection(mode: 'globe' | 'plateCarree'): void {
-    if (mode !== 'globe') this.clear();
+  /** See the class doc comment -- no flat Projection is supported yet, so
+   *  switching to one clears rather than mis-draws every existing path.
+   *  Typed as the full ProjectionMode rather than a two-member subset: the
+   *  `mode !== 'globe'` test was already the right behaviour for any flat
+   *  projection, and the narrow type only meant adding one broke compilation
+   *  here for no reason. */
+  setProjection(mode: ProjectionMode): void {
+    if (isFlat(mode)) this.clear();
   }
 
   /** Advance every non-stalled particle by one animation frame's worth of
@@ -213,9 +235,11 @@ export class TrackedParticles {
     p.positions[i * 3] = x; p.positions[i * 3 + 1] = y; p.positions[i * 3 + 2] = z;
 
     const t = Math.min(speed, SPEED_CLIP_MS) / SPEED_CLIP_MS;
-    p.colors[i * 3] = CALM_COLOR.r + (FAST_COLOR.r - CALM_COLOR.r) * t;
-    p.colors[i * 3 + 1] = CALM_COLOR.g + (FAST_COLOR.g - CALM_COLOR.g) * t;
-    p.colors[i * 3 + 2] = CALM_COLOR.b + (FAST_COLOR.b - CALM_COLOR.b) * t;
+    const calm = this.calmColor;
+    const fast = this.fastColor;
+    p.colors[i * 3] = calm.r + (fast.r - calm.r) * t;
+    p.colors[i * 3 + 1] = calm.g + (fast.g - calm.g) * t;
+    p.colors[i * 3 + 2] = calm.b + (fast.b - calm.b) * t;
     p.count = i + 1;
 
     p.geometry.setDrawRange(0, p.count);

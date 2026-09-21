@@ -47,8 +47,8 @@ from prep_coastlines import export_geometry, export_rotations  # noqa: E402
 from prep_staticpolygons import export_static_polygons  # noqa: E402
 from prep_plate_names import export_plate_names  # noqa: E402
 
-DEEP_TIME_MAP_PY = Path(__file__).parent.parent / "viewer" / "vendor" / "deep-time-map" / "python"
-sys.path.insert(0, str(DEEP_TIME_MAP_PY))
+PETRIFY_PY = Path(__file__).parent.parent / "viewer" / "vendor" / "petrify" / "python"
+sys.path.insert(0, str(PETRIFY_PY))
 
 
 def main():
@@ -129,7 +129,7 @@ def main():
                       out / "coastlines" / "rotations.json", line_counts)
 
     if has_boundaries:
-        from deep_time_map.export import export_series
+        from petrify.export import export_series
         boundaries_dir = out / "boundaries"
         print(f"\nexporting boundaries to {boundaries_dir} ...")
         export_series(model_name=args.model, start=int(args.age_min),

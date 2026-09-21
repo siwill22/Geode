@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Geode Old Map</title>
+    <style>
+      /*
+       * Geode's FIRST light viewer, and deliberately so: the whole point is aged
+       * paper, which cannot be built on a #070c16 page.
+       *
+       * core/lilgui-theme.css is NOT imported here. It assumes
+       * `color-scheme: dark` and restyles lil-gui to match the rest of the repo;
+       * on this page that would put a dark panel on a cream sheet. Each viewer's
+       * html already owns its own <style> block, so the cost of going light is
+       * this block plus the lil-gui overrides below -- not a change to anything
+       * shared. See docs/plans/old-map-viewer.md.
+       */
+      :root {
+        color-scheme: light;
+        --ink: #3e2c18;
+        --ink-soft: #6b543a;
+        --paper: #efe3c8;
+        --edge: #c8b492;
+      }
+      html, body {
+        margin: 0; height: 100%; overflow: hidden;
+        background: var(--paper);
+        font: 13px/1.4 ui-serif, Georgia, "Times New Roman", serif;
+        color: var(--ink);
+      }
+      canvas { display: block; }
+      .status, .timeinfo {
+        position: fixed; left: 12px;
+        padding: 5px 9px; border-radius: 3px;
+        background: rgba(255, 250, 238, 0.72);
+        border: 1px solid var(--edge);
+        color: var(--ink);
+      }
+      .status { top: 12px; }
+      .timeinfo { top: 44px; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+      .credit {
+        position: fixed; bottom: 8px; right: 12px;
+        color: var(--ink-soft); font-size: 11px; max-width: 46ch; text-align: right;
+      }
+      #error {
+        position: fixed; left: 12px; top: 90px; max-width: 60ch;
+        padding: 10px; border-radius: 4px; white-space: pre-wrap;
+        background: #5a1a1a; color: #ffd9d9; font-family: ui-monospace, monospace;
+      }
+
+      /* The Projection cycle button, styled for paper rather than for the dark
+         chrome core/multiGlobeMenu.css provides elsewhere. */
+      #projection-toggle {
+        position: fixed; right: 12px; bottom: 12px; z-index: 11;
+        width: 34px; height: 34px; padding: 6px;
+        display: grid; place-items: center;
+        border-radius: 50%; cursor: pointer;
+        background: rgba(255, 250, 238, 0.85);
+        border: 1px solid var(--edge);
+        color: var(--ink);
+      }
+      #projection-toggle:hover { background: #fffaf0; }
+      #projection-toggle svg { width: 100%; height: 100%; }
+
+      /* lil-gui, overridden onto paper. Its own variables are the supported
+         seam for this -- restyling its internals by class would break on any
+         lil-gui upgrade. */
+      .lil-gui {
+        --background-color: rgba(253, 246, 232, 0.94);
+        --text-color: #3e2c18;
+        --title-background-color: #e2d2b2;
+        --title-text-color: #3e2c18;
+        --widget-color: #e6d8ba;
+        --hover-color: #dcc9a4;
+        --focus-color: #c0a87e;
+        --number-color: #7a4a1c;
+        --string-color: #5a6a2c;
+        --font-family: ui-serif, Georgia, serif;
+        --font-size: 12px;
+        border: 1px solid var(--edge);
+        border-radius: 3px;
+      }
+    </style>
+  </head>
+  <body>
+    <button id="projection-toggle" aria-label="Switch projection" title="Switch projection">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="12" cy="12" r="9"/></svg>
+    </button>
+    <script type="module" src="/src/oldmap/main.ts"></script>
+  </body>
+</html>

@@ -18,9 +18,7 @@ lets nearestFrame() (same mechanism as every other model in the archive) find
 the closest map to whatever age the shared slider is on -- no attempt to
 force these onto the climate model's 55-frame list.
 
-Source: gprm.datasets.Paleogeography.fetch_Paleomap(), loaded by file path
-rather than `import gprm` because gprm's package __init__ pulls in pygplates/
-ptt machinery this prep step does not need and pygmt17 does not have.
+Source: gprm.datasets.Paleogeography.fetch_Paleomap().
 
 Output:
 
@@ -38,10 +36,7 @@ Example
 """
 
 import argparse
-import importlib.util
 import json
-import subprocess
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -62,22 +57,19 @@ from prep_model import (
 
 DEFAULT_HILLSHADE_CLIP_PERCENTILE = 99.5
 
-GPRM_REPO = Path.home() / 'GIT' / 'GPlatesReconstructionModel'
-
 
 def load_fetch_paleomap():
-    """Import gprm.datasets.Paleogeography.fetch_Paleomap without triggering
-    gprm/__init__.py (which imports pygplates/ptt utilities this script does
-    not use and that pygmt17 does not have installed)."""
-    path = GPRM_REPO / 'gprm' / 'datasets' / 'Paleogeography.py'
-    if not path.exists():
-        raise SystemExit(
-            f"{path} not found -- expected the gprm repo checked out at {GPRM_REPO}"
-        )
-    spec = importlib.util.spec_from_file_location('gprm_paleogeography', path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.fetch_Paleomap
+    """Return gprm.datasets.Paleogeography.fetch_Paleomap.
+
+    This used to side-load the module by file path, from a gprm checkout assumed to be at
+    ~/GIT/GPlatesReconstructionModel, purely to avoid the cost of `import gprm` -- the
+    package __init__ eagerly pulled in pygplates, ptt and pygmt, none of which this step
+    needs. gprm now imports its submodules lazily, so the ordinary import is cheap and
+    works against an installed gprm rather than one specific checkout.
+    """
+    from gprm.datasets.Paleogeography import fetch_Paleomap
+
+    return fetch_Paleomap
 
 
 def load_geo_master_cpt():
@@ -86,21 +78,18 @@ def load_geo_master_cpt():
     exactly this purpose -- global bathymetry/topography. Its z column is
     normalised to [-1, 1] representing +-8000 m; read that literally from the
     file's own numbers rather than hardcoding what the header text claims, in
-    case a GMT version ever updates one without the other. Location comes
-    from `gmt --show-sharedir`, run as a sibling of sys.executable rather
-    than relying on 'gmt' being on PATH -- this script is normally invoked
-    with the pygmt17 env's python binary directly (see the module docstring),
-    which does not itself put that env's bin/ on PATH.
+    case a GMT version ever updates one without the other.
+
+    Read from the copy vendored at prep/data/geo.cpt rather than located via
+    `gmt --show-sharedir`. That call assumed a gmt binary sitting beside
+    sys.executable, which is only true when this script is run with a specific
+    conda env's python; the vendored file works however it is invoked.
+
     Returns (z_stops, rgb_stops) as parallel arrays spanning [-1, 1].
     """
-    gmt_bin = Path(sys.executable).parent / 'gmt'
-    gmt_bin = gmt_bin if gmt_bin.exists() else 'gmt'  # fall back to PATH
-    sharedir = subprocess.run(
-        [str(gmt_bin), '--show-sharedir'], capture_output=True, text=True, check=True,
-    ).stdout.strip()
-    path = Path(sharedir) / 'cpt' / 'gmt' / 'geo.cpt'
+    path = Path(__file__).parent / 'data' / 'geo.cpt'
     if not path.exists():
-        raise SystemExit(f"{path} not found -- expected GMT's own geo.cpt master table")
+        raise SystemExit(f"{path} not found -- expected the vendored geo.cpt master table")
 
     # geo.cpt's very first stop is the bare GMT colour name "black" rather
     # than "0/0/0" -- everything else in the table is already r/g/b.

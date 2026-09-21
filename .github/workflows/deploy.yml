@@ -36,34 +36,16 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # viewer/src/tomography/boundaries.ts imports the vendored petrify library
+      # directly, so the build fails without it. petrify (github.com/siwill22/petrify)
+      # is public, so the built-in submodule fetch below needs no deploy key --
+      # that workaround only existed while the submodule pointed at a private repo.
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-      # viewer/src/tomography/boundaries.ts imports the vendored deep-time-map library
-      # directly, so the build fails without it -- but checkout's built-in
-      # `submodules: recursive` cannot fetch it. deep-time-map is a separate
-      # private repo and a workflow's GITHUB_TOKEN is scoped to this one, so
-      # the clone comes back "Repository not found", which reads like a typo
-      # rather than a permissions problem.
-      #
-      # A read-only deploy key on deep-time-map is the narrowest fix: it grants
-      # read on exactly that one repo, where a personal access token would
-      # carry the whole account's access into CI.
-      #
-      # insteadOf rather than editing .gitmodules, so the pinned submodule SHA
-      # is still what gets checked out and the URL stays https for everyone
-      # cloning normally. Not --depth 1: a shallow fetch can miss the pinned
-      # commit when it is not the branch tip.
-      - name: Check out the vendored library
-        env:
-          DEPLOY_KEY: ${{ secrets.DTM_DEPLOY_KEY }}
-        run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
-          git config --global url."git@github.com:".insteadOf "https://github.com/"
-          git submodule update --init --recursive
-          test -f viewer/vendor/deep-time-map/js/index.js
+      - name: Sanity-check the vendored library
+        run: test -f viewer/vendor/petrify/js/index.js
 
       - uses: actions/setup-node@v4
         with:

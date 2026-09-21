@@ -527,7 +527,7 @@ export class GlobeInstance {
     for (const m of this.volumeMaterials()) setReferenceRotation(m, this.qRefRender);
     this.isosurface.setReferenceRotation(this.qRefRender);
     this.cutaway.setReferenceRotation(this.qRefRender);
-    // BoundaryOverlay works in the geographic frame (deep-time-map's native
+    // BoundaryOverlay works in the geographic frame (petrify's native
     // frame, see boundaries.ts's module doc comment), not the render frame
     // everything else above uses -- pass qGeo, not qRefRender.
     this.boundaries.setReferenceRotation(qGeo);

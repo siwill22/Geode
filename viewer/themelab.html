@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Geode Theme Lab</title>
+    <link rel="stylesheet" href="/src/core/lilgui-theme.css" />
+    <link rel="stylesheet" href="/src/core/multiGlobeMenu.css" />
+    <style>
+      :root { color-scheme: dark; }
+      html, body {
+        margin: 0; height: 100%; overflow: hidden;
+        background: #0b0d10;
+        font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, sans-serif;
+        color: #d8dee4;
+      }
+      canvas { display: block; }
+      .status, .timeinfo {
+        position: fixed;
+        padding: 6px 10px; border-radius: 4px;
+        background: rgba(0, 0, 0, 0.55); color: #cfd6dd;
+      }
+      .timeinfo { color: #9fb4c8; font-variant-numeric: tabular-nums; }
+      .credit {
+        position: fixed;
+        font-size: 11px; max-width: 40ch; text-align: right;
+      }
+      /* Marks over the map invert with the instance's Lightness rather than
+         picking one compromise grey: on a dark Theme they are lighter than
+         their surround and glow, on a light one darker and read as ink. A
+         single mid-grey is illegible on both. */
+      .credit[data-lightness="dark"] {
+        color: #7d8893; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+      }
+      .credit[data-lightness="light"] {
+        color: #4b5157; text-shadow: 0 1px 2px rgba(255, 255, 255, 0.85);
+      }
+      .status[data-lightness="light"], .timeinfo[data-lightness="light"] {
+        background: rgba(255, 255, 255, 0.72); color: #333b42;
+      }
+      .timeinfo[data-lightness="light"] { color: #4a5763; }
+
+      /* The swatch strip under each panel. Sits in the same fixed anchor as the
+         lil-gui panel so it tracks the tile, and is deliberately opaque-dark
+         regardless of the instance's Theme: it is chrome describing the Theme,
+         not part of it, and a card tinted by its own subject is unreadable
+         for exactly the light Themes it most needs to describe. */
+      .theme-card {
+        width: 245px;
+        margin-top: 6px;
+        padding: 8px 9px 9px;
+        border-radius: 5px;
+        background: rgba(16, 18, 21, 0.92);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+        color: #c6ced6;
+      }
+      .sw-row { display: flex; gap: 3px; margin-bottom: 7px; }
+      .sw {
+        flex: 1 1 0;
+        height: 17px;
+        border-radius: 2px;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+      }
+      /* outline: 'none' has no pen to show. A struck-through slot says "this
+         Theme draws no coastline" — an empty gap would read as a layout bug. */
+      .sw-none {
+        display: grid; place-items: center;
+        color: #6e7780; font-size: 12px;
+        background: repeating-linear-gradient(
+          45deg, #1c2026 0 3px, #262b32 3px 6px);
+      }
+      .theme-meta { font-size: 11px; color: #9aa4ae; margin-bottom: 3px; }
+      .theme-meta b { color: #dfe6ec; }
+      .theme-desc { font-size: 11px; line-height: 1.35; color: #838d97; }
+
+      #error {
+        position: fixed; left: 12px; top: 90px; max-width: 60ch;
+        padding: 10px; border-radius: 4px; white-space: pre-wrap;
+        background: #3a1416; color: #ffb4b4;
+      }
+    </style>
+  </head>
+  <body>
+    <button id="globe-menu-toggle" aria-label="Multi-Globe options" title="Multi-Globe options" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="7" height="7" rx="1.2"/>
+        <rect x="14" y="3" width="7" height="7" rx="1.2"/>
+        <rect x="3" y="14" width="7" height="7" rx="1.2"/>
+        <rect x="14" y="14" width="7" height="7" rx="1.2"/>
+      </svg>
+    </button>
+    <div id="globe-menu" hidden>
+      <button id="add-globe">+ Add globe</button>
+      <label class="sync-toggle"><input type="checkbox" id="sync-age" /> sync time</label>
+    </div>
+    <script type="module" src="/src/themelab/main.ts"></script>
+  </body>
+</html>

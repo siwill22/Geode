@@ -1,5 +1,5 @@
 import {
-  ShaderMaterial, DoubleSide, Vector3, Color, LinearSRGBColorSpace,
+  ShaderMaterial, DoubleSide, FrontSide, Vector3, Color, LinearSRGBColorSpace,
   type Texture, type Data3DTexture,
 } from 'three';
 import { GEOGRAPHIC_GLSL } from './glsl/geographic';
@@ -24,7 +24,7 @@ const VERT = /* glsl */ `
 ${GEOGRAPHIC_GLSL}
 
 uniform vec4 uRefQuat;
-uniform float uProjectionMode; // 0 = globe, 1 = plate carree -- see FRAG's own copy below
+uniform float uProjectionMode; // 0 = globe, 1 = plate carree, 2 = robinson -- see FRAG's copy
 varying vec3 vGeoPos;
 
 void main() {
@@ -83,7 +83,7 @@ uniform float uValidMaskOceanFallback; // 1 = paint class-0 colour instead of di
 uniform float uOpacity;
 uniform float uSteps;   // 0 = continuous ramp, else this many discrete bands
 uniform float uDebug;   // 0 off, 1 pDep, 2 lat, 3 raw sample
-uniform float uProjectionMode; // 0 = globe (sphere), 1 = plate carree (flat plane) -- see core/projection.ts
+uniform float uProjectionMode; // 0 = globe (sphere), 1 = plate carree, 2 = robinson (both flat planes) -- see core/projection.ts
 uniform vec4 uRefQuat; // see VERT's copy -- only used here for the Plate Carrée round-trip
 
 varying vec3 vGeoPos;
@@ -99,8 +99,18 @@ void main() {
   // TRUE (lon, lat) whose content belongs at this fixed spot -- the
   // LonLat-level round-trip ADR-0030 calls for, done per-fragment since the
   // flat plane can't do it via a vertex-level 3D rotation the way Globe can.
+  //
+  // Robinson: the same round-trip, but its inverse is tabulated rather than
+  // linear AND it is not onto -- the plane has corners that are off the map
+  // entirely, so those fragments are discarded. Clamping instead would grow
+  // rectangular ears of smeared polar data where the map should just end.
   vec2 ll;
-  if (uProjectionMode > 0.5) {
+  if (uProjectionMode > 1.5) {
+    vec2 displayLL = worldToGeographicRobinson(vGeoPos);
+    if (robinsonOffMap(displayLL)) discard;
+    vec3 trueDir = rotateByQuat(conjugateQuat(uRefQuat), lonLatToUnit(displayLL));
+    ll = vec2(atan(-trueDir.z, trueDir.x), asin(clamp(trueDir.y, -1.0, 1.0)));
+  } else if (uProjectionMode > 0.5) {
     vec2 displayLL = worldToGeographicFlat(vGeoPos);
     vec3 trueDir = rotateByQuat(conjugateQuat(uRefQuat), lonLatToUnit(displayLL));
     ll = vec2(atan(-trueDir.z, trueDir.x), asin(clamp(trueDir.y, -1.0, 1.0)));
@@ -295,4 +305,45 @@ export function setNoDataStyle(mat: ShaderMaterial, style: NoDataStyle): void {
 export function setValidMask(mat: ShaderMaterial, texture: Texture | null): void {
   mat.uniforms.uValidMask.value = texture;
   mat.uniforms.uUseValidMask.value = texture ? 1 : 0;
+}
+
+
+/**
+ * A flat, solid fill of the map's own outline -- the flat-Projection
+ * counterpart of an opaque backdrop sphere.
+ *
+ * A sphere backdrop is what hides the far hemisphere behind a globe. A flat map
+ * has no far hemisphere, but it still needs something opaque behind
+ * partially-covering layers (land fill without a raster), and that something
+ * must stop exactly where the map does. For Plate Carrée the plane IS the map,
+ * so this is a plain fill; for Robinson the plane is the map's bounding box and
+ * the corners have to be discarded, or the ocean grows square corners the
+ * projection does not have.
+ */
+export function createFlatBackdropMaterial(color: number): ShaderMaterial {
+  return new ShaderMaterial({
+    uniforms: {
+      uColor: { value: new Color(color) },
+      uProjectionMode: { value: PROJECTION_UNIFORM.plateCarree },
+    },
+    vertexShader: /* glsl */ `
+      varying vec3 vGeoPos;
+      void main() {
+        vGeoPos = position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      precision highp float;
+      ${GEOGRAPHIC_GLSL}
+      uniform vec3 uColor;
+      uniform float uProjectionMode;
+      varying vec3 vGeoPos;
+      void main() {
+        if (uProjectionMode > 1.5 && robinsonOffMap(worldToGeographicRobinson(vGeoPos))) discard;
+        gl_FragColor = vec4(uColor, 1.0);
+      }
+    `,
+    side: FrontSide,
+  });
 }

@@ -29,9 +29,9 @@
  * alone below -- those are small, single-fetch files a CDN's own on-the-wire
  * compression already handles; the point here is the STORED size against
  * GitHub Pages' 1 GB cap, which on-the-wire compression never touches. Both
- * core/coastlines.ts and the vendored deep-time-map library decompress these
+ * core/coastlines.ts and the vendored petrify library decompress these
  * transparently (see fetchVolumeBytes in core/volume.ts and
- * vendor/deep-time-map/js/gzipFetch.js) by sniffing the gzip magic number,
+ * vendor/petrify/js/gzipFetch.js) by sniffing the gzip magic number,
  * not by trusting the extension, so this script only has to gzip the file
  * and rewrite the manifest field that names it.
  *
@@ -119,10 +119,10 @@ function packCoastlineSet(relDir, set) {
 }
 
 /**
- * Gzip a deep-time-map BoundarySeries manifest's per-age geojson frames, and
+ * Gzip a petrify BoundarySeries manifest's per-age geojson frames, and
  * the manifest itself, rewriting `frames[].file` to match -- those paths are
  * resolved by the vendored library relative to the manifest's OWN directory
- * (see BoundarySeries.load in vendor/deep-time-map/js/boundaries.js), which
+ * (see BoundarySeries.load in vendor/petrify/js/boundaries.js), which
  * is `relDir` + dirname(relPath), not `relDir` alone.
  */
 function packBoundaries(relDir, relPath) {

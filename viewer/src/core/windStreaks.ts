@@ -1,3 +1,4 @@
+import type { ResolvedTheme } from './theme';
 import {
   BufferAttribute, BufferGeometry, Color, DoubleSide, Mesh, MeshBasicMaterial,
 } from 'three';
@@ -5,7 +6,7 @@ import {
   DEG, EARTH_RADIUS_KM, R_SURFACE, eastNorthAt, lonLatToVec3, vec3ToLonLat, wrapLon,
 } from './constants';
 import {
-  FLAT_EAST, lonLatToFlatVec3, referencePlateFlatPosition, type ProjectionMode,
+  flatDirection, lonLatToFlatVec3, referencePlateProjectedPosition, type ProjectionMode,
 } from './projection';
 import { texelIndex, texelToPhysical } from './volume';
 import { rotateVector, type Quaternion } from './rotation';
@@ -63,8 +64,12 @@ const SPEED_CLIP_MS = 20;
 const STREAK_SPEED_SCALE = 45000;
 const EARTH_RADIUS_M = EARTH_RADIUS_KM * 1000;
 
-const CALM_COLOR = new Color(0x1f5c7a);
-const FAST_COLOR = new Color(0xeaffff);
+/** The rampFlow role's two ends. Instance state, not module constants: two
+ *  wrappers can show different Themes at once (see the theme lab), and a
+ *  module-level colour is shared by every instance in the page. Seeded to the
+ *  default Theme's own rampFlow so a wrapper that never calls applyTheme()
+ *  still renders. */
+const DEFAULT_FLOW_RAMP: [number, number] = [0x1f5c7a, 0xeaffff];
 
 /** Static (built once) index buffer: 2 triangles per trail segment, for
  *  every particle slot up to MAX_PARTICLES. Vertex data changes every tick;
@@ -103,6 +108,19 @@ function buildIndex(): Uint32Array {
  * resulting positions become ribbon geometry.
  */
 export class WindStreaks {
+  /** The active speed ramp's two ends. See DEFAULT_FLOW_RAMP for why these are
+   *  per-instance rather than module constants. */
+  private calmColor = new Color(DEFAULT_FLOW_RAMP[0]);
+  private fastColor = new Color(DEFAULT_FLOW_RAMP[1]);
+
+  /** Re-colour to a Theme. Only the ramp is claimed here; positions, lifetimes
+   *  and seeding are untouched, so a Theme switch never disturbs an animation
+   *  already in flight. */
+  applyTheme(theme: ResolvedTheme): void {
+    this.calmColor.setHex(theme.rampFlow[0]);
+    this.fastColor.setHex(theme.rampFlow[1]);
+  }
+
   readonly mesh: Mesh;
   private readonly geometry: BufferGeometry;
   private readonly positions: Float32Array;
@@ -283,10 +301,10 @@ export class WindStreaks {
       const [x0, y0, z0] = lonLatToVec3(lon, lat, RIBBON_R);
       [x, y, z] = rotateVector(this.qRef, x0, y0, z0);
     } else {
-      // referencePlateFlatPosition, not a direct rotateVector of the flat
+      // referencePlateProjectedPosition, not a direct rotateVector of the flat
       // Cartesian position -- see its own doc comment and
       // docs/plans/reference-plate.md's "Known issue" postmortem.
-      [x, y, z] = referencePlateFlatPosition(lon, lat, this.qRef, FLAT_RIBBON_Z);
+      [x, y, z] = referencePlateProjectedPosition(this.mode, lon, lat, this.qRef, FLAT_RIBBON_Z);
     }
     for (let k = 0; k < TRAIL_LEN; k++) {
       const base = (p * TRAIL_LEN + k) * 3;
@@ -413,10 +431,11 @@ export class WindStreaks {
 
     // rx/ry/rz are the RENDER (Reference-Plate-rotated) point this tick
     // commits to the trail -- Globe gets there by rotating the true sphere
-    // point directly (rotateVector), Plate Carrée by referencePlateFlatPosition's
-    // round-trip through the sphere, never by rotating the flat plane's own
-    // Cartesian point directly (see that function's doc comment and
-    // docs/plans/reference-plate.md's "Known issue" postmortem).
+    // point directly (rotateVector), a flat map by
+    // referencePlateProjectedPosition's round-trip through the sphere, never by
+    // rotating the flat plane's own Cartesian point directly (see that
+    // function's doc comment and docs/plans/reference-plate.md's "Known issue"
+    // postmortem).
     let rx: number; let ry: number; let rz: number;
     if (this.mode === 'globe') {
       const { east, north } = eastNorthAt(lon, lat);
@@ -431,6 +450,10 @@ export class WindStreaks {
       this.lat[p] = next.lat;
       [rx, ry, rz] = rotateVector(this.qRef, nx, ny, nz);
     } else {
+      // Advection itself is Projection-independent: the Plate Carrée round
+      // trip here cancels, leaving "advance (lon, lat) by (u, v) * step". Only
+      // the DISPLAY position below is per-Projection, which is why this half
+      // is unchanged for Robinson while the line after it is not.
       const [px, py] = lonLatToFlatVec3(lon, lat);
       const nextLon = wrapLon((px + u * step) / (DEG * R_SURFACE));
       if (Math.abs(nextLon - lon) > 180) {
@@ -440,7 +463,7 @@ export class WindStreaks {
       const nextLat = Math.max(-90, Math.min(90, (py + v * step) / (DEG * R_SURFACE)));
       this.lon[p] = nextLon;
       this.lat[p] = nextLat;
-      [rx, ry, rz] = referencePlateFlatPosition(nextLon, nextLat, this.qRef, FLAT_RIBBON_Z);
+      [rx, ry, rz] = referencePlateProjectedPosition(this.mode, nextLon, nextLat, this.qRef, FLAT_RIBBON_Z);
 
       // The check above catches a seam crossing in the TRUE (unrotated)
       // frame, which is all that mattered before Reference Plate existed.
@@ -494,9 +517,11 @@ export class WindStreaks {
     const c = this.cursor[p];
     const halfWidth = BASE_HALF_WIDTH * this.sizeScale;
     const t = Math.min(this.speed[p], SPEED_CLIP_MS) / SPEED_CLIP_MS;
-    const r = CALM_COLOR.r + (FAST_COLOR.r - CALM_COLOR.r) * t;
-    const g = CALM_COLOR.g + (FAST_COLOR.g - CALM_COLOR.g) * t;
-    const b = CALM_COLOR.b + (FAST_COLOR.b - CALM_COLOR.b) * t;
+    const calm = this.calmColor;
+    const fast = this.fastColor;
+    const r = calm.r + (fast.r - calm.r) * t;
+    const g = calm.g + (fast.g - calm.g) * t;
+    const b = calm.b + (fast.b - calm.b) * t;
 
     for (let k = full ? 0 : TRAIL_LEN - 1; k < TRAIL_LEN; k++) {
       const ringIdx = (c + 1 + k) % TRAIL_LEN; // k=0 oldest (tail) .. k=TRAIL_LEN-1 newest (head)
@@ -519,8 +544,20 @@ export class WindStreaks {
       // a zero vector -- it self-corrects within a few ticks as the
       // particle actually moves.
       if (dirLen < 1e-9) {
-        const east = this.mode === 'globe' ? eastNorthAt(this.lon[p], this.lat[p]).east : FLAT_EAST;
-        [dx, dy, dz] = east;
+        const east = this.mode === 'globe'
+          ? eastNorthAt(this.lon[p], this.lat[p]).east
+          // Not a constant +x: east IS +x on Plate Carrée and on Robinson
+          // (whose parallels are straight and horizontal), but asking
+          // flatDirection keeps this correct for a flat projection where it
+          // isn't, and costs nothing on a path that only runs for a calm or
+          // freshly-spawned particle.
+          : flatDirection(this.mode, this.lon[p], this.lat[p], 1, 0);
+        // eastNorthAt returns a unit vector but flatDirection returns a raw
+        // probe difference, and the branch below leaves dx/dy/dz expected to
+        // be unit length -- the cross product further down collapses the
+        // ribbon to nothing if they aren't.
+        const el = Math.hypot(east[0], east[1], east[2]) || 1;
+        dx = east[0] / el; dy = east[1] / el; dz = east[2] / el;
       } else {
         dx /= dirLen; dy /= dirLen; dz /= dirLen;
       }

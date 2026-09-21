@@ -3,7 +3,7 @@
 *Crack the Earth open and look at the structure inside.*
 
 A shared three.js/Vite engine for browsing 3D Earth-science volumes on a
-reconstructed spherical globe. Three bespoke viewers are built directly on
+reconstructed spherical globe. Six bespoke viewers are built directly on
 it, each with its own domain-specific UI:
 
 - **[the mantle viewer](viewer/index.html)** — static seismic tomography or a
@@ -21,6 +21,28 @@ it, each with its own domain-specific UI:
   BRIDGE simulation's own Atmosphere (monthly) and Ocean (20 depth levels,
   annual) layers, kept separate from the main paleoclimate viewer since
   their grids don't share a depth range (ADR-0008).
+- **[the Old Map viewer](viewer/oldmap.html)** — a plate reconstruction drawn
+  as an aged engraved chart: a graded coastal wash, nested offshore rings and
+  hachured mountain glyphs, all measured in true kilometres rather than
+  screen pixels so the engraving stays correct at any zoom (ADR-0037). See
+  `docs/plans/old-map-viewer.md`.
+- **[the paleobiology viewer](viewer/paleobio.html)** — Paleobiology Database
+  fossil occurrences through geological time, built around two case studies:
+  coral diversity and turnover across the Phanerozoic's mass extinctions, and
+  the Panama gateway's biotic interchange. Raw counts are shown next to their
+  own sampling proxy rather than statistically corrected (ADR-0035). See
+  `docs/plans/paleobiology-viewer.md`.
+- **[Theme Lab](viewer/themelab.html)** — a dev tool for the Theme system
+  every other viewer shares: map furniture (page, water, land, boundary
+  strokes) is themeable, but a Variable's own colour ramp never is, because
+  ramp polarity encodes real scientific meaning a theme must not touch
+  (ADR-0038).
+
+For a live index of which of these (and the generator's own generated sites)
+are actually deployed right now, see the
+[elstir hub](https://siwill22.github.io/elstir/) rather than this file —
+deployment status changes independently of the code and drifts out of date
+here fast.
 
 On top of the same engine, a **generator** (`generator/`, driven by the
 `geode-globe-viewer` Claude Skill) scaffolds standalone, deployable viewer
@@ -36,7 +58,7 @@ exercise them without running the generator first:
 | [`reconstruction.html`](viewer/reconstruction.html) | `single-reconstruction-globe` — one Reconstruction Model's own coastlines/boundaries, no numerical field | Müller et al. 2019 |
 | [`reconstructionGroup.html`](viewer/reconstructionGroup.html) | `reconstruction-group-globe` — several Reconstruction Models' geometry, switched via one dropdown | Müller 2019 vs Seton 2012 |
 
-All seven entry points (three bespoke, four generated) share the same
+All ten entry points (six bespoke, four generated) share the same
 engine (`viewer/src/core/`) — the archive/manifest data format,
 volume-texture sampling, coastline reconstruction, colour-ramp machinery,
 Multi-Globe tiling (ADR-0022), and Query Point (Anchored/Plate-Frame) are
@@ -62,14 +84,17 @@ npm install
 npm run dev   # http://localhost:5173                        mantle viewer
               # http://localhost:5173/climate.html            paleoclimate viewer
               # http://localhost:5173/valdes.html              Valdes/BRIDGE viewer
+              # http://localhost:5173/oldmap.html               Old Map viewer
+              # http://localhost:5173/paleobio.html              paleobiology viewer
+              # http://localhost:5173/themelab.html               Theme Lab
               # http://localhost:5173/globe.html                generated: single-model-globe
               # http://localhost:5173/groupGlobe.html            generated: model-group-globe
               # http://localhost:5173/reconstruction.html         generated: single-reconstruction-globe
               # http://localhost:5173/reconstructionGroup.html     generated: reconstruction-group-globe
 ```
 
-Plate boundaries are drawn by [deep-time-map](https://github.com/siwill22/deep-time-map),
-a submodule at `viewer/vendor/deep-time-map`. `git submodule update --init` if
+Plate boundaries are drawn by [petrify](https://github.com/siwill22/petrify),
+a submodule at `viewer/vendor/petrify`. `git submodule update --init` if
 you cloned without `--recurse-submodules`.
 
 The archive is generated, not tracked — see *Regenerating the archive*. It is
@@ -309,7 +334,7 @@ from the mantle viewer's coastline prep, just pointed at Scotese's continent
 polygons and rotation file instead of Müller's — produces the reconstructed
 continent-outline overlay. There is no plate-boundary layer here: Scotese's
 model does not resolve topologies the way Müller 2022 does, so unlike the
-mantle viewer there is nothing for deep-time-map to draw.
+mantle viewer there is nothing for petrify to draw.
 
 Age range is bounded by the **climate manifest's own frame range**, 0-540 Ma.
 Unlike the mantle viewer's Müller coastlines (capped at 200 Ma), the Scotese
@@ -322,8 +347,9 @@ An "+ Add globe" toolbar button tiles an arbitrary number of globes on one
 canvas, each independently choosing its own layer/variable/age/month/clip —
 originally ported from the mantle viewer's own multi-globe support
 (`tomography/main.ts`), since generalized into a genuinely shared
-`core/multiInstanceHost.ts` primitive (ADR-0022) all seven entry points
-build on, not a per-viewer reimplementation. One shared camera and
+`core/multiInstanceHost.ts` primitive (ADR-0022) most entry points build on
+(all but Valdes/BRIDGE, Old Map and paleobiology, which don't need it), not a
+per-viewer reimplementation. One shared camera and
 `OrbitControls` instance is the whole trick: rotation and zoom stay locked
 across every globe for free, because there is only ever one camera object,
 re-aimed at each tile's own viewport/scissor rect (`core/layout.ts`'s
@@ -389,37 +415,120 @@ wind glyphs pointing in globe-relative directions on a flat map.
 
 ## Regenerating the archive
 
-Everything runs in the `pygmt17` conda environment.
+### Environment
+
+```bash
+conda env create -f environment.yml
+conda activate geode
+```
+
+`environment.yml` pins everything the prep scripts need, including GMT — the one dependency
+pip cannot provide, since `pygmt` wraps the GMT C library rather than bundling it. The
+commands below say `-n pygmt17` because that is the environment they were developed in;
+`-n geode` works identically.
+
+### Inputs
+
+Most inputs download themselves on first use and are cached alongside gprm's datasets
+(`python -c "from gprm.datasets import cache_path; print(cache_path())"`):
+
+| Input | Source | Size |
+|---|---|---|
+| Reconstruction models, coastlines, palaeogeography | `gprm.datasets` | fetched per model |
+| Muller et al. (2022) OPT1 mantle temperature grids | Zenodo [6622194](https://zenodo.org/records/6622194), one file of ten | 2.3 GB |
+| Surface topography | NOAA ETOPO 2022 60 arc-second | 478 MB |
+| REVEAL tomography anomalies | Zenodo [13991965](https://doi.org/10.5281/zenodo.13991965), one member of one zip | 4.6 GB transferred |
+
+**Every input now fetches itself.** The tomography grid was the last holdout, and it is the
+awkward one: Schouten et al. (2024), *Sci. Rep.* **14**, 26708 is published as a **single
+18.97 GB zip** with no per-file URLs, of which `Models/REVEAL_anomaly.nc` (4.98 GB) is the only
+part this build wants.
+
+`prep/_inputs.py` extracts just that member using HTTP range requests. A zip keeps its index at
+the end, so three small reads (about 160 kB) give the byte offset and length of every member;
+the one wanted is then fetched as a byte range and inflated on the fly. The transfer is **4.6 GB
+instead of 19 GB**, and the member is verified against the CRC32 recorded in the archive's own
+directory, which is a stronger guarantee than a checksum over a file that is never downloaded
+whole. Verified byte-identical (md5) against a manually downloaded copy.
+
+`prep_model.py --downsampled` fetches `REVEAL_downsampled_anomaly.nc` instead: 84 MB, same seven
+variables, but 23 depth levels rather than 342. Too coarse for the default `--ndepth 192`, and
+useful for exercising the pipeline without a 4.6 GB download.
+
+> **Known issue — the full 4.6 GB fetch has not been run end to end.**
+>
+> Every part of it is exercised by the 84 MB member, which goes through identical code, and the
+> resume path is tested by injecting a mid-stream failure. But a one-hour transfer is the only
+> thing that tests a one-hour transfer, and it has not been done.
+>
+> There is a specific reason to be wary. During development Zenodo answered a request for
+> **128 bytes** by beginning to send the whole archive, and the connection broke after 11.27 GB
+> (`IncompleteRead(11268954172 bytes read, 7585292681 more expected)`). This could not be
+> reproduced afterwards: 15 consecutive range requests, and a replay of the exact sequence that
+> failed, all returned clean `206 Partial Content`. The cause is unknown and assumed transient.
+>
+> Two mitigations are in place. A response that is not `206` is rejected before any of the body
+> is read, so an ignored `Range` header costs a second rather than 19 GB. And the transfer
+> resumes from the compressed byte it stopped at, retrying up to six times with exponential
+> backoff, so a dropped connection does not restart it.
+>
+> If a real run does fail, `--downsampled` will confirm whether the problem is the transfer size
+> or the code. Please record what happened here.
+
+REVEAL ships natively on an unstructured Salvus mesh, so this regular lon/lat/depth grid is a
+derived product of the Schouten paper rather than part of the REVEAL release. Two near misses
+worth recording: Zenodo [10684325](https://zenodo.org/records/10684325) is the dataset of the
+REVEAL *model* paper (Thrastarson et al. 2024) — 49.3 GB of benchmark seismograms, no tomography
+grid; and ETH publishes REVEAL directly in netCDF
+(400 MB, [cos.ethz.ch/models.html](https://cos.ethz.ch/models.html)), but as absolute velocities
+rather than the `vs_anomaly`/`vp_anomaly` this pipeline reads, from a polybox share with no DOI
+or checksum.
+
+### Build
 
 ```bash
 conda run -n pygmt17 python prep/prep_colormaps.py
 
+# extracts REVEAL_anomaly.nc from the Schouten Zenodo zip on first run (4.6 GB);
+# add --downsampled for the 84 MB version, or --input for your own grid
 conda run -n pygmt17 python prep/prep_model.py \
-    --input /Users/simon/Data/SeismicTomography/Schouten_Supplementary_material/Models/REVEAL_anomaly.nc \
     --id reveal --name REVEAL \
     --var vs_anomaly:vs:"Vs anomaly" \
     --var vp_anomaly:vp:"Vp anomaly" \
     --validate
 
+# downloads the OPT1 grids from Zenodo on first run
 conda run -n pygmt17 python prep/prep_convection.py \
-    --input /Users/simon/Data/zenodo/OPT1_temperature_anomaly_grids_dimensional \
     --id opt1 --name "Muller 2022 OPT1" --age-max 200 --validate
 
 # Coastline GEOMETRY from Muller 2019 v2, ROTATIONS from Muller 2022. See below.
-CACHE=~/Library/Caches/gprm
+# Both models are fetched by gprm; run these once to populate the cache:
+#   python -c "from gprm.datasets import Reconstructions as R; R.fetch_Muller2019(); R.fetch_Muller2022()"
+CACHE=$(conda run -n pygmt17 python -c "from gprm.datasets import cache_path; print(cache_path())")
 conda run -n pygmt17 python prep/prep_coastlines.py \
     --coastlines "$CACHE/Muller2019/Muller_etal_2019_PlateMotionModel_v2.0_Tectonics/StaticGeometries/Coastlines/Global_coastlines_2019_v1_low_res.shp" \
     --rotations  "$CACHE/Muller2022/optimisation/1000_0_rotfile_MantleOpt.rot" \
     --age-max 200
 
-PYTHONPATH="$PYTHONPATH:$PWD/viewer/vendor/deep-time-map/python" \
-conda run -n pygmt17 python -m deep_time_map.export \
+PYTHONPATH="$PYTHONPATH:$PWD/viewer/vendor/petrify/python" \
+conda run -n pygmt17 python -m petrify.export \
     --model Muller2022 --end 200 --out archive/boundaries
 
+# downloads ETOPO 2022 on first run
 conda run -n pygmt17 python prep/prep_topography.py
 conda run -n pygmt17 python test-data/make_fixtures.py
 conda run -n pygmt17 python prep/build_archive_index.py
 ```
+
+### Unresolved inputs
+
+These still need a path supplied, because no public source is recorded for them. Both are used
+only by the Old Map viewer; **the core build is now entirely self-serving.**
+
+| Input | Needed by | Override |
+|---|---|---|
+| StoryMaps LIP export | `prep_oldmap_volcanoes.py` (Old Map viewer only) | `$GEODE_LIP_DIR` |
+| `JW_HotspotCatalogue.shp` | `prep_oldmap_volcanoes.py` (Old Map viewer only) | `$GEODE_WHITTAKER_HOTSPOTS` |
 
 `prep_convection.py` exists separately from `prep_model.py` because one volume
 here is 65 files and the series is another 11 on top of that, where a tomography
@@ -579,7 +688,7 @@ entirely plausible on screen.
 
 ### Plate boundaries
 
-Drawn by [deep-time-map](https://github.com/siwill22/deep-time-map) onto a 2D
+Drawn by [petrify](https://github.com/siwill22/petrify) onto a 2D
 canvas over the WebGL globe. That library talks to its host through exactly one
 method, `project(vec3) -> [x, y, depth] | null`, so integrating it costs a
 projector and nothing else — the subduction-polarity triangles, the pixel-spaced
@@ -588,7 +697,7 @@ already verified.
 
 Three things the projector has to get right:
 
-**The frames differ but are compatible.** deep-time-map works in the geographic
+**The frames differ but are compatible.** petrify works in the geographic
 frame (Z through the pole); Geode works in three.js Y-up. The map between them
 is a permutation with determinant **+1** — a rotation, not a reflection — so the
 `a x tangent` cross product that decides which side the triangles go on survives
@@ -661,10 +770,19 @@ npm run check:boundaries       # subduction polarity vs resolved plate polygons
 npm run check:render           # headless render of the visual criteria
 npm run check:query-point      # Anchored Point / Month Profile / Age Series arithmetic
 npm run check:static-polygons  # Plate-Frame Point assignment + trajectory
+npm run check:oldmap           # Old Map viewer: kilometre-true wash/ring/glyph scale
+npm run check:paleobio         # paleobiology viewer's headless render
+npm run check:themelab         # Theme Lab's headless render
+npm run check:themes           # theme colours land only on furniture, never the ramp
+npm run check:theme-roles      # every furniture role is set by every theme
+npm run check:projections      # globe vs Robinson vs flat, same criteria either way
+npm run check:flat-direction   # flat-map winding/orientation
+npm run check:robinson         # Robinson projection vs pygplates reference
+npm run check:storymaps        # shared StoryMaps globe primitives
 ```
 
 **Always run `check:boundaries` through the wrapper, never
-`deep_time_map.verify` directly.** Its CLI takes `--model`, defaulting to
+`petrify.verify` directly.** Its CLI takes `--model`, defaulting to
 `Merdith2021`, and does not read the model name from the export's manifest. Aim
 it at a Müller 2022 export and it resolves Merdith topologies instead. Because
 the two models share Merdith's topologies — identical feature counts — the only
@@ -742,29 +860,19 @@ because a CDN will not compress `application/octet-stream` for you. The JSON
 is deliberately left alone, since `application/json` *is* compressed on the
 wire.
 
-Deployed at **<https://siwill22.github.io/Geode/>**. The repo is private; a
-Pages *site* is public regardless, since access-controlled Pages is Enterprise
-Cloud only.
+Deployed at **<https://siwill22.github.io/Geode/>** on every push to `main`.
+The repo is private; a Pages *site* is public regardless, since
+access-controlled Pages is Enterprise Cloud only.
+
+That deploy carries whichever entry pages have reached `main` — not
+necessarily all ten. For the current live/not-yet-deployed status of every
+viewer in this repo and the wider StoryMaps family, check the
+[elstir hub](https://siwill22.github.io/elstir/) rather than this file.
 
 ### One-time setup
 
 1. Repo **Settings → Pages → Source: GitHub Actions**.
-2. A **read-only deploy key** for the submodule. `deep-time-map` is a separate
-   private repo, and a workflow's `GITHUB_TOKEN` is scoped to this one, so
-   `checkout` cannot fetch it — the failure reads `Repository not found`, which
-   looks like a bad URL rather than a permissions problem. A deploy key grants
-   read on exactly that one repo, where a PAT would carry the whole account's
-   access into CI:
-
-```bash
-ssh-keygen -t ed25519 -N "" -C geode-ci-readonly -f /tmp/dtm_key
-gh api -X POST repos/siwill22/deep-time-map/keys \
-    -f title="Geode CI (read-only)" -f key="$(cat /tmp/dtm_key.pub)" -F read_only=true
-gh secret set DTM_DEPLOY_KEY --repo siwill22/Geode < /tmp/dtm_key
-rm /tmp/dtm_key /tmp/dtm_key.pub
-```
-
-3. Pack and upload the data:
+2. Pack and upload the data:
 
 ```bash
 node prep/pack_deploy.mjs
@@ -837,6 +945,9 @@ prep/prep_paleogeography.py      Scotese PaleoDEM -> paleogeography-scotese mode
 prep/prep_deformation.py         defamation pipeline run -> <id>-deformation / <id>-age-heatflux
 prep/prep_reconstruction.py      one gprm fetch_<model>() -> a Reconstruction Model's own coastlines/boundaries
 prep/prep_staticpolygons.py      static polygons for Plate-Frame Point, per Reconstruction Model
+prep/prep_oldmap.py               mountain-glyph positions for the Old Map viewer
+prep/prep_oldmap_volcanoes.py     volcano-glyph positions for the Old Map viewer
+prep/prep_pbdb.py                 Paleobiology Database occurrences for the paleobiology viewer
 prep/pack_deploy.mjs             archive/ -> archive-deploy/, for the deployed site
 archive/                         generated data, served statically, not tracked
 archive/reconstructions/<id>/    one Reconstruction Model's own manifest + assets (ADR-0021)
@@ -846,6 +957,9 @@ viewer/                          TypeScript + Vite + three.js
 viewer/index.html                the mantle viewer's entry page
 viewer/climate.html              the paleoclimate viewer's entry page
 viewer/valdes.html               the Valdes/BRIDGE viewer's entry page
+viewer/oldmap.html               the Old Map viewer's entry page
+viewer/paleobio.html             the paleobiology viewer's entry page
+viewer/themelab.html             Theme Lab's entry page
 viewer/globe.html                generated: single-model-globe
 viewer/groupGlobe.html           generated: model-group-globe
 viewer/reconstruction.html       generated: single-reconstruction-globe
@@ -854,12 +968,15 @@ viewer/src/core/                 shared engine: rendering, data loading, colour 
 viewer/src/tomography/           mantle viewer only
 viewer/src/climate/              paleoclimate viewer only
 viewer/src/valdes/               Valdes/BRIDGE viewer only
+viewer/src/oldmap/               Old Map viewer only
+viewer/src/paleobio/             paleobiology viewer only
+viewer/src/themelab/             Theme Lab only
 viewer/src/globe/                single-model-globe wrapper
 viewer/src/groupGlobe/           model-group-globe wrapper
 viewer/src/reconstruction/       single-reconstruction-globe wrapper
 viewer/src/reconstructionGroup/  reconstruction-group-globe wrapper
 viewer/src/generated/            per-recipe config the generator overwrites (checked in with real defaults)
-viewer/vendor/                   deep-time-map submodule
+viewer/vendor/                   petrify submodule
 test-data/                       synthetic fixtures and the pygplates cross-check
 docs/adr/                        architecture decisions
 docs/plans/                      design docs for individual features
@@ -873,7 +990,7 @@ docs/plans/                      design docs for individual features
 ramps from matplotlib. Coastline geometry from Müller et al. 2019 v2.
 Rotations, plate boundaries and the OPT1 convection run from Müller et al.
 2022. Plate boundary rendering by
-[deep-time-map](https://github.com/siwill22/deep-time-map). Tomography models
+[petrify](https://github.com/siwill22/petrify). Tomography models
 are cited per-model in each `manifest.json`.
 
 **Paleoclimate viewer.** Climate simulations from Li, X., Hu, Y. et al. 2022,
@@ -884,6 +1001,15 @@ rotation model, via Cao et al. 2018.
 
 **Valdes/BRIDGE viewer.** Simulation from Valdes, P.J. et al. 2021, *The
 BRIDGE HadCM3 family of climate models*.
+
+**Old Map viewer.** Coastal wash, offshore rings and hachured mountain
+glyphs after the reference notebook `~/GIT/degenerative_art/withMountains.ipynb`.
+Reconstruction geometry per the Reconstruction Model chosen in the viewer
+(ADR-0034: it follows the dataset, not one fixed model).
+
+**Paleobiology viewer.** Fossil occurrences from the Paleobiology Database
+(paleobiodb.org). Paleocoordinates recomputed against the viewer's own
+reconstruction rather than taken from PBDB directly.
 
 **Crustal deformation (`globe.html`/`groupGlobe.html`'s checked-in
 example).** Cao 2024 and Müller et al. 2019 reconstructions, run through the

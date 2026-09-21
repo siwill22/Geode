@@ -240,20 +240,35 @@ non-opaque hole let Vector Streaks on the far hemisphere show through).
 ## Projection
 
 How the globe's surface is mapped onto the screen: **Globe** (a sphere, viewed
-with a perspective camera and free orbit) or **Plate Carrée** (a flat
-equirectangular plane, viewed with an orthographic camera and pan/zoom, no
-rotation). Applies globally — every tiled instance on screen shares one
-Projection, the same way they already share one camera. Independent of Model,
-Frame, or Reconstruction Age: switching Projection changes how something is
-viewed, not what is being viewed.
+with a perspective camera and free orbit), **Plate Carrée** (a flat
+equirectangular plane, orthographic camera, pan/zoom, no rotation) or
+**Robinson** (a flat compromise projection, same camera treatment). Applies
+globally — every tiled instance on screen shares one Projection, the same way
+they already share one camera. Independent of Model, Frame, or Reconstruction
+Age: switching Projection changes how something is viewed, not what is being
+viewed.
 
-Coastlines and land fill do not reproject with it yet — their CPU build
-pipeline (plate-rotation slerp) is a separate, unrelated piece of work.
-Vector Field overlays (glyphs and streaks) do reproject, including their own
-Plate-Carrée-only concern of a real antimeridian seam a sphere doesn't have.
-More Projections
-(Robinson, Mollweide, Spilhaus) are expected later; Plate Carrée is the
-first.
+**Flat** is the distinction that matters in code, not "is it Plate Carrée" —
+ask `isFlat(mode)`. Everything the flat modes share (orthographic camera, an
+antimeridian seam a sphere doesn't have, reproject-per-vertex rather than
+rotate-in-3D for Reference Plate) they share with each other, and several
+places spelled "not globe" as `=== 'plateCarree'` until a second flat
+projection made each one a bug (see docs/adr/0036).
+
+Robinson is the first Projection with **no closed-form inverse**: it is
+defined by a 19-entry table, so a fragment recovers its latitude by bracketing
+that table (Y is strictly increasing, which is what makes this exact rather
+than iterative) and its longitude from X at that latitude. It is also the
+first that is not **onto**: its boundary is a curve, so a plane large enough to
+hold the map has corners that are not on the Earth, and the shader discards
+there rather than clamping.
+
+Coastlines **and land fill** now both reproject. Land fill did not until
+Robinson arrived — a flat map drew flat coastlines over a spherical blob of
+land, survivable only while every flat view had an opaque raster over the whole
+sphere. Triangles straddling the antimeridian are dropped rather than clipped,
+the same choice the line seam test makes. Vector Field overlays (glyphs and
+streaks) reproject too. Mollweide and Spilhaus are still expected later.
 
 ## Reference Plate
 
@@ -567,7 +582,7 @@ docs/adr/0024, docs/adr/0025).
 available upstream, even though the feature itself is not built.** A point
 older than the static polygon it would be assigned to cannot be validly
 reconstructed past that polygon's own begin age (ADR-0025's rule, stated
-generally in ADR-0032) — `viewer/vendor/deep-time-map`'s
+generally in ADR-0032) — `viewer/vendor/petrify`'s
 `points_from_dataframe()` exposes this as `plate_begin_age` on every point
 (v0.3.0+) so a future prep script does not need to re-derive it. This is
 data availability, not the feature: nothing in `viewer/src` or `prep/`
@@ -604,7 +619,7 @@ coastlines use) and shown only while the Reconstruction Age slider sits
 within a fixed window of it (see ADR-0029), never repositioned to track the
 slider continuously.
 
-Built on `viewer/vendor/deep-time-map`'s `PointLayer`/`points.json`
+Built on `viewer/vendor/petrify`'s `PointLayer`/`points.json`
 pipeline per ADR-0028's split-features rule, not a new Geode `core/`
 primitive — see ADR-0029 for the upstream/downstream split, the per-
 Reconstruction-Model export granularity, and why VGP display is currently
@@ -619,3 +634,543 @@ comparison (`gprm.utils.pmag.generate_running_mean_path` /
 `rotate_to_common_reference`). Explicitly deferred, not designed — see
 ADR-0029's Deferred section. Named here only so "Apparent Polar Wander
 Path" is never confused with a VGP itself once this is eventually built.
+
+## Occurrence
+
+One fossil identification, at one place, constrained to an age *interval* —
+never a single age. The interval is the data: a fossil is dated by the
+stratigraphic unit it came from, so an Occurrence carries a maximum and a
+minimum age and the truth lies somewhere between. This makes an Occurrence a
+direct fit for `PointLayer`'s `lifespan: 'range'` and a poor fit for anything
+expecting a point age.
+
+Like an ore deposit or a sample site, an Occurrence is "a location on a plate"
+in Plate-Frame Point's sense — assigned a plate by static-polygon
+partitioning, then rotated — not a VGP-like object with its own separate
+assignment rule.
+
+_Avoid_ "fossil" alone for this: one Occurrence is a taxon recorded in a
+collection, not a specimen, and several Occurrences routinely share a
+locality. Designed in `docs/plans/paleobiology-viewer.md`; not built.
+
+## Grouping
+
+A named categorical partition of a point dataset into a small, bounded set of
+display categories, each with its own palette. A dataset declares two or three;
+exactly one is active at a time, chosen from a dropdown, never overlaid — the
+same shape as Vector Field (ADR-0014), and for the same reason.
+
+Bounded is a requirement, not a preference: an aggregate glyph summarising a
+cell cannot show an unbounded category set, which is what rules out a free
+taxonomic-rank switcher. A Grouping need not be taxonomic at all — the coral
+case study groups by subclass, the Panama case study by which side of the
+gateway a lineage first appears on.
+
+Maps onto a `points.json`'s existing `points[].type` + `categories` fields, so
+it needs nothing new from petrify.
+
+### Observed vs Derived Grouping
+
+Whether a Grouping's categories are **read** from the data or **inferred** by a
+rule. "Which side of the gateway this occurrence is on" is observed — it comes
+straight from the coordinates. "Which continent this genus came from" is
+derived: no source records it, so it is computed (from the continent of the
+genus's oldest occurrence) and is only as good as that rule.
+
+The distinction is in the glossary rather than left implicit because a derived
+category that looks like an observed one is how a viewer ends up asserting what
+it cannot support. A Derived Grouping states its rule in the legend and is
+named for what was measured — "first appears in", never "originated in" — and
+keeps an explicit `ambiguous` category rather than forcing a call.
+
+## Time Bin
+
+The stratigraphic interval a diversity or composition series is computed over —
+ICS stages, of which there are 101 in the Phanerozoic, with durations ranging
+from under 1 Myr to 21.6 Myr.
+
+Distinct from **Sampling Step**, and the two must never collapse into one term.
+A Time Bin is an analytic unit whose boundaries are stratigraphic and whose
+widths are uneven; a Sampling Step is a uniform interval an export is
+precomputed at, purely a rendering convenience (cf. the 5 Myr rotation sampling
+`prep_boucot.py` already uses). Their unevenness is load-bearing in opposite
+directions: a longer Time Bin accumulates more taxa purely by lasting longer,
+which is a bias to show rather than hide, while a Sampling Step's uniformity is
+what makes it invisible.
+
+The *map* needs neither. At a continuous Reconstruction Age, a cell holds every
+Occurrence whose own age interval contains that age — bins are needed only by a
+series that requires discrete x-values.
+
+## Aggregation Cell
+
+An equal-area cell on the sphere that Occurrences are binned into for
+summary display, one glyph per occupied cell. Equal-area (HEALPix, as
+`velocities.json` already samples on) rather than a lon/lat grid, and the
+difference is not cosmetic: a lon/lat grid's cells shrink toward the poles, so
+counting into one would inflate polar density exactly where a latitudinal
+diversity reading is being taken.
+
+Binned in **paleo** coordinates at each time, never present-day ones — a cell
+is a region of the reconstructed globe, so which Occurrences fall in it changes
+as the plates move.
+
+## Theme
+
+A named, coherent look for the **map furniture** — the page, the water, the
+land, the coastline, the plate boundaries, the velocity arrows, the speed ramps
+— offered as a quick start, so a view can be asked for in plain language
+("something light and warm", "more for kids") instead of assembled piece by
+piece. A view has exactly one Theme at a time, shared by every tiled instance.
+
+A Theme is mostly, but not only, colour. It is a colour per Theme Role, plus
+three bounded non-colour properties: Lightness, Theme Weight, and Outline
+Treatment. Two looks can differ in ink weight alone with no change of hue at
+all, which is what "for kids" mostly is, so a colour-only Theme could not
+express one.
+
+A Theme is also described by two declared axes — Lightness and a `temperature`
+of `warm`, `cool` or `neutral` — so a plain-language request can be *filtered*
+rather than guessed at. The Theme set covers every cell of that grid, which is
+what stops "light and warm" landing on nothing.
+
+A Theme governs furniture and nothing else. It never reaches the colour ramp a
+Variable is painted with: that ramp carries Colour Polarity, which encodes
+whether a positive anomaly is cold or hot, so letting a decorative choice touch
+it would let "light and warm" silently invert what a reader takes off the
+mantle. That boundary is the point of the concept rather than a limit of the
+current implementation — a Theme can always be changed without changing what
+any value means, which is what makes offering ten of them safe.
+
+An element never names a colour; it names a Theme Role, and the Theme resolves
+it. That indirection is what keeps a Theme's promise of coherence true for
+elements that did not exist when it was authored.
+
+Distinct from Paper: Old Map is not a Theme and must not become one. It is a
+different renderer with its own marks, textures and idiom, not a recolouring of
+the default one.
+
+## Theme Role
+
+The named part a drawable element plays in a Theme — page, water, land,
+outline, one of a small set of accents, or an end of a speed ramp. Roles are
+what a Theme is actually written against: the Theme assigns one colour per
+role, and every element claims a role.
+
+Bounded is a requirement, not a preference, for the same reason Grouping's
+categories are: whoever authors a Theme has to hold the whole set in mind at
+once to judge whether the colours work *together*, which is the only thing a
+Theme is for. The accents carry the sharpest version of this constraint — the
+four plate-boundary types are told apart by colour alone, so accents that stop
+being mutually distinguishable do not merely look worse, they stop conveying
+which boundary is which.
+
+## Lightness
+
+Whether a Theme's marks sit on a light substrate or a dark one — `light` or
+`dark`, declared once per Theme. The only thing a Theme carries that is not a
+colour, and it exists because the difference is not one of hue: on a dark Theme
+a mark is lighter than its surround and reads as emitting; on a light Theme it
+is darker and reads as ink. An element that swaps only hue between the two is
+not off-palette, it is inverted.
+
+_Avoid_ calling this "polarity". Colour Polarity and Subduction Polarity both
+already exist, both binary, both invisible when wrong — this would have been
+the third, in a glossary that already avoids the bare word for that reason.
+
+Lightness is not only about which colours a Theme picks. It also sets the
+*direction* of any derived colour — see Outline Treatment's `shade`, which moves
+away from the page and so darkens on a light Theme and lightens on a dark one.
+
+## Theme Weight
+
+How heavily a Theme draws its marks — one scalar multiplying every stroke width
+and decoration size at once, so a "for kids" look (thick boundaries, large
+subduction triangles) and a dense analytical look are the same Theme machinery
+at different settings.
+
+Deliberately one number rather than a width per element. The widths already in
+use are *relatively* tuned — subduction heavier than ridge, ridge heavier than
+transform — and a single multiplier preserves those ratios by construction,
+where per-element widths would let a Theme quietly invert the emphasis. It also
+means an element added later is drawn at the right weight without any Theme
+being edited, the same guarantee Theme Role gives for colour.
+
+Because it scales every mark uniformly, it cannot distort a size-based data
+encoding: a glyph whose area means something still means it, larger.
+
+## Outline Treatment
+
+How a continent's pen relates to its fill — `contrast` (a bright accent against
+the fill), `shade` (derived from the fill by moving away from the page colour in
+lightness, the classic atlas look) or `none` (no pen; land is separated from
+water by fill alone).
+
+A relationship, not a colour, which is why it is a named choice and not simply
+another Theme Role. Both a bright-pen annotated-diagram look and a shaded-pen
+atlas look were always expressible as two colours; what was missing was any way
+to say which of the two a Theme *is*.
+
+`none` is the case that changes what must be checked: with no pen, the land/water
+pair carries the whole land-sea distinction and has to be legible on its own,
+where in the other two treatments the outline carries it.
+
+Distinct from the runtime **edge toggle**, and the two are separate axes rather
+than two names for one switch. Outline Treatment is what a Theme *is* — part of
+its authored character, and the thing a `shade` pen derives from. The toggle is
+what a reader wants *right now*, and it survives Theme changes. A pen is drawn
+only when both agree: a Theme with `none` has no pen colour to draw in, so it
+stays bare however the toggle is set, and the toggle's value is remembered for
+the next Theme that does provide one.
+
+## Explorer
+
+A viewer page whose structure is a globe, some standard layers, and the controls
+to move through time — legend, hover, time slider — with **no authored
+narrative**. The reader decides what to look at.
+
+Distinct from a **Narrative** page, where scroll position drives camera and time
+through a sequence someone wrote. The difference is not size or sophistication:
+it is whether the order of the reading is the author's or the reader's. Two
+pages of nearly identical length can be one of each.
+
+The distinction matters because it is the boundary of what can be *generated*.
+An Explorer's structure is derivable from what it displays; a Narrative's is
+prose plus camera choreography, which is a different authoring problem and not
+one a DataFrame implies.
+
+## Display Rule
+
+How a point's appearance is decided at a given Reconstruction Age — a named,
+parameterised rule, not an arbitrary function.
+
+Two exist: **constant** (appearance depends only on which Grouping category the
+point is in) and **age window** (a point is drawn emphatically while the current
+age is within some span of its own age, faintly otherwise).
+
+Named and bounded rather than free-form because the rule has to be *evaluated in
+the browser on every time change* — it is a function of the point and the
+current age, so it cannot be a Python callback handed across. Keeping the set
+closed and small is what stops it becoming a small programming language; a rule
+earns its place by being needed by a page that exists, never by symmetry with
+one that does.
+
+Anything outside the set is written as JavaScript at a declared seam. That is a
+supported outcome, not a failure — a rendering that is genuinely bespoke (a
+pie-chart glyph per sample, say) should not be squeezed into a rule vocabulary.
+
+## View Script
+
+The generated, canonical record of how a view was built: every call that shaped
+it, in order, minimally, as runnable code.
+
+Not a transcript. It is reconstructed from what the view itself recorded, so it
+is faithful by construction — free of the re-runs, abandoned attempts and
+out-of-order execution that a notebook's own history carries, and identical
+whether the calls arrived from a notebook, a script, or a conversation.
+
+Distinct from the author's notebook, which may accompany it. The notebook holds
+the wrangling and the reasoning and is the human artifact; the View Script holds
+only what determines the view, and is the one that can be *checked* against what
+is on screen.
+
+Neither contains the analysis itself. A View Script names and pins the library
+calls it made, with citations, and says that it is doing so — a record implying
+an audit trail it does not have is worse than one that states its own edge.
+
+## Paper
+
+The page-space substrate an Old Map view is drawn on — an aged sheet, with its
+own tint, stains, folds and vignette. It belongs to the **page**, not to the
+Earth: it never moves when the globe is dragged or Reconstruction Age is
+scrubbed, while every mark on top of it does.
+
+That separation is what lets one sheet carry any Projection. The paper is
+always a rectangle and the Projection is merely what is drawn on it, so a Globe
+view is a disc of ink on a full page rather than a textured ball — which is how
+an atlas plate actually looks. Under Robinson, whose boundary is a curve, the
+corners of the page are simply paper, and that is correct rather than a gap.
+
+## Orogen Candidate
+
+One of a fixed set of points, generated once on the sphere and assigned a plate
+id, that is reconstructed to every age and tested there against a mountain
+rule. A Candidate is not itself a mountain: it is a place that may or may not
+be carrying one at a given age.
+
+Fixed identity is the whole point. Candidates ride their plates, so a mountain
+drawn on one moves with the continent it sits on, and a glyph that is fading
+has something stable to fade — regenerating the point set per frame instead
+puts glyphs on a fixed global lattice that blinks as the orogenic band sweeps
+past it, which is the failure this concept exists to prevent.
+
+## Orogen Age
+
+Myr since an Orogen Candidate last satisfied the mountain rule — zero while it
+is active, then increasing once the condition that raised it goes away. Drives
+how strongly the glyph is drawn, so orogens age out rather than vanish the
+instant their trench departs.
+
+Distinct from Reconstruction Age, and the two move in opposite directions:
+Reconstruction Age is the age of the view, while Orogen Age is measured
+*backwards from* it, and the same Candidate carries a different Orogen Age at
+every Reconstruction Age. A consequence worth stating: a view's oldest frame
+has no history behind it, so an Orogen Age series is only meaningful where the
+computation began some margin deeper than the range on display.
+
+## Transect
+
+A user-drawn path across the sphere: an ordered list of at least two points,
+each consecutive pair joined by a great-circle arc. A surface object — it has
+no depth of its own, because the things computed from it disagree about what
+depth means (see Readout).
+
+_Avoid_: "profile" for this. Month Profile already names a single cell's read
+down the depth axis, so "profile" would mean both one column and a line across
+the world in the same glossary. A Transect is the line; what comes out of it
+is a Readout.
+
+Distinct from a Cutaway, which is a closed polygon whose purpose is to *remove*
+material from view. A Transect removes nothing and has no Mask.
+
+## Great-Circle Transect
+
+A Transect with exactly two vertices. Named as its own case because it lies in
+a plane through the centre of the Earth, so a vertical Readout taken along it
+is a genuine planar slice and a camera can be aligned to it. A Transect with
+more vertices is a bent curtain and has no such plane — the phrase "the section
+plane" is simply false for it.
+
+## Anchored Transect / Plate-Frame Transect
+
+The two frames a Transect can be held in, mirroring Anchored Point and
+Plate-Frame Point. An Anchored Transect stays at fixed lon/lat while the
+continents move beneath it. A Plate-Frame Transect's vertices ride their
+assigned plates, so a line drawn across a margin stays across that margin.
+
+A Plate-Frame Transect is not a great-circle arc at any age but the one it was
+drawn at. Its *vertices* are rotated and the path between them redrawn, which
+keeps the line continuous; where the vertices resolve to different plates, the
+interior of the line is therefore a geometric construction rather than a set of
+material points — a fact that is stated to the reader, not hidden. See
+ADR-0043.
+
+## Readout
+
+Anything computed from a Transect: a Mantle Section, a Grid Track, a Catchment,
+a Geological Section. A Readout owns its own vertical quantity and depth
+extent; the Transect owns only the line. All Readouts of one Transect share a
+single Along-Track Distance axis, which is what makes reading one against
+another meaningful.
+
+## Along-Track Distance
+
+Position measured along a Transect, from its first vertex, as great-circle arc
+length in km. For a Plate-Frame Transect it is recomputed at every age from the
+rotated vertices, so the axis genuinely lengthens as a margin extends and
+shortens as it converges — that change is the signal, not an artefact of the
+measurement.
+
+## Cross-Track Distance
+
+Shortest great-circle distance from a point to a Transect, measured to the
+*segments* and not to the infinite great circle they lie on — so the set of
+points within a given cross-track distance is a capsule with rounded ends, not
+an unbounded band. Signed by which side of the line the point falls on, so it
+can serve as a plan-view axis.
+
+## Catchment
+
+The points of a point dataset lying within a chosen Cross-Track Distance of a
+Transect. Membership is a property of the point and the line together, not of
+the dataset: the same dataset yields a different Catchment for every line and
+every half-width, which is why the swath is always drawn and non-members are
+dimmed rather than removed.
+
+## Section
+
+A Readout drawn as a vertical slice: Along-Track Distance across, depth down.
+Drawn as a radial wedge where the depth range is large enough for the
+sphericity to matter, and as a rectangle with a stated vertical exaggeration
+where it is not.
+
+_Avoid_: using "section" for the Wall. The Wall is the surface a Cutaway
+exposes inside the 3D scene; a Section is a drawn panel. They can show the same
+data and are not the same object.
+
+## Crossing
+
+A place where a Transect meets a plate boundary, carrying the boundary's type
+and — for a subduction zone — its Vergence. A Crossing is measured: it comes
+from reconstructed boundary geometry, unlike most of what is drawn around it in
+a Geological Section.
+
+## Vergence
+
+Which way a subducting slab descends *as seen in a particular Section* —
+left-to-right or right-to-left across the panel. Not a property of the trench
+alone: it is the trench's own polarity resolved against the direction the
+Transect travels at the Crossing, so the same trench verges one way in a
+section drawn west-to-east and the other way in the same section drawn
+backwards.
+
+Worth naming precisely because it is invisible when wrong. A mirrored slab
+looks entirely plausible — the same failure the vendored boundary library warns
+about for its subduction triangles.
+
+## Schematic Element
+
+A mark in a Readout that no data stands behind — a drawn Moho, a slab at a
+conventional dip, a crustal thickness chosen to be four or five times thicker
+under continents than oceans. Drawn in a distinct register, named as schematic
+in the panel's key individually rather than once for the whole figure, and
+never given a vertical axis to be read off, because a screenshot leaves the
+caption behind. See ADR-0045.
+
+An element stops being schematic by being derived, not by being improved: a
+Moho computed from topography by isostasy is a different kind of object from a
+Moho drawn at a plausible depth, and only the first one earns an axis.
+
+## Plate Tree
+
+The hierarchy of relative rotations a Reconstruction Model is built from, at
+one age, reduced to only those plates that carry geometry. Every plate's
+position is defined relative to some other plate, up to the anchor; a Plate
+Tree is that structure made visible.
+
+It is a property of the Reconstruction Model's rotation data, not of any
+numerical Model, and it exists for every Reconstruction Model whether or not
+one is displayed.
+
+Reduced is the operative word. The full rotation hierarchy at one age carries
+thousands of plate ids, most of which have no polygon and so no position to
+draw — a Plate Tree is what is left after collapsing those away (see Patched
+Link for what collapsing them leaves behind).
+
+## Tree Node
+
+One plate of a Plate Tree, positioned at the **boundary centroid of that
+plate's largest polygon** — the definition `gprm.utils.platetree`'s
+`get_polygon_centroids()` uses, adopted deliberately rather than improved on.
+
+Which polygon is largest is decided **per age** and is genuinely discontinuous:
+a plate's largest polygon can switch to a different feature between adjacent
+ages, moving the node by up to 58.8° of arc where ordinary plate motion moves
+it by 0.23° (measured, Müller 2019, 94 switches across 55 plates over
+0–240 Ma). That is a property of the definition, not a defect in an
+implementation of it, and a viewer must not quietly smooth it away.
+
+So a Tree Node has two halves that behave differently, and conflating them is
+the mistake to avoid: **which** polygon defines it is discrete and snaps to an
+exported age, the way a Boundary Frame does; **where** that polygon's centroid
+sits is continuous in Reconstruction Age, the way a coastline vertex is.
+
+## Tree Link
+
+One hop of a Plate Tree, drawn between two Tree Nodes: the relationship "this
+plate's position is defined relative to that one."
+
+A Tree Link is directed — one endpoint is the parent — even though the line
+drawn for it is not. Which endpoint is the parent depends on the anchor, which
+is fixed at plate 0 and never a user setting (see Reference Plate for the
+separate, view-level knob this is not).
+
+## Patched Link
+
+A Tree Link whose rotation circuit passes through plate ids that carry no
+geometry at that age, so the line drawn connects two plates that are **not
+adjacent** in the rotation hierarchy. 40 of 397 links at 0 Ma in Müller 2019.
+
+Worth distinguishing on screen because it is the one kind of Tree Link that
+does not mean what it appears to mean: the two plates it joins have something
+in between them that the map cannot show.
+
+## Locked Link
+
+A Tree Link whose two endpoints have **zero relative rotation** over the step —
+the plates move together, and the link records bookkeeping rather than motion.
+
+Interval-valued, not instantaneous: "no relative motion" is only answerable
+over a span of time, so a Locked Link is locked over a step, never locked "at"
+an age.
+
+The majority case, which is the reason it needs a name: 310 of 397 links at
+0 Ma in Müller 2019, 407 of 477 in Merdith 2021. A Plate Tree drawn without
+this distinction shows mostly plates that are not moving relative to anything.
+
+A property of one link, and so a rendering distinction. The analytic object
+built on the same underlying test is the Locked Group, which is **not** derived
+from Locked Links — see its entry for why the two must not be collapsed.
+
+_Avoid_ "static link" (collides with Static Polygon), "fixed link" ("fixed
+plate" already means one half of a rotation pair) and "rigid" (which in this
+project means non-deforming — an unrelated claim, and a false one for a
+Reconstruction Model with deforming networks).
+
+## Locked Group
+
+A maximal set of plates with no relative motion between any two of them over
+the step: everything the model moves as one mass.
+
+**Not the connected components of Locked Links**, and the difference is not
+academic. A Locked Link relates two plates that are *adjacent in the Plate
+Tree*; co-rotation relates any two plates at all. A plate can co-rotate with
+another several hops away while the plates in between move, so a Locked Group
+routinely contains plates that no Locked Link joins. Deriving groups from links
+under-merges — measured at 57 groups against 59 at 50 Ma in Müller 2019.
+
+Defined instead by equality of each plate's own rotation relative to the
+anchor over the step, which is what makes it a genuine partition: co-rotation
+is transitive, so the grouping is canonical and independent of the order plates
+are visited in. That transitivity is lost the moment "no relative motion" is
+relaxed to "slower than some threshold" — at which point there is no
+well-defined partition, only a procedure, and which procedure is chosen starts
+to matter.
+
+The count is the interesting quantity, and it is a supercontinent signal read
+straight out of a rotation file with no geometry involved — 89 Locked Groups
+among 399 plates at 0 Ma in Müller 2019, falling to 16 among 232 plates at
+200 Ma, with the two largest groups then holding 90 and 85 plates.
+
+A caution the measurement earned: a group count at a model's oldest age is
+untrustworthy if the step reaches past it. Rotations flatten beyond a model's
+range, so everything there appears locked — a forward step at `age_max`
+reported a single spurious 150-plate group where a backward step reports 78.
+
+Deliberately **not** named "Plate Assembly": assembly is what the group count
+measures, and naming the instrument after the result makes the finding
+unstatable without circularity.
+
+## Plate Circuit
+
+The full path from one plate to the anchor — every plate whose rotation is
+composed to place it. `301 → 102 → 101 → 714 → 715 → 701 → 0`.
+
+_Avoid_ using "chain" as a synonym. A chain is `gprm.utils.platetree`'s word
+for **one hop** of a circuit, patched intermediates included; conflating the
+two is how a circuit panel ends up displaying a single link.
+
+A Plate Circuit is not recoverable from Tree Links alone. Links stop at the
+Root Plate, because a Root Plate has no parent that carries geometry — the
+final hop from Root Plate to anchor has to be carried separately or the circuit
+silently ends one plate short.
+
+## Root Plate
+
+A plate carrying geometry that is closest to the anchor. The anchor itself
+normally carries none, so it is never a Root Plate.
+
+**Plural by nature.** Measured at `[701, 901]` at 100 Ma in both Müller 2019
+and Seton 2012 — the anchor's subtree splits above the level where geometry
+exists. Any UI or type that says "the root plate" is already wrong at 100 Ma.
+
+## Hierarchy Depth
+
+How many Tree Links separate a plate from its Root Plate — a **count**, not a
+length in km, unlike Cut Depth, Ocean Depth and Isosurface Depth Range. Always
+qualify it; the bare word "depth" in this glossary otherwise means a distance
+below the surface.
+
+Ranges further than expected: 2 to **37**, median 7, at 0 Ma in Müller 2019. A
+plate positioned through 37 composed rotations is a real property of a
+published model, and it is invisible on an ordinary reconstruction map.

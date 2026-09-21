@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Geode Paleobiology</title>
+    <link rel="stylesheet" href="/src/core/lilgui-theme.css" />
+    <style>
+      :root { color-scheme: dark; }
+      html, body {
+        margin: 0; height: 100%; overflow: hidden;
+        background: #0b0d10;
+        font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, sans-serif;
+        color: #d8dee4;
+      }
+      canvas { display: block; }
+
+      .status {
+        position: fixed; left: 12px; top: 12px;
+        padding: 6px 10px; border-radius: 4px;
+        background: rgba(0, 0, 0, 0.6); color: #cfd6dd;
+      }
+
+      /* Dataset caption and the counts that qualify everything else on screen.
+         Bottom-left, above the panels, deliberately always visible rather than
+         behind a disclosure: "11.6% of these points are never drawn" is not a
+         detail a reader should have to go looking for. */
+      .caption {
+        position: fixed; left: 12px; bottom: 12px; max-width: 46ch;
+        color: #93a0ac; font-size: 11px; line-height: 1.5;
+      }
+      .caption-counts { margin-top: 5px; color: #6d7883; }
+
+      .legend {
+        position: fixed; left: 12px; top: 54px;
+        min-width: 210px; max-width: 30ch;
+        padding: 9px 11px; border-radius: 5px;
+        background: rgba(10, 13, 17, 0.78);
+        border: 1px solid #262c33;
+      }
+      .legend-title {
+        color: #cfd6dd; font-size: 11px; letter-spacing: 0.03em;
+        text-transform: uppercase; margin-bottom: 6px;
+      }
+      .legend-row {
+        display: flex; align-items: center; gap: 7px;
+        font-size: 12px; color: #c3ccd5; padding: 1px 0;
+      }
+      .legend-swatch {
+        flex: none; width: 11px; height: 11px; border-radius: 2px;
+        border: 1px solid rgba(0, 0, 0, 0.6);
+      }
+      .legend-label { flex: 1 1 auto; }
+      .legend-count {
+        color: #8d99a5; font-variant-numeric: tabular-nums; font-size: 11px;
+      }
+      .legend-total {
+        margin-top: 5px; padding-top: 5px; border-top: 1px solid #262c33;
+        color: #8d99a5; font-size: 11px; display: block;
+      }
+      /* A Derived Grouping states its rule here. Never hidden: the difference
+         between a category read from the data and one inferred by a rule is
+         invisible in a colour. */
+      .legend-note {
+        margin-top: 7px; padding-top: 6px; border-top: 1px solid #262c33;
+        color: #a98f6a; font-size: 10.5px; line-height: 1.45;
+      }
+
+      .popup {
+        position: fixed; z-index: 30; pointer-events: none;
+        padding: 6px 9px; border-radius: 4px;
+        background: rgba(10, 12, 15, 0.95); border: 1px solid #3a4048;
+        color: #cfd6dd; font-size: 11px; line-height: 1.55;
+        font-variant-numeric: tabular-nums; white-space: nowrap;
+      }
+
+      /* The two linked panels, stacked on one shared age axis. */
+      .panels {
+        position: fixed; right: 12px; bottom: 12px;
+        width: min(560px, 46vw);
+        padding: 10px 12px 12px; border-radius: 5px;
+        background: rgba(10, 13, 17, 0.80);
+        border: 1px solid #262c33;
+      }
+      .panel-title {
+        color: #97a3ad; font-size: 11px; letter-spacing: 0.02em;
+        margin: 2px 0 4px;
+      }
+      .panel-title + .panel-host { margin-bottom: 8px; }
+      .panel-host { position: relative; }
+      .lat-canvas, .ts-canvas {
+        display: block; width: 100%; border-radius: 3px; cursor: crosshair;
+      }
+      .ts-modes { display: flex; gap: 4px; margin-top: 5px; }
+      .ts-modes button {
+        font: inherit; font-size: 10.5px; color: #8d99a5;
+        background: #171b21; border: 1px solid #2d343c; border-radius: 3px;
+        padding: 2px 8px; cursor: pointer;
+      }
+      .ts-modes button:hover { background: #1f242b; }
+      .ts-modes button.is-on { color: #d8dee4; border-color: #4a535e; background: #232931; }
+
+      #error {
+        position: fixed; left: 12px; top: 90px; max-width: 70ch;
+        padding: 10px; border-radius: 4px; white-space: pre-wrap;
+        background: #3a1416; color: #ffb4b4; z-index: 50;
+      }
+    </style>
+  </head>
+  <body>
+    <script type="module" src="/src/paleobio/main.ts"></script>
+  </body>
+</html>

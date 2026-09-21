@@ -1,9 +1,12 @@
 import type { Camera, PerspectiveCamera } from 'three';
 import { Vector3 } from 'three';
-import { PointLayer } from '../../vendor/deep-time-map/js/index.js';
+import { PointLayer } from '../../vendor/petrify/js/index.js';
 
 import { ThreeProjector } from './boundaries';
-import { referencePlateFlatPosition } from './projection';
+// FlatProjector lived here until BoundaryOverlay needed it too, which would
+// have made boundaries.ts <-> pointOverlay.ts circular -- see flatProjector.ts.
+import { FlatProjector } from './flatProjector';
+import { referencePlateProjectedPosition } from './projection';
 import { loadReconstructionManifest, reconstructionAssetUrl } from './reconstructions';
 import { resolveStaticPolygonReconstructionId } from './staticPolygons';
 import type { ProjectionMode } from './projection';
@@ -11,58 +14,8 @@ import type { ArchiveIndex } from './types';
 import type { Quaternion } from './rotation';
 import type { Rect } from './layout';
 
-type Projected = [number, number, number] | null;
-
 /**
- * Plate Carrée counterpart of `core/boundaries.ts`'s `ThreeProjector` --
- * turns a deep-time-map GEOGRAPHIC-frame unit vector into a screen position
- * on the flat map instead of the globe. `projection.ts`'s
- * `referencePlateFlatPosition()` already does the reanchor-then-reproject
- * work (see its own doc comment); this only adds the geographic xyz -> lon/
- * lat step deep-time-map's vector needs before that call, and the final
- * camera projection to screen pixels. No horizon/occlusion test -- a flat
- * map has no far side, unlike ThreeProjector's sphere.
- */
-class FlatProjector {
-  private p = new Vector3();
-  private w = 0;
-  private h = 0;
-  private qRef: Quaternion = [0, 0, 0, 1];
-
-  // Vector3.project() only needs a generic three.js Camera (it reads
-  // .matrixWorldInverse/.projectionMatrix, present on any camera type) --
-  // no OrthographicCamera-specific member is ever touched, so this stays
-  // untyped-narrower than that on purpose.
-  constructor(private camera: Camera) {}
-
-  setCamera(camera: Camera): void {
-    this.camera = camera;
-  }
-
-  setReferenceRotation(q: Quaternion): void {
-    this.qRef = q;
-  }
-
-  update(cssWidth: number, cssHeight: number): void {
-    this.w = cssWidth;
-    this.h = cssHeight;
-  }
-
-  project(v: ArrayLike<number>): Projected {
-    const lat = Math.asin(Math.max(-1, Math.min(1, v[2]))) * (180 / Math.PI);
-    const lon = Math.atan2(v[1], v[0]) * (180 / Math.PI);
-    const [x, y, z] = referencePlateFlatPosition(lon, lat, this.qRef);
-    this.p.set(x, y, z).project(this.camera);
-    return [
-      (this.p.x * 0.5 + 0.5) * this.w,
-      (-this.p.y * 0.5 + 0.5) * this.h,
-      1, // no occlusion on a flat map -- always "in front"
-    ];
-  }
-}
-
-/**
- * A symbolised point dataset (deep-time-map's `PointLayer`), drawn by the same
+ * A symbolised point dataset (petrify's `PointLayer`), drawn by the same
  * "2D canvas over the WebGL globe" technique `core/boundaries.ts`'s
  * `BoundaryOverlay` already established for Boundary Frames -- see that
  * module's own doc comment for the geographic-frame/render-frame conversion
@@ -76,7 +29,7 @@ class FlatProjector {
  * Particle (which stay Globe-only -- they need a raycast against a clicked
  * screen position, a harder problem this doesn't have): `draw()`/`pick()`
  * switch between `ThreeProjector` (Globe) and `FlatProjector` (Plate Carrée)
- * by `mode`, both fed the exact same deep-time-map geographic vector.
+ * by `mode`, both fed the exact same petrify geographic vector.
  */
 export class PointOverlay {
   readonly canvas: HTMLCanvasElement;
@@ -153,6 +106,7 @@ export class PointOverlay {
     this.mode = mode;
     this.globeProjector.setCamera(camera as PerspectiveCamera);
     this.flatProjector.setCamera(camera);
+    if (mode !== 'globe') this.flatProjector.setFlatMode(mode);
   }
 
   setReferenceRotation(q: Quaternion): void {
@@ -213,7 +167,7 @@ export class PointOverlay {
   /** Indices of the currently-fanned members, or null if no fan is open --
    *  lets a caller tell "pointer is still over one of THIS fan's members"
    *  apart from "pointer moved onto something else", the same distinction
-   *  deep-time-map's own hover.js reference implementation makes. */
+   *  petrify's own hover.js reference implementation makes. */
   get spiderfied(): number[] | null {
     return this.layer?.spiderfied ?? null;
   }
@@ -221,7 +175,7 @@ export class PointOverlay {
   /** How far the open fan reaches from its anchor, in px -- 0 if none is
    *  open. Lets a caller size a keep-alive/hysteresis radius to the fan
    *  actually open (a 2-member pair vs. a 20-member spiral), same as
-   *  deep-time-map's own hover.js reference implementation does. */
+   *  petrify's own hover.js reference implementation does. */
   spiderExtent(): number {
     return this.layer?.spiderExtent() ?? 0;
   }
