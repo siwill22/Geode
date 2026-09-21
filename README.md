@@ -1,42 +1,9 @@
 # Geode
 
-*Crack the Earth open and look at the structure inside.*
+*[Crack the Earth open and look at the structure inside.]*
 
-A shared three.js/Vite engine for browsing 3D Earth-science volumes on a
-reconstructed spherical globe. Six bespoke viewers are built directly on
-it, each with its own domain-specific UI:
-
-- **[the mantle viewer](viewer/index.html)** — static seismic tomography or a
-  mantle convection run scrubbed through 200 Myr, with reconstructable
-  coastlines and plate boundaries on the surface, and a user-drawn polygonal
-  cutaway whose walls and floor are textured with the model interpolated onto
-  the cut surface.
-- **[the paleoclimate viewer](viewer/climate.html)** — monthly-resolved
-  surface temperature, precipitation and other fields from two 540 Myr
-  climate simulations (Li et al. 2022, Pohl et al. 2022), a paleogeography
-  layer, wind glyphs/streaks, and a Query Point (Anchored or Plate-Frame) for
-  reading a cell's — or a moving piece of crust's — value across time. See
-  *The paleoclimate viewer* below.
-- **[the Valdes/BRIDGE viewer](viewer/valdes.html)** — the Valdes et al. 2021
-  BRIDGE simulation's own Atmosphere (monthly) and Ocean (20 depth levels,
-  annual) layers, kept separate from the main paleoclimate viewer since
-  their grids don't share a depth range (ADR-0008).
-- **[the Old Map viewer](viewer/oldmap.html)** — a plate reconstruction drawn
-  as an aged engraved chart: a graded coastal wash, nested offshore rings and
-  hachured mountain glyphs, all measured in true kilometres rather than
-  screen pixels so the engraving stays correct at any zoom (ADR-0037). See
-  `docs/plans/old-map-viewer.md`.
-- **[the paleobiology viewer](viewer/paleobio.html)** — Paleobiology Database
-  fossil occurrences through geological time, built around two case studies:
-  coral diversity and turnover across the Phanerozoic's mass extinctions, and
-  the Panama gateway's biotic interchange. Raw counts are shown next to their
-  own sampling proxy rather than statistically corrected (ADR-0035). See
-  `docs/plans/paleobiology-viewer.md`.
-- **[Theme Lab](viewer/themelab.html)** — a dev tool for the Theme system
-  every other viewer shares: map furniture (page, water, land, boundary
-  strokes) is themeable, but a Variable's own colour ramp never is, because
-  ramp polarity encodes real scientific meaning a theme must not touch
-  (ADR-0038).
+This repo contains a shared three.js/Vite engine for browsing 3D Earth-science volumes on a
+reconstructed spherical globe. 100% vibe-coded. Docs from here down are AI-generated....
 
 For a live index of which of these (and the generator's own generated sites)
 are actually deployed right now, see the
