@@ -3,7 +3,7 @@
 *Crack the Earth open and look at the structure inside.*
 
 A shared three.js/Vite engine for browsing 3D Earth-science volumes on a
-reconstructed spherical globe. Three bespoke viewers are built directly on
+reconstructed spherical globe. Six bespoke viewers are built directly on
 it, each with its own domain-specific UI:
 
 - **[the mantle viewer](viewer/index.html)** — static seismic tomography or a
@@ -21,6 +21,28 @@ it, each with its own domain-specific UI:
   BRIDGE simulation's own Atmosphere (monthly) and Ocean (20 depth levels,
   annual) layers, kept separate from the main paleoclimate viewer since
   their grids don't share a depth range (ADR-0008).
+- **[the Old Map viewer](viewer/oldmap.html)** — a plate reconstruction drawn
+  as an aged engraved chart: a graded coastal wash, nested offshore rings and
+  hachured mountain glyphs, all measured in true kilometres rather than
+  screen pixels so the engraving stays correct at any zoom (ADR-0037). See
+  `docs/plans/old-map-viewer.md`.
+- **[the paleobiology viewer](viewer/paleobio.html)** — Paleobiology Database
+  fossil occurrences through geological time, built around two case studies:
+  coral diversity and turnover across the Phanerozoic's mass extinctions, and
+  the Panama gateway's biotic interchange. Raw counts are shown next to their
+  own sampling proxy rather than statistically corrected (ADR-0035). See
+  `docs/plans/paleobiology-viewer.md`.
+- **[Theme Lab](viewer/themelab.html)** — a dev tool for the Theme system
+  every other viewer shares: map furniture (page, water, land, boundary
+  strokes) is themeable, but a Variable's own colour ramp never is, because
+  ramp polarity encodes real scientific meaning a theme must not touch
+  (ADR-0038).
+
+For a live index of which of these (and the generator's own generated sites)
+are actually deployed right now, see the
+[elstir hub](https://siwill22.github.io/elstir/) rather than this file —
+deployment status changes independently of the code and drifts out of date
+here fast.
 
 On top of the same engine, a **generator** (`generator/`, driven by the
 `geode-globe-viewer` Claude Skill) scaffolds standalone, deployable viewer
@@ -36,7 +58,7 @@ exercise them without running the generator first:
 | [`reconstruction.html`](viewer/reconstruction.html) | `single-reconstruction-globe` — one Reconstruction Model's own coastlines/boundaries, no numerical field | Müller et al. 2019 |
 | [`reconstructionGroup.html`](viewer/reconstructionGroup.html) | `reconstruction-group-globe` — several Reconstruction Models' geometry, switched via one dropdown | Müller 2019 vs Seton 2012 |
 
-All seven entry points (three bespoke, four generated) share the same
+All ten entry points (six bespoke, four generated) share the same
 engine (`viewer/src/core/`) — the archive/manifest data format,
 volume-texture sampling, coastline reconstruction, colour-ramp machinery,
 Multi-Globe tiling (ADR-0022), and Query Point (Anchored/Plate-Frame) are
@@ -62,6 +84,9 @@ npm install
 npm run dev   # http://localhost:5173                        mantle viewer
               # http://localhost:5173/climate.html            paleoclimate viewer
               # http://localhost:5173/valdes.html              Valdes/BRIDGE viewer
+              # http://localhost:5173/oldmap.html               Old Map viewer
+              # http://localhost:5173/paleobio.html              paleobiology viewer
+              # http://localhost:5173/themelab.html               Theme Lab
               # http://localhost:5173/globe.html                generated: single-model-globe
               # http://localhost:5173/groupGlobe.html            generated: model-group-globe
               # http://localhost:5173/reconstruction.html         generated: single-reconstruction-globe
@@ -322,8 +347,9 @@ An "+ Add globe" toolbar button tiles an arbitrary number of globes on one
 canvas, each independently choosing its own layer/variable/age/month/clip —
 originally ported from the mantle viewer's own multi-globe support
 (`tomography/main.ts`), since generalized into a genuinely shared
-`core/multiInstanceHost.ts` primitive (ADR-0022) all seven entry points
-build on, not a per-viewer reimplementation. One shared camera and
+`core/multiInstanceHost.ts` primitive (ADR-0022) most entry points build on
+(all but Valdes/BRIDGE, Old Map and paleobiology, which don't need it), not a
+per-viewer reimplementation. One shared camera and
 `OrbitControls` instance is the whole trick: rotation and zoom stay locked
 across every globe for free, because there is only ever one camera object,
 re-aimed at each tile's own viewport/scissor rect (`core/layout.ts`'s
@@ -744,6 +770,15 @@ npm run check:boundaries       # subduction polarity vs resolved plate polygons
 npm run check:render           # headless render of the visual criteria
 npm run check:query-point      # Anchored Point / Month Profile / Age Series arithmetic
 npm run check:static-polygons  # Plate-Frame Point assignment + trajectory
+npm run check:oldmap           # Old Map viewer: kilometre-true wash/ring/glyph scale
+npm run check:paleobio         # paleobiology viewer's headless render
+npm run check:themelab         # Theme Lab's headless render
+npm run check:themes           # theme colours land only on furniture, never the ramp
+npm run check:theme-roles      # every furniture role is set by every theme
+npm run check:projections      # globe vs Robinson vs flat, same criteria either way
+npm run check:flat-direction   # flat-map winding/orientation
+npm run check:robinson         # Robinson projection vs pygplates reference
+npm run check:storymaps        # shared StoryMaps globe primitives
 ```
 
 **Always run `check:boundaries` through the wrapper, never
@@ -825,9 +860,14 @@ because a CDN will not compress `application/octet-stream` for you. The JSON
 is deliberately left alone, since `application/json` *is* compressed on the
 wire.
 
-Deployed at **<https://siwill22.github.io/Geode/>**. The repo is private; a
-Pages *site* is public regardless, since access-controlled Pages is Enterprise
-Cloud only.
+Deployed at **<https://siwill22.github.io/Geode/>** on every push to `main`.
+The repo is private; a Pages *site* is public regardless, since
+access-controlled Pages is Enterprise Cloud only.
+
+That deploy carries whichever entry pages have reached `main` — not
+necessarily all ten. For the current live/not-yet-deployed status of every
+viewer in this repo and the wider StoryMaps family, check the
+[elstir hub](https://siwill22.github.io/elstir/) rather than this file.
 
 ### One-time setup
 
@@ -905,6 +945,9 @@ prep/prep_paleogeography.py      Scotese PaleoDEM -> paleogeography-scotese mode
 prep/prep_deformation.py         defamation pipeline run -> <id>-deformation / <id>-age-heatflux
 prep/prep_reconstruction.py      one gprm fetch_<model>() -> a Reconstruction Model's own coastlines/boundaries
 prep/prep_staticpolygons.py      static polygons for Plate-Frame Point, per Reconstruction Model
+prep/prep_oldmap.py               mountain-glyph positions for the Old Map viewer
+prep/prep_oldmap_volcanoes.py     volcano-glyph positions for the Old Map viewer
+prep/prep_pbdb.py                 Paleobiology Database occurrences for the paleobiology viewer
 prep/pack_deploy.mjs             archive/ -> archive-deploy/, for the deployed site
 archive/                         generated data, served statically, not tracked
 archive/reconstructions/<id>/    one Reconstruction Model's own manifest + assets (ADR-0021)
@@ -914,6 +957,9 @@ viewer/                          TypeScript + Vite + three.js
 viewer/index.html                the mantle viewer's entry page
 viewer/climate.html              the paleoclimate viewer's entry page
 viewer/valdes.html               the Valdes/BRIDGE viewer's entry page
+viewer/oldmap.html               the Old Map viewer's entry page
+viewer/paleobio.html             the paleobiology viewer's entry page
+viewer/themelab.html             Theme Lab's entry page
 viewer/globe.html                generated: single-model-globe
 viewer/groupGlobe.html           generated: model-group-globe
 viewer/reconstruction.html       generated: single-reconstruction-globe
@@ -922,6 +968,9 @@ viewer/src/core/                 shared engine: rendering, data loading, colour 
 viewer/src/tomography/           mantle viewer only
 viewer/src/climate/              paleoclimate viewer only
 viewer/src/valdes/               Valdes/BRIDGE viewer only
+viewer/src/oldmap/               Old Map viewer only
+viewer/src/paleobio/             paleobiology viewer only
+viewer/src/themelab/             Theme Lab only
 viewer/src/globe/                single-model-globe wrapper
 viewer/src/groupGlobe/           model-group-globe wrapper
 viewer/src/reconstruction/       single-reconstruction-globe wrapper
@@ -952,6 +1001,15 @@ rotation model, via Cao et al. 2018.
 
 **Valdes/BRIDGE viewer.** Simulation from Valdes, P.J. et al. 2021, *The
 BRIDGE HadCM3 family of climate models*.
+
+**Old Map viewer.** Coastal wash, offshore rings and hachured mountain
+glyphs after the reference notebook `~/GIT/degenerative_art/withMountains.ipynb`.
+Reconstruction geometry per the Reconstruction Model chosen in the viewer
+(ADR-0034: it follows the dataset, not one fixed model).
+
+**Paleobiology viewer.** Fossil occurrences from the Paleobiology Database
+(paleobiodb.org). Paleocoordinates recomputed against the viewer's own
+reconstruction rather than taken from PBDB directly.
 
 **Crustal deformation (`globe.html`/`groupGlobe.html`'s checked-in
 example).** Cao 2024 and Müller et al. 2019 reconstructions, run through the
