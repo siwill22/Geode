@@ -20,8 +20,8 @@ exercise them without running the generator first:
 
 | entry page | wrapper type | this repo's checked-in example |
 |---|---|---|
-| [`globe.html`](viewer/globe.html) | `single-model-globe` — one Model, no comparison controls | Cao 2024 crustal deformation |
-| [`groupGlobe.html`](viewer/groupGlobe.html) | `model-group-globe` — several Models from one comparison family, switched via dropdowns | Cao2024/Müller2019 × Deformation/Age & Heat Flux |
+| [`globe.html`](viewer/globe.html) | `single-model-globe` — one Model, no comparison controls | Cao 2024 |
+| [`groupGlobe.html`](viewer/groupGlobe.html) | `model-group-globe` — several Models from one comparison family, switched via dropdowns | Cao2024/Müller2019 |
 | [`reconstruction.html`](viewer/reconstruction.html) | `single-reconstruction-globe` — one Reconstruction Model's own coastlines/boundaries, no numerical field | Müller et al. 2019 |
 | [`reconstructionGroup.html`](viewer/reconstructionGroup.html) | `reconstruction-group-globe` — several Reconstruction Models' geometry, switched via one dropdown | Müller 2019 vs Seton 2012 |
 
@@ -533,15 +533,6 @@ information but keeps one grid shape across the archive. 12 MB per frame,
 | `bridge-valdes2021-monthly` | 360x181x13 | 109, 0-541 Ma | Valdes et al. 2021 BRIDGE atmosphere: T, P, MSLP, ICECONC, U, V, SST, SSS, OCU, OCV, ICEU, ICEV, STREAMFN, MLD, KOPPEN. |
 | `bridge-valdes2021-ocean-depth` | 360x181x20 | 109, 0-541 Ma | Same run's ocean fields at 20 depth levels, annual only: OTEMP, OSAL, OCURU, OCURV, OVEL. |
 
-**Crustal deformation** (`globe.html`/`groupGlobe.html`'s checked-in example):
-
-| id | grid | frames | notes |
-|---|---|---|---|
-| `cao2024-deformation` | 720x361x1 | 1001, 0-1000 Ma | 8 strain/style variables + thickness, from the `defamation` pipeline. |
-| `cao2024-age-heatflux` | 720x361x1 | 1, present day | Tectonothermal/subduction/composite age, subduction distance, heat flux (nominal/mean/range). |
-| `muller2019-deformation` | 720x361x1 | 241, 0-240 Ma | Same 9 variables, Müller 2019 reconstruction. |
-| `muller2019-age-heatflux` | 720x361x1 | 1, present day | Same 7 variables, Müller 2019 reconstruction. |
-
 **Fixtures** (`check:render` only — dropped from the deployed archive):
 
 | id | grid | notes |
@@ -555,9 +546,7 @@ the volume's layer axis carrying month + Annual) and `paleogeography-scotese`/
 the BRIDGE ocean-depth model (no month axis) are built by `prep/prep_climate.py`,
 `prep/prep_pohl.py`, `prep/prep_bridge.py` and `prep/prep_paleogeography.py`
 respectively — each script's own module docstring has its exact invocation.
-The two deformation models per Reconstruction Model come from
-`prep/prep_deformation.py`, converting a sibling `defamation` pipeline run
-(see `docs/plans/deformation-viewer.md`); Reconstruction Model coastlines/
+Reconstruction Model coastlines/
 boundaries/static-polygons themselves (Müller 2019, Seton 2012, Scotese) come
 from `prep/prep_reconstruction.py` and `prep/prep_staticpolygons.py` (ADR-0021,
 ADR-0025), one `gprm.datasets.Reconstructions.fetch_<model>()` call each so
@@ -884,11 +873,11 @@ site.
 
 Dataset *count* is cheap; what costs is **frames x variables x resolution**. A
 static tomography model is one frame-variable, ~6 MB packed. OPT1 is eleven, ~70
-MB; the deformation series (1001 Frames x 9 variables at 720x361) is the
-single biggest line item in the archive. Headroom is now **~164 MB**, not the
-dozen-more-series margin this section used to describe — a couple more
-deformation-scale series, or several dozen more static models, would spend
-it. Doubling any existing grid's resolution is 8x the bytes and would spend
+MB; a 1001-frame, 9-variable series at 720x361 is the single biggest line item
+in the archive. Headroom is now **~164 MB**, not the dozen-more-series margin
+this section used to describe — a couple more series at that scale, or
+several dozen more static models, would spend it. Doubling any existing
+grid's resolution is 8x the bytes and would spend
 it immediately. See [issue #9](https://github.com/siwill22/Geode/issues/9):
 this is the thing to act on before it becomes a hard blocker, not after.
 
@@ -909,7 +898,6 @@ prep/prep_climate.py             climate netCDF -> climate-540myr model
 prep/prep_pohl.py                Pohl et al. FOAM netCDFs -> climate-pohl2022 model
 prep/prep_bridge.py              Valdes/BRIDGE run -> bridge-valdes2021-* models
 prep/prep_paleogeography.py      Scotese PaleoDEM -> paleogeography-scotese model
-prep/prep_deformation.py         defamation pipeline run -> <id>-deformation / <id>-age-heatflux
 prep/prep_reconstruction.py      one gprm fetch_<model>() -> a Reconstruction Model's own coastlines/boundaries
 prep/prep_staticpolygons.py      static polygons for Plate-Frame Point, per Reconstruction Model
 prep/prep_oldmap.py               mountain-glyph positions for the Old Map viewer
@@ -977,11 +965,6 @@ Reconstruction geometry per the Reconstruction Model chosen in the viewer
 **Paleobiology viewer.** Fossil occurrences from the Paleobiology Database
 (paleobiodb.org). Paleocoordinates recomputed against the viewer's own
 reconstruction rather than taken from PBDB directly.
-
-**Crustal deformation (`globe.html`/`groupGlobe.html`'s checked-in
-example).** Cao 2024 and Müller et al. 2019 reconstructions, run through the
-`defamation` pipeline (a sibling project) to produce strain/style and
-tectonothermal age/heat-flux fields.
 
 **Reconstruction Models (`reconstruction.html`/`reconstructionGroup.html`'s
 checked-in example).** Müller, R.D., Zahirovic, S., Williams, S.E., et al.
