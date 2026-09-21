@@ -349,8 +349,8 @@ The `gh` CLI must be authenticated as the user who will own the new repo
      "site": { "repoName": "...", "title": "...", "description": "..." },
      "wrapperType": "model-group-globe",
      "datasets": [
-       { "modelId": "cao2024-deformation" }, { "modelId": "cao2024-age-heatflux" },
-       { "modelId": "muller2019-deformation" }, { "modelId": "muller2019-age-heatflux" }
+       { "modelId": "..." }, { "modelId": "..." },
+       { "modelId": "..." }, { "modelId": "..." }
      ],
      "ui": { "tools": ["legend", "age-slider", "no-data-toggle", "query-point"] },
      "dataHost": { "archiveBase": "https://siwill22.github.io/Geode/archive" }
