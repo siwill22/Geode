@@ -7,7 +7,7 @@ reconstructed spherical globe. 100% vibe-coded. Docs from here down are AI-gener
 
 For a live index of which of these (and the generator's own generated sites)
 are actually deployed right now, see the
-[elstir hub](https://siwill22.github.io/elstir/) rather than this file —
+[deconstructions hub](https://siwill22.github.io/elstir/) rather than this file —
 deployment status changes independently of the code and drifts out of date
 here fast.
 
