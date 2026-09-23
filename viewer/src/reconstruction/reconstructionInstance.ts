@@ -232,7 +232,10 @@ export class ReconstructionInstance {
     this.gapwapPath.setTime(this.view.age);
     this.sites.setTime(this.view.age);
     this.ui.setAge(this.view.age);
-    this.ui.setCredit(`${m.name} -- ${m.citation}`);
+    // The VGPs come from one dataset whichever model draws them, so credit
+    // it alongside the model's own citation.
+    this.ui.setCredit(`${m.name} -- ${m.citation}`
+      + (poleSet ? `\nVGPs: ${poleSet.dataset.citation}` : ''));
     this.ui.setStatus('');
 
     // Reconcile the layers just built (at Coastlines/etc.'s own default:

@@ -243,7 +243,10 @@ export class ReconstructionGroupInstance {
     this.poles.setTime(this.view.age);
     this.gapwapPath.setTime(this.view.age);
     this.sites.setTime(this.view.age);
-    this.ui.setCredit(`${manifest.name} -- ${manifest.citation}`);
+    // The VGPs come from one dataset whichever model draws them, so credit
+    // it alongside the model's own citation.
+    this.ui.setCredit(`${manifest.name} -- ${manifest.citation}`
+      + (poleSet ? `\nVGPs: ${poleSet.dataset.citation}` : ''));
     // refreshDisplay() moves the age slider to this.view.age too, not just
     // lil-gui's own controllers -- no separate setAge() call needed here.
     this.ui.refreshDisplay();

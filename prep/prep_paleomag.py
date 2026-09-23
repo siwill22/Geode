@@ -72,7 +72,7 @@ script only exports the vertices and their ages.
 Usage:
   conda run -n pygmt17 python prep/prep_paleomag.py \\
       --source prep/sources/paleomag/T2012_TC2017.gpml \\
-      --id torsvik-cocks-2017 --name "Torsvik & Cocks (2017)" \\
+      --id torsvik-cocks-2017 --name "Torsvik et al. (2012)" \\
       --models torsvikcocks2017 muller2019 seton2012 scotese
 """
 
@@ -87,9 +87,12 @@ PETRIFY_PY = Path(__file__).parent.parent / "viewer" / "vendor" / "petrify" / "p
 sys.path.insert(0, str(PETRIFY_PY))
 
 DEFAULT_SOURCE = Path(__file__).parent / "sources" / "paleomag" / "T2012_TC2017.gpml"
+# The VGPs themselves are Torsvik et al. (2012)'s compilation (the "T2012" in
+# the source file name), carried in Torsvik & Cocks (2017)'s plate framework
+# ("TC2017") -- cite the poles' own source, not the framework's.
 DEFAULT_CITATION = (
-    "Torsvik, T.H. & Cocks, L.R.M. (2017), Earth History and Palaeogeography, "
-    "Cambridge University Press"
+    "Torsvik, T.H., et al. (2012), Phanerozoic polar wander, palaeogeography "
+    "and dynamics, Earth-Science Reviews, 114, 325-368"
 )
 
 
@@ -137,7 +140,7 @@ def main():
                     help="a gpml:VirtualGeomagneticPole feature collection, in "
                          "gprm.utils.pmag.vgp_to_dataframe()'s expected schema")
     ap.add_argument("--id", default="torsvik-cocks-2017", help="pole-dataset catalog id")
-    ap.add_argument("--name", default="Torsvik & Cocks (2017)")
+    ap.add_argument("--name", default="Torsvik et al. (2012)")
     ap.add_argument("--citation", default=DEFAULT_CITATION)
     ap.add_argument("--models", nargs="+",
                     default=["torsvikcocks2017", "scotese", "merdith2021"],
