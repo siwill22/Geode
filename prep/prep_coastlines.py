@@ -345,8 +345,18 @@ def weld_long_edge_endpoints(rings, long_edge_deg=2.0, tol_km=5.0, max_cluster_k
     return out
 
 
-def export_geometry(coastline_files, out_path, spacing_deg):
-    """Write present-day polylines with plate id and valid time."""
+def export_geometry(coastline_files, out_path, spacing_deg, simplify_deg=0.0):
+    """Write present-day polylines with plate id and valid time.
+
+    `simplify_deg` > 0 simplifies every polygon ring to that tolerance while
+    preserving the topology between them -- shared borders simplified once for
+    both neighbours, no new crossings or side flips, no collapsed rings (see
+    topo_simplify.py). Off by default: it exists for sources digitised far
+    finer than a map can show, where vertex count, not detail, is what the
+    viewer pays for. Bare polylines are never simplified; they tile nothing,
+    so there is no topology to hold them to, and no source that needs it has
+    any.
+    """
     features = pygplates.FeatureCollection()
     for f in coastline_files:
         features.add(pygplates.FeatureCollection(str(f)))
@@ -384,6 +394,13 @@ def export_geometry(coastline_files, out_path, spacing_deg):
             entries.append((plate_id, appear, disappear, is_polygon, pts, ring_idx))
 
     welded_rings = weld_long_edge_endpoints(polygon_rings)
+    simplify_report = None
+    if simplify_deg > 0 and welded_rings:
+        # After the weld (which wants the ORIGINAL long edges to find) and
+        # before densifying (which must fill the simplified edges, not be
+        # simplified away again).
+        from topo_simplify import simplify_rings
+        welded_rings, simplify_report = simplify_rings(welded_rings, simplify_deg)
 
     lines = []
     plate_ids = set()
@@ -438,6 +455,12 @@ def export_geometry(coastline_files, out_path, spacing_deg):
     for plate_id, _, _, pts, _, _ in lines:
         n_lines, n_pts = line_counts.get(plate_id, (0, 0))
         line_counts[plate_id] = (n_lines + 1, n_pts + len(pts))
+
+    if simplify_report is not None:
+        # Kept beside the geometry it describes, so a published archive
+        # records how it was made rather than relying on the command line.
+        rep_path = out_path.with_name("simplify_report.json")
+        rep_path.write_text(json.dumps(simplify_report, indent=2))
 
     return sorted(plate_ids), line_counts
 
@@ -519,6 +542,9 @@ def main():
     ap.add_argument("--anchor", type=int, default=0)
     ap.add_argument("--fill-spacing-deg", type=float, default=2.0,
                     help="interior sample spacing for the land fill")
+    ap.add_argument("--simplify-deg", type=float, default=0.0,
+                    help="topology-preserving simplification tolerance in "
+                         "degrees (0 = off); see topo_simplify.py")
     ap.add_argument("--out", type=Path, default=Path("archive/coastlines"))
     args = ap.parse_args()
 
@@ -527,7 +553,8 @@ def main():
     print(f"rotations   {', '.join(f.name for f in args.rotations)}")
 
     plate_ids, line_counts = export_geometry(
-        args.coastlines, args.out / "geometry.bin", args.fill_spacing_deg
+        args.coastlines, args.out / "geometry.bin", args.fill_spacing_deg,
+        args.simplify_deg,
     )
     ages = np.arange(args.age_min, args.age_max + args.age_step / 2, args.age_step)
     export_rotations(

@@ -2,7 +2,10 @@ import { Mesh, ShaderMaterial, type BufferGeometry } from 'three';
 
 import { passthroughColor } from './material';
 import { LIGHT_DIR, R_SURFACE } from './constants';
-import { createSurfaceGeometry, isFlat, type ProjectionMode } from './projection';
+import { GEOGRAPHIC_GLSL } from './glsl/geographic';
+import {
+  createSurfaceGeometry, isFlat, PROJECTION_UNIFORM, type ProjectionMode,
+} from './projection';
 import { DEFAULT_THEME, resolveTheme, type ResolvedTheme } from './theme';
 
 /**
@@ -42,13 +45,27 @@ void main() {
  * the sun is, or the continents look pasted on. `uShadeStrength` drops to 0 on
  * a flat map, where every point has the same normal and shading would only
  * darken the whole plane by a constant.
+ *
+ * Robinson's own plane is the map's BOUNDING BOX (see createSurfaceGeometry's
+ * doc comment) -- its actual outline is a curve, so without this discard the
+ * ocean painted the box's corners too, a visibly rectangular backdrop behind
+ * a map that isn't one. Same test `material.ts`'s
+ * `createFlatBackdropMaterial()` already uses for paleobio's flat backdrop --
+ * `worldToGeographicRobinson`'s off-the-map sentinel, GEOGRAPHIC_GLSL's
+ * shared implementation, not a second copy of Robinson's own boundary maths.
+ * A no-op (branch never taken) under Globe/Plate Carrée, whose planes/sphere
+ * already match their map's true outline.
  */
 const FRAG = /* glsl */ `
+precision highp float;
+${GEOGRAPHIC_GLSL}
 uniform vec3 uColor;
 uniform vec3 uLightDir;
 uniform float uShadeStrength;
+uniform float uProjectionMode;
 varying vec3 vWorldPos;
 void main() {
+  if (uProjectionMode > 1.5 && robinsonOffMap(worldToGeographicRobinson(vWorldPos))) discard;
   vec3 n = normalize(vWorldPos);
   float ndl = dot(n, normalize(uLightDir)) * 0.5 + 0.5;
   float shade = mix(1.0, 0.5 + 0.5 * ndl * ndl, uShadeStrength);
@@ -70,6 +87,7 @@ export class OceanSurface {
         uColor: { value: passthroughColor(resolveTheme(DEFAULT_THEME).water) },
         uLightDir: { value: LIGHT_DIR.clone() },
         uShadeStrength: { value: isFlat(mode) ? 0 : 1 },
+        uProjectionMode: { value: PROJECTION_UNIFORM[mode] },
       },
     });
     this.mesh = new Mesh(this.buildGeometry(mode), this.material);
@@ -89,6 +107,7 @@ export class OceanSurface {
     this.mesh.geometry.dispose();
     this.mesh.geometry = this.buildGeometry(mode);
     this.material.uniforms.uShadeStrength.value = isFlat(mode) ? 0 : 1;
+    this.material.uniforms.uProjectionMode.value = PROJECTION_UNIFORM[mode];
   }
 
   applyTheme(theme: ResolvedTheme): void {

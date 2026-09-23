@@ -66,6 +66,9 @@ def main():
     ap.add_argument("--anchor", type=int, default=0)
     ap.add_argument("--fill-spacing-deg", type=float, default=2.0,
                     help="interior sample spacing for the land fill")
+    ap.add_argument("--simplify-deg", type=float, default=0.0,
+                    help="topology-preserving coastline simplification "
+                         "tolerance in degrees (0 = off); see topo_simplify.py")
     ap.add_argument("--out", type=Path, default=None,
                     help="default: archive/reconstructions/<id>/")
     ap.add_argument("--skip-boundaries", action="store_true",
@@ -106,7 +109,8 @@ def main():
           f"{'yes' if has_static_polygons else 'no (no static polygons in this model)'}")
 
     plate_ids, line_counts = export_geometry(
-        geometry_files, out / "coastlines" / "geometry.bin", args.fill_spacing_deg)
+        geometry_files, out / "coastlines" / "geometry.bin", args.fill_spacing_deg,
+        args.simplify_deg)
 
     has_plate_names = False
     if has_static_polygons:
@@ -152,6 +156,9 @@ def main():
             "age_max": float(args.age_max),
         },
     }
+    if args.simplify_deg > 0:
+        manifest["coastlines"]["simplify_deg"] = args.simplify_deg
+        manifest["coastlines"]["simplify_report"] = "coastlines/simplify_report.json"
     if has_boundaries:
         manifest["boundaries"] = "boundaries/boundaries.json"
     if has_static_polygons:

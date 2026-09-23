@@ -95,7 +95,12 @@ export function eastNorthAt(lon: number, lat: number): {
 }
 
 export function vec3ToLonLat(x: number, y: number, z: number): LonLat {
-  const r = Math.hypot(x, y, z);
+  // sqrt of the sum of squares rather than Math.hypot: hypot's overflow and
+  // underflow guarding costs several times a plain sqrt in V8, and every
+  // caller passes a vector already at or near unit length, nowhere near the
+  // exponent range that guarding exists for. Worth a fifth of the flat-mode
+  // coastline rebuild on Torsvik, where this runs ~300k times per frame.
+  const r = Math.sqrt(x * x + y * y + z * z);
   return {
     lat: Math.asin(Math.min(1, Math.max(-1, y / r))) / DEG,
     lon: Math.atan2(-z, x) / DEG,

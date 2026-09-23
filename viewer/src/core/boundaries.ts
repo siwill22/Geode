@@ -5,7 +5,9 @@ import { BoundarySeries, DEFAULT_STYLE } from '../../vendor/petrify/js/index.js'
 import { R_SURFACE } from './constants';
 import { maskAt } from './mask';
 import type { Rect } from './layout';
-import { conjugateQuaternion, rotateVector, type Quaternion } from './rotation';
+import {
+  conjugateQuaternion, rotateVector, toRenderFrameRotation, type Quaternion,
+} from './rotation';
 import { FlatProjector } from './flatProjector';
 import type { ResolvedTheme } from './theme';
 import type { ProjectionMode } from './projection';
@@ -313,7 +315,7 @@ export class BoundaryOverlay {
       this.flatProjector = this.flatProjector ?? new FlatProjector(camera);
       this.flatProjector.setCamera(camera);
       this.flatProjector.setFlatMode(mode);
-      this.flatProjector.setReferenceRotation(this.qRef);
+      this.flatProjector.setReferenceRotation(toRenderFrameRotation(this.qRef));
     }
   }
 
@@ -321,12 +323,14 @@ export class BoundaryOverlay {
     return this.mode === 'globe' || !this.flatProjector ? this.projector : this.flatProjector;
   }
 
-  /** Reference Plate rotation, in the GEOGRAPHIC frame -- see
-   *  ThreeProjector.setReferenceRotation()'s doc comment. */
+  /** `q` is GEOGRAPHIC-frame -- see ThreeProjector.setReferenceRotation()'s
+   *  doc comment. `flatProjector` needs the RENDER-frame equivalent instead
+   *  (same mismatch, same fix, as PointOverlay.setReferenceRotation() --
+   *  see its own doc comment for the numeric verification). */
   setReferenceRotation(q: Quaternion): void {
     this.qRef = q;
     this.projector.setReferenceRotation(q);
-    this.flatProjector?.setReferenceRotation(q);
+    this.flatProjector?.setReferenceRotation(toRenderFrameRotation(q));
   }
 
   /** Detach the overlay canvas. Called when a globe instance is removed. */

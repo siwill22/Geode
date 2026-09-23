@@ -55,6 +55,23 @@ const ALLOW = {
     '0xe6ffe9': 'DEFAULT_TRACK_RAMP, same',
     '0xffffff': 'particle head material seed',
   },
+  'mapOrientationControl.ts': {
+    '0x1b1f24': 'compass widget chrome -- panel/control furniture, which Themes deliberately do not govern (ADR-0038), same reasoning as timeSeriesPanel.ts',
+    '0x3a4048': 'compass widget chrome, same reasoning',
+    '0x5a636d': 'compass widget graticule ink, same reasoning',
+    '0xe8ecef': 'compass widget north-pole marker, same reasoning',
+    '0xf2a65a': 'compass widget south-pole marker, same reasoning',
+    '0x97a3ad': 'compass widget label text, same reasoning',
+  },
+  'paleomagPalette.ts': {
+    '0x4d8dff': 'GAPWaP path colour -- a single fixed accent for the modelled path, deliberately outside Theme roles for the same reason plateHue()\'s per-plate_id hues already are: a categorical/data encoding a small fixed Theme role set cannot express, not furniture',
+  },
+  'samplePopup.ts': {
+    '0x3a4048': 'popup panel chrome -- panel/control furniture, which Themes deliberately do not govern (ADR-0038), same reasoning as timeSeriesPanel.ts/mapOrientationControl.ts',
+    '0xcfd6dd': 'popup body text, same reasoning',
+    '0x8a929b': 'popup close button / citation text, same reasoning',
+    '0x9aa2ab': 'popup secondary (pole/site coordinate) text, same reasoning',
+  },
 };
 
 const LITERAL = /0x[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{6}\b/g;

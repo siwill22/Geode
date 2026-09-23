@@ -240,6 +240,30 @@ export interface ArchiveIndex {
    *  entries above. Absent for an archive with no exported Reconstruction
    *  Models. */
   reconstruction_models?: ReconstructionEntry[];
+  /** Paleomagnetic pole (VGP) datasets -- see
+   *  docs/plans/paleomagnetic-poles.md and ADR-0029. Each entry's
+   *  `reconstruction_models` map is keyed by Reconstruction Model id, giving
+   *  archive-root-relative paths (like this array's own sibling entries'
+   *  `path` field -- fetch as `${archiveBase}/${relPath}` directly, NOT
+   *  through `reconstructionAssetUrl`, which is model-manifest-relative).
+   *  Absent for an archive with no exported pole datasets. Dataset selection
+   *  (a picker between several) is moot with only one dataset today. */
+  paleomag_pole_sets?: PaleomagPoleSetEntry[];
+}
+
+/** One `ArchiveIndex.paleomag_pole_sets[]` entry -- see
+ *  docs/plans/paleomagnetic-poles.md and ADR-0029. */
+export interface PaleomagPoleSetEntry {
+  id: string;
+  name: string;
+  citation: string;
+  n_poles: number;
+  age_min: number;
+  age_max: number;
+  /** Reconstruction Model id -> exported files, archive-root-relative.
+   *  `path` (the modelled GAPWaP) is present only for whichever models
+   *  prep_paleomag.py's `--gapwap-models` targeted -- see that script. */
+  reconstruction_models: Record<string, { points: string; path?: string }>;
 }
 
 /** One `ArchiveIndex.reconstruction_models[]` entry -- see

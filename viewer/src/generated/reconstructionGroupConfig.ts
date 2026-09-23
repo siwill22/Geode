@@ -13,13 +13,16 @@ export interface ReconstructionGroupConfig {
 /**
  * The one file generator/scaffoldRepo.mjs overwrites for a
  * `reconstruction-group-globe` recipe (see groupConfig.ts's identical role
- * for `model-group-globe`). Checked in with the real Müller 2019 / Seton
- * 2012 comparison so this monorepo's own `npm run dev`/`typecheck` have
- * something concrete to boot reconstructionGroup/main.ts against without
- * running the generator first.
+ * for `model-group-globe`). Checked in with the Torsvik & Cocks 2017 /
+ * Scotese / Merdith 2021 comparison -- the three Reconstruction Models the
+ * Paleomagnetic poles toggle (docs/plans/paleomagnetic-poles.md) is exported
+ * for -- so this monorepo's own `npm run dev`/`typecheck` have something
+ * concrete to boot reconstructionGroup/main.ts against without running the
+ * generator first. Only Merdith 2021 has Boundary Frames (ADR-0019); the
+ * other two never will (no dynamic polygons in either source model).
  */
 export const RECONSTRUCTION_GROUP_CONFIG: ReconstructionGroupConfig = {
-  title: 'Reconstruction Comparison',
-  reconstructionIds: ['muller2019', 'seton2012'],
+  title: 'Paleomagnetic Poles',
+  reconstructionIds: ['torsvikcocks2017', 'scotese', 'merdith2021'],
   multiGlobe: { syncAge: false },
 };

@@ -76,10 +76,24 @@ from prep_coastlines import finite_or
 # future type defaulting to oceanic is the safer of the two failure modes.
 # Note Merdith2021 counts gpml:IslandArc (Tonga, Kermadec) as continental --
 # that is the model's call, not ours.
+# TorsvikCocks2017 checked the same way as Merdith2021, but landed on the
+# Scotese answer: its static-polygon file (CEED6_Static_polygons.shp, a merge
+# of CEED6_LAND.gpml + CEED6_MICROCONTINENTS.shp per the shapefile's own
+# constant FILE1/FILE2 fields) sums to 29.66% of the globe across all seven
+# GPGIM types present (PassiveContinentalBoundary, UnclassifiedFeature,
+# InferredPaleoBoundary, ContinentalFragment, ExtendedContinentalCrust,
+# MidOceanRidge, TransitionalCrust) -- matching present-day land fraction,
+# and matching CEED6_LAND.gpml + CEED6_TERRANES.shp + CEED6_MICROCONTINENTS.shp
+# (28.87% + 1.29% + 0.79%) measured independently from this model's own
+# continent_polygons_files. No oceanic-basin-sized polygon exists anywhere in
+# the file -- this is a paleogeographic continental-block compilation, not a
+# full-plate model with real ocean-floor static polygons, so every feature in
+# it is continental by construction, same as Scotese.
 CONTINENTAL_FEATURE_TYPES = {
     "Muller2019": {"gpml:ClosedContinentalBoundary"},
     "Seton2012": {"gpml:ContinentalFragment"},
     "Scotese": None,
+    "TorsvikCocks2017": None,
     "Merdith2021": {
         "gpml:ClosedContinentalBoundary", "gpml:UnclassifiedFeature",
         "gpml:Craton", "gpml:IslandArc", "gpml:Coastline",

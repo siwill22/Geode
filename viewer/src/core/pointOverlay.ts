@@ -10,9 +10,17 @@ import { referencePlateProjectedPosition } from './projection';
 import { loadReconstructionManifest, reconstructionAssetUrl } from './reconstructions';
 import { resolveStaticPolygonReconstructionId } from './staticPolygons';
 import type { ProjectionMode } from './projection';
-import type { ArchiveIndex } from './types';
-import type { Quaternion } from './rotation';
+import type { ArchiveIndex, PaleomagPoleSetEntry } from './types';
+import { toRenderFrameRotation, type Quaternion } from './rotation';
 import type { Rect } from './layout';
+
+/** petrify's generic points.json shape, kept structural/minimal rather than
+ *  modelled fully -- callers only ever need `points` (see `loadData()`/
+ *  `payload()`) and pass the rest straight back to `PointLayer` untouched. */
+export interface PointsPayload {
+  points: Array<Record<string, unknown>>;
+  [key: string]: unknown;
+}
 
 /**
  * A symbolised point dataset (petrify's `PointLayer`), drawn by the same
@@ -91,6 +99,25 @@ export class PointOverlay {
     this.layer = await PointLayer.load(url, options);
   }
 
+  /** Build the layer directly from an already-parsed points.json payload,
+   *  skipping `PointLayer.load()`'s own fetch -- for a caller building a
+   *  SECOND overlay (e.g. a Sample Site marker layer, see
+   *  `resolvePaleomagPoleSetFor()`'s callers) from the same underlying
+   *  dataset a sibling overlay already fetched via `load()`, typically with
+   *  some fields remapped into `lon`/`lat` first. See `payload()`, this
+   *  method's inverse. */
+  loadData(data: PointsPayload, options?: ConstructorParameters<typeof PointLayer>[1]): void {
+    this.layer = new PointLayer(data, options);
+  }
+
+  /** The full parsed points.json payload behind the currently loaded layer
+   *  -- `PointLayer`'s constructor stores it verbatim as `data`. Null before
+   *  `load()`/`loadData()` resolves. See `loadData()`'s own doc comment for
+   *  why a caller needs this rather than re-fetching. */
+  payload(): PointsPayload | null {
+    return this.layer?.data ?? null;
+  }
+
   setTime(age: number): void {
     this.layer?.setTime(age);
   }
@@ -109,9 +136,25 @@ export class PointOverlay {
     if (mode !== 'globe') this.flatProjector.setFlatMode(mode);
   }
 
+  /** `q` is GEOGRAPHIC-frame (petrify's native frame, matching
+   *  `referenceRotationAt`/`orientationQuaternion`'s own convention) -- the
+   *  same convention every caller of this method already uses (see
+   *  ClimateInstance's "PointOverlay works in the geographic frame" comment).
+   *  `globeProjector` (`ThreeProjector`) consumes it directly, since it
+   *  rotates petrify's own geographic vectors. `flatProjector`
+   *  (`FlatProjector`) reprojects through `core/projection.ts`'s
+   *  `referencePlateProjectedPosition`, which rotates a RENDER-frame vector
+   *  (`constants.ts`'s `lonLatToVec3`) -- feeding it the raw geographic
+   *  quaternion rotates about the wrong physical axis (verified numerically:
+   *  a 40 degree geographic-pole rotation came out shifted in LATITUDE, not
+   *  longitude, when applied unconverted). `toRenderFrameRotation()` is the
+   *  existing fix for exactly this mismatch (see rotation.ts's own doc
+   *  comment); this was the one caller of this method that hadn't applied it
+   *  yet, latent until a flat Projection and a non-identity rotation were
+   *  ever active here together. */
   setReferenceRotation(q: Quaternion): void {
     this.globeProjector.setReferenceRotation(q);
-    this.flatProjector.setReferenceRotation(q);
+    this.flatProjector.setReferenceRotation(toRenderFrameRotation(q));
   }
 
   /** What's at this canvas position, in the SAME tile-local pixel space
@@ -209,6 +252,27 @@ export class PointOverlay {
  * shape, and this is an unrelated dataset that just happens to share the same
  * Reconstruction Model.
  */
+/**
+ * Resolve a `paleomag_pole_sets[]` entry's pole-points/GAPWaP-path URLs for
+ * whichever Reconstruction Model this Manifest is, if this archive has that
+ * model exported -- null if the archive has no pole datasets, or none was
+ * exported for this specific model (ADR-0025's static-polygon limitation).
+ * `path` (the modelled GAPWaP) may be absent even when `points` is present --
+ * see prep_paleomag.py's `--gapwap-models`, a deliberate per-model staging
+ * decision, not a bug. Only the FIRST matching dataset is used: dataset
+ * selection is moot with just one (ADR-0029), the same simplification
+ * `loadPaleolithologyUrlFor` makes for its own single dataset.
+ */
+export function resolvePaleomagPoleSetFor(
+  archive: ArchiveIndex, manifest: { id: string },
+): { dataset: PaleomagPoleSetEntry; points: string; path: string | null } | null {
+  for (const dataset of archive.paleomag_pole_sets ?? []) {
+    const entry = dataset.reconstruction_models[manifest.id];
+    if (entry) return { dataset, points: entry.points, path: entry.path ?? null };
+  }
+  return null;
+}
+
 export async function loadPaleolithologyUrlFor(
   base: string, archive: ArchiveIndex, manifest: { type: string; reconstruction_model?: string },
 ): Promise<string | null> {

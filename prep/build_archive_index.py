@@ -152,6 +152,33 @@ def main():
     if reconstruction_models:
         index["reconstruction_models"] = reconstruction_models
 
+    # Paleomagnetic pole sets (VGPs) -- see docs/plans/paleomagnetic-poles.md
+    # and ADR-0029. Same scan-don't-hand-maintain shape as reconstruction_models
+    # above: prep_paleomag.py writes one dataset.json per dataset (id, name,
+    # citation, informational n_poles/age range) plus one points.json per
+    # Reconstruction Model it was actually assigned+exported against; this
+    # just cross-references the two rather than trusting either alone.
+    paleomag_pole_sets = []
+    for dataset_path in sorted(args.archive.glob("paleomag/*/dataset.json")):
+        ds = json.loads(dataset_path.read_text())
+        exported_for = {
+            model_id: paths for model_id, paths in ds.get("exported_for", {}).items()
+            if (args.archive / paths.get("points", "")).exists()
+        }
+        paleomag_pole_sets.append({
+            "id": ds["id"],
+            "name": ds["name"],
+            "citation": ds.get("citation", ""),
+            "n_poles": ds.get("n_poles"),
+            "age_min": ds.get("age_min"),
+            "age_max": ds.get("age_max"),
+            "reconstruction_models": exported_for,
+        })
+        print(f"  paleomag {ds['id']:20s} {ds['name']:24s} "
+              f"{ds.get('n_poles')} poles  exported for: {sorted(exported_for)}")
+    if paleomag_pole_sets:
+        index["paleomag_pole_sets"] = paleomag_pole_sets
+
     out = args.archive / "archive.json"
     out.write_text(json.dumps(index, indent=2))
     print(f"\nwrote {out}  ({len(models)} models)")

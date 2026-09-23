@@ -1,9 +1,17 @@
-import { Clock, Color, WebGLRenderer } from 'three';
+import { Clock, Color, WebGLRenderer, type Camera } from 'three';
 import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 import { DEFAULT_THEME, resolveTheme } from '../core/theme';
 import { loadArchive } from '../core/volume';
-import { createProjectionCamera, createProjectionControls, updateProjectionCameraAspect } from '../core/projection';
+import {
+  createProjectionCamera, createProjectionControls, updateProjectionCameraAspect,
+  isFlat, type ProjectionMode,
+} from '../core/projection';
+import { wireProjectionToggle } from '../core/projectionToggle';
+import { MapOrientationControl } from '../core/mapOrientationControl';
+import { wireMapOrientationDrag } from '../core/mapOrientationDrag';
+import { orientationQuaternion, type Quaternion } from '../core/rotation';
+import { showSamplePopup, hideSamplePopup } from '../core/samplePopup';
 import { MultiInstanceHost } from '../core/multiInstanceHost';
 import { wireMultiGlobeMenu } from '../core/multiGlobeMenu';
 import { ReconstructionGroupInstance, type ReconstructionGroupInstanceDeps } from './reconstructionGroupInstance';
@@ -16,7 +24,11 @@ document.title = RECONSTRUCTION_GROUP_CONFIG.title;
 // Several Reconstruction Models switched by dropdown -- see
 // reconstruction/main.ts for the single-model sibling. See globe/main.ts's
 // identical comment: one shared camera for every tile.
-const camera = createProjectionCamera('globe', innerWidth / innerHeight);
+// `camera`/`controls` are reassigned wholesale by setProjection() below, not
+// reconfigured in place -- see climate/main.ts's identical comment
+// (docs/adr/0003).
+let projectionMode: ProjectionMode = 'globe';
+let camera: Camera = createProjectionCamera(projectionMode, innerWidth / innerHeight);
 
 const renderer = new WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -27,7 +39,51 @@ renderer.setSize(innerWidth, innerHeight);
 renderer.setClearColor(new Color(resolveTheme(DEFAULT_THEME).page));
 document.body.appendChild(renderer.domElement);
 
-const controls: OrbitControls = createProjectionControls('globe', camera, renderer.domElement);
+let controls: OrbitControls = createProjectionControls(projectionMode, camera, renderer.domElement);
+
+/** Switch every globe on screen to `mode` at once -- see reconstruction/
+ *  main.ts's identical function (docs/adr/0003). */
+function setProjection(mode: ProjectionMode): void {
+  if (mode === projectionMode) return;
+  projectionMode = mode;
+
+  controls.dispose();
+  camera = createProjectionCamera(mode, innerWidth / innerHeight);
+  controls = createProjectionControls(mode, camera, renderer.domElement);
+  // See reconstruction/main.ts's identical comment: Map Orientation is
+  // dragged directly on the map, which would otherwise fight OrbitControls'
+  // own pan on the same element.
+  if (isFlat(mode)) controls.enablePan = false;
+
+  for (const inst of host.instances) inst.setProjection(mode, camera);
+  orientationControl.setVisible(isFlat(mode));
+}
+
+// --- Map Orientation -- see reconstruction/main.ts's identical section for
+// the full reasoning (CONTEXT.md's Map Orientation entry). ------------------
+const DEFAULT_ORIENTATION: Quaternion = orientationQuaternion(20, -30, 0);
+let qOrient: Quaternion = DEFAULT_ORIENTATION;
+
+function applyOrientation(q: Quaternion): void {
+  qOrient = q;
+  orientationControl.setOrientation(q);
+  for (const inst of host.instances) inst.setOrientation(q);
+}
+
+// The compass is a read-only indicator -- the drag itself happens on the
+// map, right below (see MapOrientationControl's own doc comment).
+const orientationControl = new MapOrientationControl(DEFAULT_ORIENTATION, applyOrientation);
+Object.assign(orientationControl.el.style, {
+  position: 'fixed', left: '12px', bottom: '12px', zIndex: '15',
+});
+orientationControl.setVisible(isFlat(projectionMode));
+document.body.appendChild(orientationControl.el);
+
+wireMapOrientationDrag(
+  renderer.domElement,
+  { getCamera: () => camera, getMode: () => projectionMode, getOrientation: () => qOrient },
+  applyOrientation,
+);
 
 // --- globe instances -- see globe/main.ts's identical comment ----------
 
@@ -45,6 +101,10 @@ function createInstance(): ReconstructionGroupInstance {
   return new ReconstructionGroupInstance(camera, deps, {
     onRemove: (self) => removeInstance(self),
     onAgeChange: (self) => broadcastAge(self),
+    onSelectSample: (self, record, citation) => {
+      if (record) showSamplePopup(record, citation, () => self.clearSelection());
+      else hideSamplePopup();
+    },
   });
 }
 
@@ -56,6 +116,10 @@ async function addInstance(): Promise<void> {
   const inst = createInstance();
   host.add(inst);
   await inst.boot();
+  // Reconcile to whatever Projection/Map Orientation is already ambient --
+  // see reconstruction/main.ts's identical comment.
+  inst.setProjection(projectionMode, camera);
+  inst.setOrientation(qOrient);
   broadcastAge(host.lastEditOrFocused('age')!);
 }
 
@@ -75,21 +139,49 @@ wireMultiGlobeMenu(
   },
 );
 
+wireProjectionToggle(
+  document.getElementById('projection-toggle'),
+  () => projectionMode,
+  (mode) => setProjection(mode),
+);
+
 addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
   updateProjectionCameraAspect(camera, innerWidth / innerHeight);
   host.relayout();
 });
 
-renderer.domElement.addEventListener('pointerdown', (ev) => {
+/** See reconstruction/main.ts's identical function. */
+function hitTestTile(clientX: number, clientY: number):
+{ inst: ReconstructionGroupInstance; localX: number; localY: number } | null {
   for (let i = 0; i < host.instances.length; i++) {
     const r = host.layoutRects[i];
-    if (r && ev.clientX >= r.x && ev.clientX < r.x + r.width
-      && ev.clientY >= r.y && ev.clientY < r.y + r.height) {
-      host.focused = host.instances[i];
-      break;
+    if (r && clientX >= r.x && clientX < r.x + r.width
+      && clientY >= r.y && clientY < r.y + r.height) {
+      return { inst: host.instances[i], localX: clientX - r.x, localY: clientY - r.y };
     }
   }
+  return null;
+}
+
+// See reconstruction/main.ts's identical section for the full click-vs-drag
+// reasoning.
+let pointerDownAt: { x: number; y: number } | null = null;
+
+renderer.domElement.addEventListener('pointerdown', (ev) => {
+  pointerDownAt = { x: ev.clientX, y: ev.clientY };
+  const hit = hitTestTile(ev.clientX, ev.clientY);
+  if (hit) host.focused = hit.inst;
+});
+
+renderer.domElement.addEventListener('pointerup', (ev) => {
+  const moved = pointerDownAt
+    ? Math.hypot(ev.clientX - pointerDownAt.x, ev.clientY - pointerDownAt.y)
+    : Infinity;
+  pointerDownAt = null;
+  if (moved > 5) return;
+  const hit = hitTestTile(ev.clientX, ev.clientY);
+  hit?.inst.selectSampleAt(hit.localX, hit.localY);
 });
 
 async function boot(): Promise<void> {
@@ -104,11 +196,15 @@ async function boot(): Promise<void> {
     return e;
   });
 
-  deps = { archiveBase: ARCHIVE, entries, title: RECONSTRUCTION_GROUP_CONFIG.title };
+  deps = {
+    archiveBase: ARCHIVE, archive, entries, title: RECONSTRUCTION_GROUP_CONFIG.title,
+  };
 
   const first = createInstance();
   host.add(first);
   await first.boot();
+  first.setProjection(projectionMode, camera);
+  first.setOrientation(qOrient);
 
   if (window.__reconstructionGroup) window.__reconstructionGroup.ready = true;
 }
@@ -163,6 +259,12 @@ window.__reconstructionGroup = {
     hasBoundaries: primary().manifest?.has_boundaries,
     globeCount: host.instances.length,
   }),
+  setProjection: (mode: ProjectionMode) => setProjection(mode),
+  getProjection: () => projectionMode,
+  setOrientation: (centerLon: number, centerLat: number, rollDeg = 0) => {
+    applyOrientation(orientationQuaternion(centerLon, centerLat, rollDeg));
+  },
+  resetOrientation: () => applyOrientation(DEFAULT_ORIENTATION),
 };
 
 const clock = new Clock();

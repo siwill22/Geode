@@ -7,7 +7,7 @@ import {
   DEG, R_SURFACE, eastNorthAt, lonLatToVec3, vec3ToLonLat,
 } from './constants';
 import {
-  ROBINSON_HALF_HEIGHT, ROBINSON_HALF_WIDTH, robinsonForward,
+  ROBINSON_HALF_HEIGHT, ROBINSON_HALF_WIDTH, robinsonForward, robinsonInverse,
 } from './robinson';
 import { rotateVector, type Quaternion } from './rotation';
 
@@ -95,6 +95,23 @@ export function lonLatToProjected(
   if (mode === 'robinson') return robinsonForward(lon, lat, z);
   if (mode === 'plateCarree') return lonLatToFlatVec3(lon, lat, z);
   return lonLatToVec3(lon, lat, R_SURFACE);
+}
+
+/** Inverse of `lonLatToProjected()` for a FLAT Projection only -- world (x,
+ *  y) -> (lon, lat) in DISPLAY space (i.e. whatever Map Orientation is
+ *  already applied, not unrotated back to true -- see CONTEXT.md's Map
+ *  Orientation entry). null outside the map (Robinson's boundary is a
+ *  curve; see `robinsonInverse()`'s own doc comment -- Plate Carrée is
+ *  onto everywhere, so it never returns null). Used by the click-and-drag-
+ *  the-map control, the flat-Projection counterpart of a Globe's own free
+ *  orbit: dragging needs to know which (lon, lat) is under the cursor,
+ *  the same way `lonLatToProjected` is needed to know where a given (lon,
+ *  lat) draws. */
+export function flatWorldToLonLat(
+  mode: ProjectionMode, x: number, y: number,
+): { lon: number; lat: number } | null {
+  if (mode === 'robinson') return robinsonInverse(x, y);
+  return { lon: x / (DEG * R_SURFACE), lat: y / (DEG * R_SURFACE) };
 }
 
 /** Half the drawn width of a flat map, in world units -- what an

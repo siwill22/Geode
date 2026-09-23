@@ -20,14 +20,38 @@
         padding: 6px 10px; border-radius: 4px;
         background: rgba(0, 0, 0, 0.6); color: #cfd6dd;
       }
-      .timeinfo {
+      /* Reconstruction Age, moved off the lil-gui panel and down to the
+         bottom of the screen -- same native-range-input pattern as
+         climate.html/valdes.html's own .bottom-bar/.age-slider-wrap (see
+         those files' own comments), just without their legend column since
+         this wrapper has no Variable/colour ramp to show one for. .credit
+         moved INTO this same grid row (column 3) rather than staying its
+         own independently-fixed element -- two unrelated fixed elements
+         both centred/right-aligned in the same screen band can overlap on a
+         narrow Multi-Globe tile; a single grid row can't, each column only
+         ever gets as wide as its own content. One instance per tile,
+         positioned by ReconstructionUI.applyRect(), same Rect-driven
+         technique as .status above. */
+      .bottom-bar {
         position: fixed;
-        padding: 6px 10px; border-radius: 4px;
-        background: rgba(0, 0, 0, 0.6); color: #9fb4c8;
-        font-variant-numeric: tabular-nums;
+        display: grid; grid-template-columns: 1fr auto 1fr;
+        align-items: flex-end; column-gap: 16px;
+        z-index: 10; pointer-events: none;
+      }
+      .bottom-bar > * { pointer-events: auto; }
+      .age-group { grid-column: 2; justify-self: center; }
+      .age-slider-wrap {
+        display: flex; flex-direction: column; align-items: center;
+        justify-content: center; gap: 4px;
+        padding: 8px 10px; border-radius: 4px;
+        background: rgba(0, 0, 0, 0.6);
+      }
+      .age-slider { width: 100%; }
+      .age-readout {
+        color: #9fb4c8; font-size: 11px; font-variant-numeric: tabular-nums;
       }
       .credit {
-        position: fixed;
+        grid-column: 3; justify-self: end;
         color: #5d6873; font-size: 11px; max-width: 40ch; text-align: right;
       }
       #error {
@@ -35,9 +59,26 @@
         padding: 10px; border-radius: 4px; white-space: pre-wrap;
         background: #3a1416; color: #ffb4b4;
       }
+      /* Global, not per-instance (Projection applies to every globe at
+         once -- docs/adr/0003), so this is one page-level button rather
+         than part of any tile's own lil-gui panel. Same round-button idiom
+         as climate.html's own #projection-toggle; wired by main.ts via
+         core/projectionToggle.ts's wireProjectionToggle(). Bottom-left, clear
+         of the Multi-Globe menu icon at the top-left and of the Map
+         Orientation widget beside it. */
+      #projection-toggle {
+        position: fixed; left: 64px; bottom: 12px; z-index: 15;
+        width: 40px; height: 40px; padding: 0;
+        display: flex; align-items: center; justify-content: center;
+        font: inherit; color: #d8dee4; background: #1b1f24;
+        border: 1px solid #3a4048; border-radius: 50%; cursor: pointer;
+      }
+      #projection-toggle:hover { background: #262b32; }
+      #projection-toggle svg { display: block; width: 22px; height: 22px; }
     </style>
   </head>
   <body>
+    <button id="projection-toggle" aria-label="Switch projection" title="Switch projection">&#9645;</button>
     <button id="globe-menu-toggle" aria-label="Multi-Globe options" title="Multi-Globe options" hidden>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="7" height="7" rx="1.2"/>

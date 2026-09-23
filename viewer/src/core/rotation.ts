@@ -128,3 +128,100 @@ export function toRenderFrameRotation(q: Quaternion): Quaternion {
     conjugateQuaternion(GEOGRAPHIC_TO_RENDER_FRAME),
   );
 }
+
+/** Unit quaternion for a rotation of `angleRad` about `axis` (need not be
+ *  normalised -- this normalises it). The primitive `orientationQuaternion`
+ *  below is built from. */
+export function quaternionFromAxisAngle(
+  axis: readonly [number, number, number], angleRad: number,
+): Quaternion {
+  const n = Math.hypot(axis[0], axis[1], axis[2]) || 1;
+  const s = Math.sin(angleRad / 2) / n;
+  return [axis[0] * s, axis[1] * s, axis[2] * s, Math.cos(angleRad / 2)];
+}
+
+/**
+ * Map Orientation's own rotation (see CONTEXT.md's Map Orientation entry):
+ * a GEOGRAPHIC-frame quaternion, independent of any RotationTable/plate id
+ * and unrelated to Reference Plate (ADR-0030), such that rotating the point
+ * `(centerLon, centerLat)` by it lands at `(0, 0)` -- i.e. at a flat map's
+ * own centre, once the rotated point is reprojected there. `rollDeg` spins
+ * the result about the resulting boresight (the geographic X axis, after
+ * centering) without moving `(centerLon, centerLat)` itself.
+ *
+ * Two axis rotations, composed in the same order as any other multi-step
+ * rotation here (rotate about Z to bring the point's longitude to 0, then
+ * about Y to bring its latitude to 0, then roll) -- verified numerically
+ * (not just derived) against geoVec()/geoLonLat()'s own convention before
+ * relying on it anywhere downstream: rotateVector(orientationQuaternion(lon0,
+ * lat0, 0), ...geoVec(lon0, lat0)) recovers (1, 0, 0) (i.e. lon 0, lat 0) to
+ * float precision, for any (lon0, lat0) and independent of rollDeg.
+ */
+export function orientationQuaternion(
+  centerLon: number, centerLat: number, rollDeg = 0,
+): Quaternion {
+  const DEG = Math.PI / 180;
+  const qLon = quaternionFromAxisAngle([0, 0, 1], -centerLon * DEG);
+  const qLat = quaternionFromAxisAngle([0, 1, 0], centerLat * DEG);
+  const qCenter = composeQuaternions(qLat, qLon);
+  const qRoll = quaternionFromAxisAngle([1, 0, 0], rollDeg * DEG);
+  return composeQuaternions(qRoll, qCenter);
+}
+
+/** (lon, lat) degrees -> unit vector in the GEOGRAPHIC frame (X to 0N/0E, Y
+ *  to 0N/90E, Z to the pole) -- the frame `orientationQuaternion`,
+ *  `referenceRotationAt` and every `RotationTable` quaternion act in. Paired
+ *  with `lonLatFromGeoVec()`; used wherever a (lon, lat) itself (not a
+ *  petrify vector already in this frame) needs to be carried through a
+ *  geographic-frame rotation -- e.g. `core/graticule.ts`'s flat rebuild. */
+export function geoVecFromLonLat(lon: number, lat: number): [number, number, number] {
+  const DEG = Math.PI / 180;
+  const la = lat * DEG;
+  const lo = lon * DEG;
+  const c = Math.cos(la);
+  return [c * Math.cos(lo), c * Math.sin(lo), Math.sin(la)];
+}
+
+/** Inverse of `geoVecFromLonLat()`. */
+export function lonLatFromGeoVec(v: readonly [number, number, number]): { lon: number; lat: number } {
+  const DEG = Math.PI / 180;
+  return {
+    lat: Math.asin(Math.max(-1, Math.min(1, v[2]))) / DEG,
+    lon: Math.atan2(v[1], v[0]) / DEG,
+  };
+}
+
+/** Rotate a (lon, lat) by a GEOGRAPHIC-frame quaternion and read the result
+ *  back off as (lon, lat) -- `geoVecFromLonLat`/`lonLatFromGeoVec` round
+ *  trip, `rotateVector` in between. */
+export function rotateLonLat(
+  lon: number, lat: number, q: Quaternion,
+): { lon: number; lat: number } {
+  return lonLatFromGeoVec(rotateVector(q, ...geoVecFromLonLat(lon, lat)));
+}
+
+/**
+ * The quaternion that rotates unit vector `a` to unit vector `b`, both in
+ * the SAME frame -- the "versor" of the linked Observable notebook's own
+ * drag technique (`versor.delta`), and the core of Map Orientation's
+ * click-and-drag-the-map control (see CONTEXT.md's Map Orientation entry):
+ * grabbing the point under the cursor and dragging it to a new position is
+ * exactly "rotate whatever was at `a` to now be at `b`".
+ *
+ * Standard axis = normalize(a x b), angle = acos(a . b); identity when `a`
+ * and `b` already coincide (guards the otherwise-degenerate zero-length
+ * cross product at the very start of a drag, where a === b exactly).
+ */
+export function deltaRotation(
+  a: readonly [number, number, number], b: readonly [number, number, number],
+): Quaternion {
+  const dot = Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]));
+  const axis: [number, number, number] = [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ];
+  const axisLen = Math.hypot(...axis);
+  if (axisLen < 1e-9) return [0, 0, 0, 1];
+  return quaternionFromAxisAngle(axis, Math.acos(dot));
+}
