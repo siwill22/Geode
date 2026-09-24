@@ -198,6 +198,7 @@ async function boot(): Promise<void> {
 
   deps = {
     archiveBase: ARCHIVE, archive, entries, title: RECONSTRUCTION_GROUP_CONFIG.title,
+    anchorPlates: RECONSTRUCTION_GROUP_CONFIG.anchorPlates,
   };
 
   const first = createInstance();

@@ -8,6 +8,13 @@ export interface ReconstructionGroupConfig {
    *  (see docs/adr/0020) -- no completeness rule to satisfy, any subset of
    *  the catalog's reconstruction_models is valid. */
   reconstructionIds: string[];
+  /** Reconstruction Model id -> anchor plate for this viewer; absent ids use
+   *  0. Every archive is exported at anchor 0, but plate 0 does not mean the
+   *  same frame in every model -- Torsvik & Cocks 2017's VGPs and GAPWaP
+   *  must be viewed anchored on its plate 1, not 0. The model's
+   *  rotations.json must include the anchor plate (prep_reconstruction.py
+   *  --extra-rotation-plates). */
+  anchorPlates?: Record<string, number>;
 }
 
 /**
@@ -24,5 +31,6 @@ export interface ReconstructionGroupConfig {
 export const RECONSTRUCTION_GROUP_CONFIG: ReconstructionGroupConfig = {
   title: 'Paleomagnetic Poles',
   reconstructionIds: ['torsvikcocks2017', 'scotese', 'merdith2021'],
+  anchorPlates: { torsvikcocks2017: 1 },
   multiGlobe: { syncAge: false },
 };

@@ -128,6 +128,24 @@ def build_gapwap_path(model, model_id, anchor_plate, reference_plate, age_step, 
             "plate_begin_age": None,
         }))
 
+    # The path's head: the node for the CURRENTLY displayed age, between the
+    # 10 Myr vertices. The vertex for path_time t, reconstructed to t, is
+    # R_ref(t) * R_ref(t)^-1 * R_anchor(t) * seed = R_anchor(t) * seed -- i.e.
+    # just the seed carried on `anchor_plate`. So one record fixed to that
+    # plate at the seed, live at every age ('since' from age_max) and last in
+    # the array (connectLive joins live points in array order, so it hangs
+    # off the youngest live vertex), lands exactly on the path at any t, with
+    # the ordinary rotations transport. In a paleomagnetic frame that is at or
+    # near the spin axis.
+    seed_feature = pygplates.Feature()
+    seed_feature.set_geometry(pygplates.PointOnSphere(-90.0, 0.0))
+    seed_feature.set_valid_time(pygplates.GeoTimeInstant.create_distant_past(),
+                                pygplates.GeoTimeInstant.create_distant_future())
+    records.append((seed_feature, {
+        "lon": 0.0, "lat": -90.0, "age": round(float(path_times[-1]), 4),
+        "plate_id": anchor_plate, "plate_begin_age": None, "head": True,
+    }))
+
     times = np.arange(0.0, age_max + age_step / 2, age_step)
     return build_points_fn(model, records, times, transport="rotations",
                            anchor_plate=0, model_name=model_id)

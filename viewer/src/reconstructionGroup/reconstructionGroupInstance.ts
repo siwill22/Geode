@@ -12,8 +12,12 @@ import {
 } from '../core/paleomagPalette';
 import { loadReconstructionManifest, reconstructionAssetPath, reconstructionAssetUrl } from '../core/reconstructions';
 import { isFlat, type ProjectionMode } from '../core/projection';
-import type { Quaternion } from '../core/rotation';
-import type { ArchiveIndex, ReconstructionEntry, ReconstructionManifest } from '../core/types';
+import {
+  composeQuaternions, referenceRotationAt, type Quaternion,
+} from '../core/rotation';
+import type {
+  ArchiveIndex, ReconstructionEntry, ReconstructionManifest, RotationTable,
+} from '../core/types';
 import type { Rect } from '../core/layout';
 import type { LandColorMode } from '../core/coastlines';
 import type { PaleomagSampleRecord } from '../core/paleomagPalette';
@@ -25,6 +29,9 @@ export interface ReconstructionGroupInstanceDeps {
   archive: ArchiveIndex;
   entries: ReconstructionEntry[];
   title: string;
+  /** Reconstruction Model id -> the plate this viewer anchors it on (see
+   *  ReconstructionGroupConfig.anchorPlates). Absent ids anchor on 0. */
+  anchorPlates?: Record<string, number>;
 }
 
 /** See globe/globeInstance.ts's GlobeInstanceHooks -- identical reasoning
@@ -89,6 +96,14 @@ export class ReconstructionGroupInstance {
    *  reconciled to the current ambient state at the end of that method. */
   private projectionMode: ProjectionMode = 'globe';
   private qOrient: Quaternion = [0, 0, 0, 1];
+
+  /** The current model's anchor plate (deps.anchorPlates, default 0) and the
+   *  rotation table to reanchor with. Every layer's data is exported at
+   *  anchor 0; anchoring on plate A instead is the same thing as composing
+   *  the inverse of A's own rotation on top (referenceRotationAt), so this
+   *  is the Reference Plate mechanism, fixed per model rather than chosen. */
+  private anchorPlateId = 0;
+  private rotationTable: RotationTable | null = null;
 
   readonly view: ReconstructionGroupViewState = {
     reconstruction: '', age: 0, showBoundaries: true, showPaleomagPoles: true, landColorMode: 'theme',
@@ -163,6 +178,9 @@ export class ReconstructionGroupInstance {
     // ocean at R_SURFACE now, and land beneath it would be inside the
     // sphere. Land colour comes from the Theme rather than a local grey.
     this.coastlines = new Coastlines(data.lines, data.table, this.maskTexture);
+    this.rotationTable = data.table;
+    this.anchorPlateId = this.deps.anchorPlates?.[id] ?? 0;
+    this.coastlines.setReferencePlate(this.anchorPlateId);
     this.coastlines.setMaskEnabled(false);
     this.coastlines.landVisible = true;
     this.scene.add(
@@ -298,7 +316,10 @@ export class ReconstructionGroupInstance {
    *  full reasoning -- Map Orientation must never reach boundaries/poles/
    *  gapwapPath's GLOBE projector, only their flat one. */
   private applyReferenceRotation(): void {
-    const q: Quaternion = isFlat(this.projectionMode) ? this.qOrient : [0, 0, 0, 1];
+    const qAnchor: Quaternion = this.rotationTable
+      ? referenceRotationAt(this.rotationTable, this.anchorPlateId, this.view.age)
+      : [0, 0, 0, 1];
+    const q = isFlat(this.projectionMode) ? composeQuaternions(this.qOrient, qAnchor) : qAnchor;
     this.boundaries.setReferenceRotation(q);
     this.poles.setReferenceRotation(q);
     this.gapwapPath.setReferenceRotation(q);
@@ -312,6 +333,8 @@ export class ReconstructionGroupInstance {
     this.poles.setTime(age);
     this.gapwapPath.setTime(age);
     this.sites.setTime(age);
+    // The anchor rotation is a function of age (identity only for plate 0).
+    if (this.anchorPlateId !== 0) this.applyReferenceRotation();
     this.ui.setAge(age);
     if (this.view.landColorMode === 'count') this.recomputeLandVgpCounts();
   }

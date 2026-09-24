@@ -69,6 +69,10 @@ def main():
     ap.add_argument("--simplify-deg", type=float, default=0.0,
                     help="topology-preserving coastline simplification "
                          "tolerance in degrees (0 = off); see topo_simplify.py")
+    ap.add_argument("--extra-rotation-plates", type=int, nargs="*", default=[],
+                    help="plate ids to add to rotations.json although no exported "
+                         "geometry sits on them -- e.g. a plate a viewer anchors "
+                         "on (reconstructionGroupConfig.ts anchorPlates)")
     ap.add_argument("--out", type=Path, default=None,
                     help="default: archive/reconstructions/<id>/")
     ap.add_argument("--skip-boundaries", action="store_true",
@@ -128,6 +132,7 @@ def main():
             m.static_polygon_files, out / "staticpolygons" / "plate_names.json")
         has_plate_names = plate_names is not None
 
+    plate_ids = sorted(set(plate_ids) | set(args.extra_rotation_plates))
     ages = np.arange(args.age_min, args.age_max + args.age_step / 2, args.age_step)
     export_rotations(rotation_files, plate_ids, ages, args.anchor,
                       out / "coastlines" / "rotations.json", line_counts)
