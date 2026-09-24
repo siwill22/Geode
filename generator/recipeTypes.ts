@@ -68,6 +68,11 @@ export interface ViewerRecipe {
    * Model wrapper types -- see `datasets`.
    */
   reconstructionIds?: string[];
+  /** reconstruction-group-globe only: Reconstruction Model id -> the plate
+   *  the viewer anchors that model on (default 0). The model's
+   *  rotations.json must include that plate (prep_reconstruction.py
+   *  --extra-rotation-plates). */
+  anchorPlates?: Record<string, number>;
   /** Only meaningful for 'single-model-globe'/'model-group-globe' -- the
    *  two reconstruction-only wrapper types have no configurable tool menu
    *  (Reconstruction Age is always shown; a Boundary Frame toggle appears

@@ -331,6 +331,12 @@ export async function validateRecipe(recipe, source = recipe?.dataHost?.archiveB
       errors.push('reconstructionIds contains duplicates');
     }
     const entries = resolveReconstructionEntries(archive, recipe.reconstructionIds, errors);
+    // Optional per-model anchor plate (reconstructionGroupConfig.ts's
+    // anchorPlates): only for models this recipe actually offers.
+    for (const [id, plate] of Object.entries(recipe.anchorPlates ?? {})) {
+      if (!unique.has(id)) errors.push(`anchorPlates names '${id}', which is not in reconstructionIds`);
+      if (!Number.isInteger(plate) || plate < 0) errors.push(`anchorPlates['${id}'] must be a non-negative integer plate id`);
+    }
     if (errors.length > 0) return { ok: false, errors };
 
     if (recipe.wrapperType === 'single-reconstruction-globe' && entries.length !== 1) {
