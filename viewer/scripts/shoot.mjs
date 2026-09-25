@@ -7,6 +7,14 @@
  *
  *   node scripts/shoot.mjs <outdir>
  *
+ * SHOOT_URL points it at another server (default http://localhost:5173/).
+ * Prefer a production preview build (`npm run build && npx vite preview`):
+ * the dev server can HMR-reload mid-run and kill the harness at a random step.
+ * SHOOT_CHROMIUM uses an existing Chromium binary instead of Playwright's
+ * own download, for environments that pre-provision a browser.
+ * SHOOT_GL_ARGS replaces the default software-GL flags (SwiftShader, so runs
+ * are reproducible on a machine with no GPU), e.g. SHOOT_GL_ARGS=--use-angle=metal
+ * on a Mac to render on the real GPU. The renderer in use is printed first.
  * SHOOT_TIMEOUT_MS raises Playwright's per-action timeout (default 30000) for
  * a slow machine -- a software-GL VM can take longer than that per screenshot.
  * An error part-way through still prints the pass/fail summary of every check
@@ -16,11 +24,14 @@ import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
 
 const OUT = process.argv[2] ?? 'shots';
-const URL = 'http://localhost:5173/';
+const URL = process.env.SHOOT_URL ?? 'http://localhost:5173/';
 mkdirSync(OUT, { recursive: true });
 
 const browser = await chromium.launch({
-  args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
+  executablePath: process.env.SHOOT_CHROMIUM || undefined,
+  args: process.env.SHOOT_GL_ARGS !== undefined
+    ? process.env.SHOOT_GL_ARGS.split(/\s+/).filter(Boolean)
+    : ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
 });
 const page = await browser.newPage({ viewport: { width: 1100, height: 850 } });
 
@@ -61,6 +72,14 @@ if (missingFixtures.length) {
 }
 
 await page.goto(URL, { waitUntil: 'load' });
+
+// Which GL actually renders: some GPU-sensitive checks behave differently
+// under a software rasteriser, so every report should say which it was.
+console.log('renderer:', await page.evaluate(() => {
+  const gl = document.createElement('canvas').getContext('webgl2');
+  const ext = gl?.getExtension('WEBGL_debug_renderer_info');
+  return ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : 'unknown';
+}));
 
 // Wait for the app to finish its initial loads.
 await page.waitForFunction(() => window.__geode?.ready === true, { timeout: 120000 });
@@ -311,9 +330,24 @@ await apply('setPolygon', {
 });
 await apply('setCamera', { lon: 0, lat: 0, dist: 2.6 });
 
+// Both probes below find the isosurface by colour (blue minus red), and which
+// slot is painted blue depends on the variable's polarity: for a velocity-like
+// variable (high_means 'fast') the LOW-value "cold" slot is red and the "hot"
+// slot blue, since a fast anomaly is a cold one (isosurface.ts setPolarity).
+// fixture-ramp is velocity-like. Read that from its manifest rather than
+// assume it, so the probes follow the rendering instead of silently finding
+// nothing -- which is what they did from the polarity fix until this change.
+const rampManifest = await (await fetch(`${URL}archive/models/fixture-ramp/manifest.json`)).json();
+const blueSlot = rampManifest.variables[0].high_means === 'fast' ? 'hot' : 'cold';
+function blueIso(V) {
+  return blueSlot === 'hot'
+    ? { coldEnabled: false, hotEnabled: true, hotValue: V }
+    : { coldEnabled: true, hotEnabled: false, coldValue: V };
+}
+
 async function flipDepthKm(V) {
   await call('setIsosurface', {
-    coldEnabled: true, hotEnabled: false, coldValue: V,
+    ...blueIso(V),
     depthMinKm: 0, depthMaxKm: 2840, steps: 96,
   });
   let lo = 100;    // floor shallow -> floor hides the isosurface
@@ -350,19 +384,22 @@ check('isosurface depth mapping is to scale',
 
 // 18. The isosurface must sort against the rest of the scene by the depth of
 // its HIT, not of its proxy sphere. Both directions, because only writing
-// gl_FragDepth at all gets one of them right by accident.
+// gl_FragDepth at all gets one of them right by accident. Probed with the
+// floor in its debug colour (probeIsoAboveFloor), because the deep end of
+// the ramp's own colormap is blue too: a plain screen probe passes on the
+// floor alone, with no isosurface drawn at all.
 await call('setIsosurface', {
-  coldEnabled: true, hotEnabled: false, coldValue: 0,
+  ...blueIso(0),
   depthMinKm: 0, depthMaxKm: 2840, steps: 96,
 });
 await apply('setCutDepth', 500);
-const above = await call('probeScreen');
+const above = await call('probeIsoAboveFloor');
 await apply('setCutDepth', 2890);
-const below = await call('probeScreen');
-const isBlue = (p) => p.rgb[2] - p.rgb[0] > 30;
+const below = await call('probeIsoAboveFloor');
 check('isosurface sorts by its hit depth, not its proxy',
-  !isBlue(above) && isBlue(below),
-  `floor at 500 km -> ${above.rgb}, floor at 2832 km -> ${below.rgb}`);
+  above.chromatic < above.boxPixels / 10 && below.chromatic > below.boxPixels / 2,
+  `iso px in box: floor at 500 km -> ${above.chromatic}/${above.boxPixels}, `
+  + `floor at 2890 km -> ${below.chromatic}/${below.boxPixels}`);
 
 // 19. Two surfaces at once, on a field that is symmetric by construction: the
 // checkerboard is +-2 everywhere, so isosurfaces at -1 and +1 must both appear
@@ -472,22 +509,31 @@ await call('setPolygon', {
   verts: [[-25, 25], [25, 25], [25, -25], [-25, -25]], depthKm: 1500,
 });
 
+// Counted as the DIFFERENCE between the frame with the overlay shown and the
+// same frame with it hidden: the scene has other near-white and yellow pixels
+// of its own (coastline outlines, polar ice in the topography, boundaries),
+// and matching colour alone counted those as overlay on the far side.
 async function overlayPixels() {
-  return page.evaluate(() => {
+  const grab = () => page.evaluate(() => {
     const c = document.querySelector('canvas');
     const g = document.createElement('canvas');
     g.width = c.width; g.height = c.height;
     const ctx = g.getContext('2d');
     ctx.drawImage(c, 0, 0);
-    const d = ctx.getImageData(0, 0, c.width, c.height).data;
-    let outline = 0, handles = 0;
-    for (let i = 0; i < d.length; i += 4) {
-      const r = d[i], gg = d[i + 1], bb = d[i + 2];
-      if (r > 200 && gg > 150 && gg < 225 && bb < 110) outline++;   // 0xffcc33
-      if (r > 245 && gg > 245 && bb > 245) handles++;               // 0xffffff
-    }
-    return { outline, handles };
+    return Array.from(ctx.getImageData(0, 0, c.width, c.height).data);
   });
+  const shown = await grab();
+  await apply('setVisible', { outline: false, handles: false });
+  const hidden = await grab();
+  await apply('setVisible', { outline: true, handles: true });
+  let outline = 0, handles = 0;
+  for (let i = 0; i < shown.length; i += 4) {
+    if (shown[i] === hidden[i] && shown[i + 1] === hidden[i + 1] && shown[i + 2] === hidden[i + 2]) continue;
+    const r = shown[i], gg = shown[i + 1], bb = shown[i + 2];
+    if (r > 200 && gg > 150 && gg < 225 && bb < 110) outline++;   // 0xffcc33
+    if (r > 245 && gg > 245 && bb > 245) handles++;               // 0xffffff
+  }
+  return { outline, handles };
 }
 
 const seen = {};
@@ -495,8 +541,11 @@ for (const [where, lon] of [['near', 0], ['limb', 90], ['far', 180]]) {
   await apply('setCamera', { lon, lat: 0, dist: 3.0 });
   seen[where] = await overlayPixels();
 }
+// Four 8 px point handles (cutaway.ts) cover at most 4 x 64 = 256 px, less
+// where the outline crosses them; require half of that. (The old > 200 was
+// only ever met with coastline-white pixels mixed into the count.)
 check('polygon overlay is drawn when it faces the camera',
-  seen.near.outline > 200 && seen.near.handles > 200,
+  seen.near.outline > 200 && seen.near.handles > (4 * 8 * 8) / 2,
   `near ${seen.near.outline} outline, ${seen.near.handles} handle px`);
 check('polygon overlay is hidden behind the globe',
   seen.far.outline === 0 && seen.far.handles === 0,

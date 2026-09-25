@@ -793,6 +793,8 @@ window.__geode = {
     if ('surface' in o) inst.surface.mesh.visible = o.surface;
     if ('isosurface' in o) inst.isosurface.mesh.visible = o.isosurface;
     if ('depthSlice' in o) inst.depthSlice.mesh.visible = o.depthSlice;
+    if ('outline' in o) inst.cutaway.outline.visible = o.outline;
+    if ('handles' in o) inst.cutaway.handles.visible = o.handles;
   },
   /** Reset to no cutaway at all -- setPolygon({verts:[]}) does NOT do this,
    *  since closePolygon() returns early below 3 vertices and never rebuilds.
