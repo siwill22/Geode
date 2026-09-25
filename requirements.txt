@@ -14,8 +14,9 @@
 # Claude Cowork VM, locked-down machines). environment.yml builds the same stack with conda,
 # for anyone who prefers it. Keep the two lists in step.
 #
-# GMT is needed by prep_model.py and prep_coastlines.py; the rest of the pipeline, and all of
-# gprm's data fetching and analysis, runs without it.
+# GMT (through pygmt) is imported only by prep_paleogeography.py and prep_pbdb.py; the rest
+# of the pipeline -- including prep_model.py and prep_coastlines.py -- and all of gprm's data
+# fetching and analysis run without it.
 
 numpy
 scipy

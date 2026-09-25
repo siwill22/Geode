@@ -16,10 +16,11 @@ catalog/tooling has visibly moved on since this was written.
 
 **Scope**: v1.9 only composes from the existing, pre-vetted data catalog
 (`archive/archive.json`, served live from
-`https://siwill22.github.io/Geode/archive`). It never runs the raw
-`prep/*.py` pipeline or invents a colormap/clip-range/coastline pairing —
-those require scientist judgment (see `prep/prep_colormaps.py`'s own
-documented history of getting this wrong) and stay a human-run process.
+`https://siwill22.github.io/Geode/archive`). It never imports data itself
+or invents a colormap/clip-range/coastline pairing. Importing a Model is a
+separate step with no manual parts (docs/adr/0056): its judgement calls are
+asked, recorded in an Ingest Config and shown on a Verification Card for
+approval, producing an Archive this Skill then consumes.
 
 **Vocabulary** (see `CONTEXT.md` — this Skill uses its terms precisely, not
 loosely): a **Model** is one named field from one published source (a

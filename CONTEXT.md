@@ -66,6 +66,62 @@ matter how much more prep work runs, while Müller 2019 and Seton et al.
 `docs/adr/0019` for the full reasoning and the rule this implies for any
 catalog metadata or UI that lists Reconstruction Models.
 
+## Archive
+
+The complete set of prepared data one viewer reads from a single base
+location: its catalog index, each Model's manifest and Frames, and every
+supporting layer (coastlines, boundaries, colour ramps, surface). An Archive
+is **standalone**: it never refers to another Archive, so anything it needs
+from elsewhere — a Reconstruction Model's coastlines, say — is copied in,
+with its provenance. The main Geode Archive is one Archive among many, not a
+shared base that others extend.
+_Avoid_: dataset (a source's published files, before prep), catalog (the
+index of one Archive's contents), data release (one published version of
+an Archive)
+
+## Ingest Config
+
+The complete, written-down answer to "how was this Model made": where its
+source data comes from, how that data is read, and every judgement call
+made about it (polarity, units, clip, depth sampling, citation, which
+Reconstruction Model it pairs with). Travels inside the Archive beside the
+Model it produced; rebuilding the Model needs this and nothing else.
+_Avoid_: recipe (a Generated Site's recipe, a different thing), prep
+flags
+
+## Verification Card
+
+The evidence that an imported Model says what its source says: the source
+and the Archive's stored copy side by side at chosen depths, their
+difference, spot values at named places, and the Ingest Config's
+judgement calls stated in words. Produced with every import, kept in the
+Archive, and seen by a person before the Archive is published.
+_Avoid_: QA report, validation output
+
+## View Preset
+
+A named way of looking at whichever Model is active — isosurfaces shown,
+a cutaway opened, a depth slice, a sinking-slab view — independent of which
+Model that is. Any threshold it needs is taken relative to that Model's own
+recorded ranges, never stated as a number of its own; its geography (where
+a cut is, how deep) is its own.
+_Avoid_: preset (unqualified, when the distinction matters)
+
+## Comparison Preset
+
+A named starting point that needs particular Models together, such as
+several tomography Models cut open over the same region side by side.
+Offered only where every Model it needs is present.
+
+## Generated Site
+
+A viewer repository produced entirely by the generator from one recipe,
+which it carries alongside a record of the Geode version it was built from.
+The recipe is its only source: a Generated Site is updated by regenerating
+it from that recipe at a newer Geode, never by editing its files.
+_Avoid_: generated repo, standalone viewer (a hand-built viewer repo, like
+the GeodeViewers family, is not a Generated Site)
+
 ## Frame
 
 One volume within a Model, tagged with the age it represents. A Tomography
