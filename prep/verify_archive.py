@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Check that an archive contains every file its own index claims.
+"""Check that an archive contains every file its own index claims, and that
+its declared format (docs/ARCHIVE_FORMAT.md) is one this checker knows.
 
     python prep/verify_archive.py [--archive archive]
 
@@ -38,6 +39,9 @@ from pathlib import Path
 # A string value is treated as a file reference if it ends in one of these
 # and looks like a relative path, not prose or a URL.
 FILE_SUFFIXES = (".json", ".bin", ".gz", ".jpg", ".png", ".geojson")
+
+# docs/ARCHIVE_FORMAT.md
+SUPPORTED_FORMAT = 1
 
 # Loaded by the viewers at a fixed path, not named in archive.json.
 CONVENTIONAL_FILES = ["surface/topography.jpg"]
@@ -136,6 +140,11 @@ def main():
     if not index_path.is_file():
         sys.exit(f"{index_path}: not found -- nothing to verify")
     index = read_json(index_path)
+    fmt = index.get("format", 1)
+    if fmt > SUPPORTED_FORMAT:
+        sys.exit(f"{index_path} is archive format {fmt}; this checker knows up to "
+                 f"{SUPPORTED_FORMAT} (docs/ARCHIVE_FORMAT.md)")
+    print(f"  archive format {fmt}" + ("" if "format" in index else " (not stated; format 1 assumed)"))
     report = Report()
 
     for entry in index.get("models", []):

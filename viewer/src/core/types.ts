@@ -213,6 +213,9 @@ export interface ArchiveIndex {
      *  doc comment. */
     comparison_role?: string;
   }>;
+  /** docs/ARCHIVE_FORMAT.md; absent means 1. core/volume.ts's loadArchive
+   *  refuses a format newer than its own ARCHIVE_FORMAT. */
+  format?: number;
   colormaps: string;
   /** Muller et al., used by the tomography viewer (index.html). */
   coastlines: CoastlineSet;

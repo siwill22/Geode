@@ -7,10 +7,21 @@ import type {
 } from './types';
 import type { LonLat } from './constants';
 
+/** The newest Archive format this engine reads -- docs/ARCHIVE_FORMAT.md. */
+export const ARCHIVE_FORMAT = 1;
+
 export async function loadArchive(base: string): Promise<ArchiveIndex> {
   const r = await fetch(`${base}/archive.json`);
   if (!r.ok) throw new Error(`archive.json: ${r.status}`);
-  return r.json();
+  const index: ArchiveIndex = await r.json();
+  // Refuse rather than render the three quarters of a newer Archive this
+  // engine happens to understand (same rule as ADR-0049's recipes).
+  const format = index.format ?? 1;
+  if (format > ARCHIVE_FORMAT) {
+    throw new Error(`archive.json is Archive format ${format}, but this viewer reads up to `
+      + `format ${ARCHIVE_FORMAT} -- rebuild the viewer from a newer Geode`);
+  }
+  return index;
 }
 
 export async function loadManifest(base: string, path: string): Promise<Manifest> {

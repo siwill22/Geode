@@ -14,6 +14,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+ARCHIVE_FORMAT = 1
+
 
 def looks_packed(archive):
     """pack_deploy.mjs's fingerprints: gzipped coastline/boundary files, or a
@@ -91,7 +93,9 @@ def main():
               f"{len(m['variables'])} var(s)  "
               f"{m['depth_min_km']:.0f}-{m['depth_max_km']:.0f} km{span}")
 
-    index = {"models": models, "colormaps": "colormaps.json"}
+    # docs/ARCHIVE_FORMAT.md -- bump only for a change an existing viewer would
+    # misread; viewers refuse a format newer than they know.
+    index = {"format": ARCHIVE_FORMAT, "models": models, "colormaps": "colormaps.json"}
 
     # Required by ArchiveIndex (the tomography viewer takes its age range from
     # it), so always written -- but verify_archive.py below fails the build if
