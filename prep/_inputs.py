@@ -201,7 +201,7 @@ def _read_zip_directory(url, session):
     return members
 
 
-def fetch_zip_member(url, member, fname=None, path=None, progressbar=True):
+def fetch_zip_member(url, member, fname=None, path=None, progressbar=True, directory=None):
     """Download and inflate one member of a remote zip, leaving the rest on the server.
 
     For a record published as a single large archive, this is the difference between a 4.6 GB
@@ -214,6 +214,8 @@ def fetch_zip_member(url, member, fname=None, path=None, progressbar=True):
     :param url: URL of the zip. The server must honour HTTP range requests.
     :param member: full path of the wanted member inside the archive.
     :param fname: name to cache it under; defaults to the member's basename.
+    :param directory: the zip's already-read directory (from ``_read_zip_directory``), so that
+        extracting many members reads it once rather than once per member.
     :returns: Path to the extracted file.
     """
     import requests
@@ -222,7 +224,7 @@ def fetch_zip_member(url, member, fname=None, path=None, progressbar=True):
     session = requests.Session()
 
     try:
-        members = _read_zip_directory(url, session)
+        members = directory if directory is not None else _read_zip_directory(url, session)
     except Exception as e:
         # The directory is read even for a cached member, to check its size. A seeded
         # cache has to work offline, so trust an existing file rather than failing.
@@ -340,6 +342,47 @@ def fetch_zip_member(url, member, fname=None, path=None, progressbar=True):
 
 
 # Schouten et al. (2024), Sci. Rep. 14, 26708 -- doi:10.5281/zenodo.13991965, the version of
+def fetch_zip_members(url, pattern, dest=None):
+    """Extract every member of a remote zip whose path matches `pattern` (a regex), by range
+    request, into one directory -- e.g. a tomography model published as one 2D grid per depth
+    inside a larger archive. Each member is CRC-checked like fetch_zip_member's, and cached.
+
+    :returns: Path to the directory holding the extracted members (by basename).
+    """
+    import re
+    import requests
+
+    dest = Path(dest or _cache_dir() / 'zip_members' / re.sub(r'[^A-Za-z0-9._-]+', '_', url)[-80:])
+    # Written after every successful directory read: the member list is the only way to know
+    # whether a cached set is COMPLETE, and a partial set is worse than none -- a directory of
+    # 55 slices out of 59 loads without complaint and gets interpolated across the gaps.
+    expected = dest / '.members.json'
+    try:
+        directory = _read_zip_directory(url, requests.Session())
+        members = [m for m in directory if re.search(pattern, m) and not m.endswith('/')]
+    except Exception as e:
+        if expected.exists():
+            import json
+            want = json.loads(expected.read_text())
+            missing = [m for m in want if not (dest / m.rsplit('/', 1)[-1]).exists()]
+            if not missing:
+                print('warning: could not reach {} ({}); using the complete cached set of {} '
+                      'members in {}, unverified'.format(url, type(e).__name__, len(want), dest))
+                return dest
+            raise _fetch_error('members matching {!r} ({} of {} cached, so the set is '
+                               'incomplete)'.format(pattern, len(want) - len(missing), len(want)),
+                               url, dest, e) from e
+        raise _fetch_error('members matching {!r}'.format(pattern), url, dest, e) from e
+    if not members:
+        raise FileNotFoundError('No member of the zip at {} matches {!r}.'.format(url, pattern))
+    dest.mkdir(parents=True, exist_ok=True)
+    import json
+    expected.write_text(json.dumps(sorted(members)))
+    for m in sorted(members):
+        fetch_zip_member(url, m, path=dest, progressbar=False, directory=directory)
+    return dest
+
+
 # record for concept doi:10.5281/zenodo.13235438. One 18.97 GB zip, no per-file URLs.
 REVEAL_ARCHIVE = ('https://zenodo.org/api/records/13991965/files/'
                   'Supplementary_material.zip/content')

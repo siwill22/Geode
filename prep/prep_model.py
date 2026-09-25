@@ -22,6 +22,20 @@ The binary is raw uint8, longitude fastest, then latitude, then depth --
 the memory order three.js Data3DTexture expects for (width, height, depth).
 Latitude ascends from -90.
 
+Ingest Config
+-------------
+    python prep_model.py --config ingest.json
+
+Every judgement call and every input detail in one JSON file (CONTEXT.md's
+Ingest Config, docs/adr/0056), so the Model can be rebuilt from it alone.
+Its keys are this script's own option names in snake_case ("high_means",
+"depth_regex", "clip_percentile", ...; "vars" for the repeatable --var),
+plus "input" -- {"path": ...} or {"zip_url": ..., "members": <regex>}, the
+latter fetched by range request -- and free-form documentation keys
+("doi", "license", "reconstruction", "evidence") that are carried through
+untouched. The config, with the numbers the run produced added under
+"result", is written beside the manifest as ingest.json.
+
 Example
 -------
     python prep_model.py \\
@@ -112,6 +126,15 @@ def load_slice_dir(path, depth_regex, varname=None):
     if not found:
         raise SystemExit(f"no files in {path} matched {depth_regex!r}")
     found.sort()
+    # A missing slice would otherwise be interpolated across without a word by
+    # resample_depth(). Refuse uneven spacing instead: a model whose native
+    # levels really are uneven is a 3D-netCDF case, or needs its own handling.
+    steps = np.diff([d for d, _ in found])
+    if len(steps) and not np.allclose(steps, steps[0], rtol=1e-6):
+        gaps = [f"{a:g}->{b:g}" for (a, _), (b, _) in zip(found, found[1:])
+                if not np.isclose(b - a, steps.min())]
+        raise SystemExit(f"{path}: depth slices are not evenly spaced ({len(found)} slices; "
+                         f"gaps at {', '.join(gaps[:6])}) -- is a slice missing?")
 
     slices, lon, lat = [], None, None
     for depth_km, f in found:
@@ -141,14 +164,22 @@ def load_slice_dir(path, depth_regex, varname=None):
 
 
 def normalise_longitude(data, lon):
-    """Bring longitude onto -180..180 ascending, rolling the data with it."""
-    lon = lon.copy()
-    if lon.max() > 180.0 + 1e-6:
-        lon = np.where(lon > 180.0, lon - 360.0, lon)
-        order = np.argsort(lon)
-        lon = lon[order]
-        data = data[:, :, order]
-    return data, lon
+    """Bring longitude onto [-180, 180) ascending, rolling the data with it,
+    and drop any column that repeats one already present.
+
+    Every longitude is wrapped, not only those above 180: a 0..360 grid that
+    repeats its seam (DETOX: 721 columns, 0 and 360 both present) otherwise
+    keeps +180 where -180 belongs and gains a second 0 column. The -180
+    target sample then has no source column, and resample_horizontal clamps
+    it to -179.5 -- one wrong column, found by the Verification Card.
+    """
+    wrapped = ((np.asarray(lon, dtype=np.float64) + 180.0) % 360.0) - 180.0
+    # Values like 179.99999999 wrap to -180 exactly rather than just below 180.
+    wrapped = np.where(np.isclose(wrapped, 180.0), -180.0, wrapped)
+    order = np.argsort(wrapped, kind="stable")
+    wrapped, data = wrapped[order], data[:, :, order]
+    keep = np.concatenate([[True], ~np.isclose(np.diff(wrapped), 0.0)])
+    return data[:, :, keep], wrapped[keep]
 
 
 def drop_duplicate_seam(data, lon):
@@ -410,6 +441,28 @@ def parse_var_spec(spec):
     return source, vid, name
 
 
+def apply_config(args, config):
+    """Overlay an Ingest Config onto the parsed options -- see the module
+    docstring. Unknown keys that are not documentation are an error, so a
+    typo in a judgement call cannot be silently ignored."""
+    documentation = {"ingest", "doi", "license", "reconstruction", "evidence", "notes", "result"}
+    for key, value in config.items():
+        if key == "input":
+            if "path" in value:
+                args.input = Path(value["path"])
+            else:
+                from _inputs import fetch_zip_members
+                args.input = fetch_zip_members(value["zip_url"], value["members"])
+        elif key == "vars":
+            args.var = list(value)
+        elif key in documentation:
+            continue
+        elif hasattr(args, key) and key != "config":
+            setattr(args, key, value)
+        else:
+            raise SystemExit(f"Ingest Config: unknown key {key!r}")
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -422,12 +475,14 @@ def main():
                     help="with no --input, fetch the 84 MB 23-level REVEAL grid rather than "
                          "the 4.98 GB 342-level one. Too coarse for the default --ndepth, but "
                          "it exercises the pipeline without a 4.6 GB download")
-    ap.add_argument("--id", required=True, help="model id, e.g. reveal")
-    ap.add_argument("--name", required=True, help="display name, e.g. REVEAL")
+    ap.add_argument("--config", type=Path, default=None,
+                    help="an Ingest Config (JSON); supplies every other option")
+    ap.add_argument("--id", help="model id, e.g. reveal")
+    ap.add_argument("--name", help="display name, e.g. REVEAL")
     ap.add_argument("--source", default="", help="citation")
     ap.add_argument("--type", default="tomography", choices=["tomography", "convection"])
     ap.add_argument(
-        "--var", action="append", required=True,
+        "--var", action="append",
         help="source[:id[:display name]]; repeatable",
     )
     ap.add_argument("--units", default="%")
@@ -459,6 +514,14 @@ def main():
     ap.add_argument("--out", type=Path, default=Path("archive"))
     ap.add_argument("--validate", action="store_true")
     args = ap.parse_args()
+
+    config = None
+    if args.config is not None:
+        config = json.loads(args.config.read_text())
+        apply_config(args, config)
+    for required in ("id", "name", "var"):
+        if not getattr(args, required):
+            ap.error(f"--{required} is required (directly or via --config)")
 
     if args.input is None:
         from _inputs import fetch_reveal
@@ -595,6 +658,23 @@ def main():
         "default_variable": variables[0]["id"],
         "variables": variables,
     }
+    if config is not None:
+        # The config travels with the Model, plus what this run made of it --
+        # the encode/display ranges and colormap its policies produced, and
+        # any depth levels it dropped -- so "how was this made" and "what did
+        # that give" are one file.
+        config = dict(config)
+        config["result"] = {
+            "variables": [{k: v[k] for k in (
+                "id", "encode_min", "encode_max", "default_clip_min", "default_clip_max",
+                "default_colormap", "value_min", "value_max")} for v in variables],
+            "depth_min_km": manifest["depth_min_km"],
+            "depth_max_km": manifest["depth_max_km"],
+            "dropped_levels": [{"depth_km": d, "why": why} for d, why in dropped],
+        }
+        (model_dir / "ingest.json").write_text(json.dumps(config, indent=2, ensure_ascii=False))
+        manifest["ingest_config"] = "ingest.json"
+
     (model_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
     print(f"\nwrote {model_dir / 'manifest.json'}")
     return manifest

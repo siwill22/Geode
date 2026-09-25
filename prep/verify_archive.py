@@ -128,6 +128,9 @@ def check_model(report, archive, entry):
     template = m["path_template"]
     for var, res, frame in product(dict.fromkeys(variables), resolutions, frames):
         report.check(section, base, template.format(variable=var, resolution=res, frame=frame))
+    # An imported Model names its Ingest Config (docs/ARCHIVE_FORMAT.md).
+    if "ingest_config" in m:
+        report.check(section, base, m["ingest_config"])
 
 
 def main():
