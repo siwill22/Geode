@@ -50,7 +50,7 @@ is the packed archive the deployed site uses (~770 MB download), published as a 
 ```bash
 git clone --recurse-submodules https://github.com/siwill22/Geode.git && cd Geode
 mkdir -p archive && curl -L \
-  https://github.com/siwill22/Geode/releases/download/data-v20/archive-deploy.tar.gz \
+  https://github.com/siwill22/Geode/releases/download/data-v21/archive-deploy.tar.gz \
   | tar -xz -C archive
 ```
 
