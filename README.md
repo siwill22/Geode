@@ -50,7 +50,7 @@ is the packed archive the deployed site uses (~770 MB download), published as a 
 ```bash
 git clone --recurse-submodules https://github.com/siwill22/Geode.git && cd Geode
 mkdir -p archive && curl -L \
-  https://github.com/siwill22/Geode/releases/download/data-v21/archive-deploy.tar.gz \
+  https://github.com/siwill22/Geode/releases/download/data-v22/archive-deploy.tar.gz \
   | tar -xz -C archive
 ```
 
@@ -838,7 +838,7 @@ and it **gzips the volumes** (rewriting each manifest's `path_template` to
 (coastlines, boundaries, static polygons — rewriting those manifest fields
 too, sharing one rotation file between coastlines and static polygons
 rather than gzipping it twice) so nothing else needs a flag. The whole
-deployable archive is **~770 MB** (data-v21, measured 2026-09-25) — over three-quarters of the 1 GB cap
+deployable archive is **~770 MB** (data-v22, measured 2026-09-25) — over three-quarters of the 1 GB cap
 (see *The limits, and when they bite*, below; issue #9 tracks moving to
 object storage before this runs out). Pre-compressing is worth the trouble
 because a CDN will not compress `application/octet-stream` for you. The JSON
@@ -896,7 +896,7 @@ site.
 
 | | |
 |---|---|
-| Published Pages site | **1 GB hard** — currently **~770 MB** (data-v21) |
+| Published Pages site | **1 GB hard** — currently **~770 MB** (data-v22) |
 | Bandwidth | 100 GB/month soft |
 | Repo | unaffected; stays ~1 MB |
 
