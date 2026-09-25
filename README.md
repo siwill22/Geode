@@ -44,8 +44,23 @@ generator's own four-wrapper-type design in particular is ADRs 0017, 0018,
 
 ## Quick start
 
+The viewers need an archive of prepared data, which is not in git. The quickest way to get one
+is the packed archive the deployed site uses (~770 MB download), published as a release asset:
+
 ```bash
-git clone --recurse-submodules <this repo>
+git clone --recurse-submodules https://github.com/siwill22/Geode.git && cd Geode
+mkdir -p archive && curl -L \
+  https://github.com/siwill22/Geode/releases/download/data-v20/archive-deploy.tar.gz \
+  | tar -xz -C archive
+```
+
+The tag must match `DATA_RELEASE` in [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)
+for the commit you have checked out; `npm run build` prints the right command if the archive is
+missing. That archive leaves out the `fixture-*` test models, so `check:render` also needs
+`python test-data/make_fixtures.py` first. Building the archive yourself (*Regenerating the
+archive*, below) is only necessary if you are changing the data.
+
+```bash
 cd viewer
 npm install
 npm run dev   # http://localhost:5173                        mantle viewer
@@ -384,15 +399,29 @@ wind glyphs pointing in globe-relative directions on a flat map.
 
 ### Environment
 
+Two equivalent routes. Neither is assumed by anything in the repo: every command below runs
+whichever `python` is active.
+
+**pip + a system GMT** — the portable baseline, and the one to use in CI or an agent sandbox
+(e.g. a Claude Cowork VM), where conda is often unavailable:
+
+```bash
+sudo apt-get install -y gmt gmt-dcw gmt-gshhg libgmt-dev   # macOS: brew install gmt
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+**conda**, if you prefer it:
+
 ```bash
 conda env create -f environment.yml
 conda activate geode
 ```
 
-`environment.yml` pins everything the prep scripts need, including GMT — the one dependency
-pip cannot provide, since `pygmt` wraps the GMT C library rather than bundling it. The
-commands below say `-n pygmt17` because that is the environment they were developed in;
-`-n geode` works identically.
+GMT is the one dependency pip cannot provide, since `pygmt` wraps the GMT C library rather than
+bundling it; on Debian/Ubuntu it needs `libgmt-dev`, not just `gmt`, because pygmt looks for
+`libgmt.so`. The npm `check:*` scripts that call Python use `$GEODE_PYTHON`, defaulting to
+`python`, so point that at a specific interpreter if the active one is not the right one.
 
 ### Inputs
 
@@ -454,37 +483,37 @@ or checksum.
 ### Build
 
 ```bash
-conda run -n pygmt17 python prep/prep_colormaps.py
+python prep/prep_colormaps.py
 
 # extracts REVEAL_anomaly.nc from the Schouten Zenodo zip on first run (4.6 GB);
 # add --downsampled for the 84 MB version, or --input for your own grid
-conda run -n pygmt17 python prep/prep_model.py \
+python prep/prep_model.py \
     --id reveal --name REVEAL \
     --var vs_anomaly:vs:"Vs anomaly" \
     --var vp_anomaly:vp:"Vp anomaly" \
     --validate
 
 # downloads the OPT1 grids from Zenodo on first run
-conda run -n pygmt17 python prep/prep_convection.py \
+python prep/prep_convection.py \
     --id opt1 --name "Muller 2022 OPT1" --age-max 200 --validate
 
 # Coastline GEOMETRY from Muller 2019 v2, ROTATIONS from Muller 2022. See below.
 # Both models are fetched by gprm; run these once to populate the cache:
 #   python -c "from gprm.datasets import Reconstructions as R; R.fetch_Muller2019(); R.fetch_Muller2022()"
-CACHE=$(conda run -n pygmt17 python -c "from gprm.datasets import cache_path; print(cache_path())")
-conda run -n pygmt17 python prep/prep_coastlines.py \
+CACHE=$(python -c "from gprm.datasets import cache_path; print(cache_path())")
+python prep/prep_coastlines.py \
     --coastlines "$CACHE/Muller2019/Muller_etal_2019_PlateMotionModel_v2.0_Tectonics/StaticGeometries/Coastlines/Global_coastlines_2019_v1_low_res.shp" \
     --rotations  "$CACHE/Muller2022/optimisation/1000_0_rotfile_MantleOpt.rot" \
     --age-max 200
 
 PYTHONPATH="$PYTHONPATH:$PWD/viewer/vendor/petrify/python" \
-conda run -n pygmt17 python -m petrify.export \
+python -m petrify.export \
     --model Muller2022 --end 200 --out archive/boundaries
 
 # downloads ETOPO 2022 on first run
-conda run -n pygmt17 python prep/prep_topography.py
-conda run -n pygmt17 python test-data/make_fixtures.py
-conda run -n pygmt17 python prep/build_archive_index.py
+python prep/prep_topography.py
+python test-data/make_fixtures.py
+python prep/build_archive_index.py
 ```
 
 ### Unresolved inputs
@@ -556,26 +585,26 @@ rotations/geometry/topology can never come from mismatched sources
 every other prep script above follows the same shape.
 
 ```bash
-conda run -n pygmt17 python prep/prep_climate.py \
+python prep/prep_climate.py \
     --input "<path to High_Resolution_Climate_Simulation_Dataset_540_Myr.nc>" \
     --validate
 
-conda run -n pygmt17 python prep/prep_paleogeography.py --validate
+python prep/prep_paleogeography.py --validate
 
-conda run -n pygmt17 python prep/prep_coastlines.py \
+python prep/prep_coastlines.py \
     --coastlines "$CACHE/Cao2018_SM/SupplementaryMaterial_Cao_etal/Rotation_models/Scotese_2008_PresentDay_ContinentalPolygons.shp" \
     --rotations  "$CACHE/Cao2018_SM/SupplementaryMaterial_Cao_etal/Rotation_models/Scotese_2008_Rotation.rot" \
     --age-min 0 --age-max 540 --age-step 1 \
     --out archive/scotese_coastlines
 
-conda run -n pygmt17 python prep/build_archive_index.py
+python prep/build_archive_index.py
 ```
 
 `prep_paleogeography.py` and `prep_coastlines.py` fetch their source data
 through `gprm` — but only the parts that need `pooch`/`xarray`/`pygplates`,
 loaded by file path rather than `import gprm`, since the package `__init__`
-unconditionally pulls in `ptt` (PlateTectonicTools), which is not part of
-the `pygmt17` environment. `prep_climate.py` reads a local netCDF instead
+unconditionally pulls in `ptt` (PlateTectonicTools), so those two run even
+in an environment without it. `prep_climate.py` reads a local netCDF instead
 (`--input`), unrelated to `gprm`.
 
 ### Reconstruction Models currently in the archive
@@ -893,7 +922,7 @@ only extra requirement is CORS headers on the data host.
 ## Layout
 
 ```
-prep/                            netCDF/GPML -> viewer binary format (Python, pygmt17)
+prep/                            netCDF/GPML -> viewer binary format (Python)
 prep/prep_climate.py             climate netCDF -> climate-540myr model
 prep/prep_pohl.py                Pohl et al. FOAM netCDFs -> climate-pohl2022 model
 prep/prep_bridge.py              Valdes/BRIDGE run -> bridge-valdes2021-* models

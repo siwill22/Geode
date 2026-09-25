@@ -110,6 +110,16 @@
         position: fixed; right: 12px; bottom: 8px;
         color: #5d6873; font-size: 11px;
       }
+      #layer-warning {
+        position: fixed; left: 50%; bottom: 32px; transform: translateX(-50%);
+        max-width: min(70ch, calc(100vw - 32px));
+        padding: 8px 32px 8px 12px; border-radius: 4px; font-size: 13px;
+        background: #3a2e10; color: #ffd98a;
+      }
+      #layer-warning button {
+        position: absolute; right: 6px; top: 4px;
+        background: none; border: 0; color: inherit; font-size: 16px; cursor: pointer;
+      }
       #error {
         position: fixed; left: 12px; top: 60px; max-width: 60ch;
         padding: 10px; border-radius: 4px; white-space: pre-wrap;

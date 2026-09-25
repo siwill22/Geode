@@ -563,15 +563,39 @@ renderer.domElement.addEventListener('dblclick', (ev) => {
 
 // --- boot -------------------------------------------------------------------
 
+/** A non-blocking notice naming each layer that failed to load. */
+function showMissingLayers(missing: string[]): void {
+  if (!missing.length) return;
+  for (const m of missing) console.warn(`layer not loaded: ${m}`);
+  const box = document.createElement('div');
+  box.id = 'layer-warning';
+  box.setAttribute('role', 'status');
+  box.textContent = `Not loaded, so not shown: ${missing.map((m) => m.split(' (')[0]).join(', ')}. `
+    + 'The archive is incomplete -- see the browser console for the failed files.';
+  const close = document.createElement('button');
+  close.textContent = '\u00d7';
+  close.setAttribute('aria-label', 'Dismiss');
+  close.addEventListener('click', () => box.remove());
+  box.append(close);
+  document.body.append(box);
+}
+
 async function boot(): Promise<void> {
   const archive = await loadArchive(ARCHIVE);
   const colormaps = await loadColormaps(ARCHIVE, archive.colormaps);
 
+  // Layers the viewer can boot without, but must not drop silently: a
+  // half-built archive otherwise shows a plausible empty globe under a
+  // credit line naming data that never loaded.
+  const missingLayers: string[] = [];
+
   let topography = null;
   try {
     topography = await loadTopography(`${ARCHIVE}/surface/topography.jpg`);
-  } catch {
+  } catch (e) {
     topography = null; // fall back to flat colour rather than failing to boot
+    // An <img> load failure rejects with a bare Event, which says nothing.
+    missingLayers.push(`topography (${e instanceof Error ? e.message : 'surface/topography.jpg failed to load'})`);
   }
 
   let coastlineData = null;
@@ -579,9 +603,12 @@ async function boot(): Promise<void> {
     coastlineData = await fetchCoastlineData(
       ARCHIVE, archive.coastlines.geometry, archive.coastlines.rotations,
     );
-  } catch {
+  } catch (e) {
     coastlineData = null;
+    missingLayers.push(`coastlines (${String(e)})`);
   }
+  showMissingLayers(missingLayers);
+  if (window.__geode) window.__geode.missingLayers = missingLayers;
 
   deps = {
     archiveBase: ARCHIVE,

@@ -353,7 +353,11 @@ export class GlobeInstance {
   }
 
   async selectModel(id: string): Promise<void> {
-    const entry = this.deps.archive.models.find((m) => m.id === id)!;
+    const entry = this.deps.archive.models.find((m) => m.id === id);
+    if (!entry) {
+      throw new Error(`model "${id}" is not in this archive's archive.json `
+        + `(has: ${this.deps.archive.models.map((m) => m.id).join(', ')})`);
+    }
     this.view.modelId = id;
     this.ui.setStatus(`loading ${entry.name}...`);
     this.manifest = await loadManifest(this.deps.archiveBase, entry.path);

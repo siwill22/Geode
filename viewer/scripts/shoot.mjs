@@ -6,6 +6,11 @@
  * polygons, and the grey band on a model that does not reach the surface.
  *
  *   node scripts/shoot.mjs <outdir>
+ *
+ * SHOOT_TIMEOUT_MS raises Playwright's per-action timeout (default 30000) for
+ * a slow machine -- a software-GL VM can take longer than that per screenshot.
+ * An error part-way through still prints the pass/fail summary of every check
+ * that ran, and exits non-zero, rather than discarding them.
  */
 import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
@@ -19,9 +24,41 @@ const browser = await chromium.launch({
 });
 const page = await browser.newPage({ viewport: { width: 1100, height: 850 } });
 
+if (process.env.SHOOT_TIMEOUT_MS) page.setDefaultTimeout(Number(process.env.SHOOT_TIMEOUT_MS));
+
 const errors = [];
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
 page.on('pageerror', (e) => errors.push(String(e)));
+
+const checks = [];
+function check(name, ok, detail) {
+  checks.push({ name, ok, detail });
+  lastStep = name;
+  console.log(`  [${ok ? 'ok ' : 'FAIL'}] ${name}  ${detail}`);
+}
+let lastStep = 'startup';
+
+// A throw anywhere below (a screenshot timeout, a missing hook) must not
+// discard the checks that already ran: report them, say where it stopped,
+// and fail.
+process.on('uncaughtException', (e) => {
+  const failed = checks.filter((c) => !c.ok);
+  console.error(`\nABORTED after "${lastStep}": ${e?.message ?? e}`);
+  console.log(`${checks.length - failed.length}/${checks.length} checks passed before the abort`);
+  browser.close().finally(() => process.exit(1));
+});
+
+// The fixture models are dropped from the packed deploy archive; without
+// them step 7 dies on an unknown model id rather than saying why.
+const index = await (await fetch(`${URL}archive/archive.json`)).json();
+const missingFixtures = ['fixture-check', 'fixture-ramp', 'fixture-drift']
+  .filter((id) => !index.models.some((m) => m.id === id));
+if (missingFixtures.length) {
+  console.error(`fixtures not in this archive: ${missingFixtures.join(', ')}\n`
+    + 'run `python test-data/make_fixtures.py` from the repo root first');
+  await browser.close();
+  process.exit(1);
+}
 
 await page.goto(URL, { waitUntil: 'load' });
 
@@ -29,6 +66,7 @@ await page.goto(URL, { waitUntil: 'load' });
 await page.waitForFunction(() => window.__geode?.ready === true, { timeout: 120000 });
 
 async function shot(name) {
+  lastStep = name;
   await page.waitForTimeout(700);
   await page.screenshot({ path: `${OUT}/${name}.png` });
   console.log(`  ${name}.png`);
@@ -123,12 +161,6 @@ await apply('setVariable', 'vs');
 await shot('11-reveal-vs');
 
 // --- time-dependent checks --------------------------------------------------
-
-const checks = [];
-function check(name, ok, detail) {
-  checks.push({ name, ok, detail });
-  console.log(`  [${ok ? 'ok ' : 'FAIL'}] ${name}  ${detail}`);
-}
 
 console.log('\ntime axis:');
 

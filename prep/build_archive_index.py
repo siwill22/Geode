@@ -1,9 +1,62 @@
 #!/usr/bin/env python3
-"""Scan archive/models/* and write archive.json, the viewer's entry point."""
+"""Scan archive/models/* and write archive.json, the viewer's entry point.
+
+Run against the RAW archive (what the prep scripts write), never a packed
+deploy archive: pack_deploy.mjs gzips files and rewrites the index to name
+the .gz copies, so a rebuild here would look for the wrong names and drop or
+misname whole sections. This script refuses a packed archive rather than
+silently doing that, and runs verify_archive.py on what it wrote.
+"""
 
 import argparse
 import json
+import subprocess
+import sys
 from pathlib import Path
+
+
+def looks_packed(archive):
+    """pack_deploy.mjs's fingerprints: gzipped coastline/boundary files, or a
+    model manifest whose volumes it renamed to .bin.gz."""
+    if any(archive.glob("coastlines*/*.gz")) or any(archive.glob("boundaries/*.gz")):
+        return True
+    for manifest_path in archive.glob("models/*/manifest.json"):
+        if json.loads(manifest_path.read_text()).get("path_template", "").endswith(".gz"):
+            return True
+    return False
+
+
+def model_entry(m):
+    """A models[] entry for archive.json, from that Model's own manifest.
+    Also used by test-data/make_fixtures.py to add its fixtures to an
+    existing index without rebuilding it."""
+    return {
+        "id": m["id"],
+        "name": m["name"],
+        "type": m["type"],
+        "source": m.get("source", ""),
+        # Which reconstruction this output was actually built against,
+        # per that run's own copied config (see
+        # prep_deformation.py's find_reconstruction_model()) -- absent
+        # for models this field predates. The viewer must use THIS to
+        # pick coastlines, never assume one from the model id.
+        "reconstruction_model": m.get("reconstruction_model"),
+        # Which role this Model plays within its own reconstruction's
+        # family (e.g. "Deformation" vs "Age & Heat Flux") -- a declared
+        # catalog fact (see prep_deformation.py), never inferred from the
+        # model id, so a generator recipe can group several Models into
+        # a comparison viewer purely from archive.json without knowing
+        # any id-naming convention. Absent for a Model with no such
+        # family concept (most models -- this is currently only set by
+        # prep_deformation.py).
+        "comparison_role": m.get("comparison_role"),
+        "path": f"models/{m['id']}/manifest.json",
+        "variables": [
+            {"id": v["id"], "name": v["name"]} for v in m["variables"]
+        ],
+        "depth_min_km": m["depth_min_km"],
+        "depth_max_km": m["depth_max_km"],
+    }
 
 
 def main():
@@ -11,7 +64,14 @@ def main():
     ap.add_argument("--archive", type=Path, default=Path("archive"))
     ap.add_argument("--age-min", type=float, default=0.0)
     ap.add_argument("--age-max", type=float, default=200.0)
+    ap.add_argument("--no-verify", action="store_true",
+                    help="skip the verify_archive.py check of the written index")
     args = ap.parse_args()
+
+    if looks_packed(args.archive):
+        sys.exit(f"{args.archive} looks like a packed deploy archive (gzipped files from "
+                 f"pack_deploy.mjs). Its archive.json is already correct for it -- rebuild "
+                 f"the index from the raw archive instead, then re-pack.")
 
     # The age slider must not offer ages the coastline rotations do not cover.
     rot_path = args.archive / "coastlines" / "rotations.json"
@@ -23,33 +83,7 @@ def main():
     models = []
     for manifest_path in sorted(args.archive.glob("models/*/manifest.json")):
         m = json.loads(manifest_path.read_text())
-        models.append({
-            "id": m["id"],
-            "name": m["name"],
-            "type": m["type"],
-            "source": m.get("source", ""),
-            # Which reconstruction this output was actually built against,
-            # per that run's own copied config (see
-            # prep_deformation.py's find_reconstruction_model()) -- absent
-            # for models this field predates. The viewer must use THIS to
-            # pick coastlines, never assume one from the model id.
-            "reconstruction_model": m.get("reconstruction_model"),
-            # Which role this Model plays within its own reconstruction's
-            # family (e.g. "Deformation" vs "Age & Heat Flux") -- a declared
-            # catalog fact (see prep_deformation.py), never inferred from the
-            # model id, so a generator recipe can group several Models into
-            # a comparison viewer purely from archive.json without knowing
-            # any id-naming convention. Absent for a Model with no such
-            # family concept (most models -- this is currently only set by
-            # prep_deformation.py).
-            "comparison_role": m.get("comparison_role"),
-            "path": f"models/{m['id']}/manifest.json",
-            "variables": [
-                {"id": v["id"], "name": v["name"]} for v in m["variables"]
-            ],
-            "depth_min_km": m["depth_min_km"],
-            "depth_max_km": m["depth_max_km"],
-        })
+        models.append(model_entry(m))
         ages = [f["age_ma"] for f in m["frames"]]
         span = (f"  {len(ages)} frames {min(ages):.0f}-{max(ages):.0f} Ma"
                 if len(ages) > 1 else "")
@@ -57,16 +91,21 @@ def main():
               f"{len(m['variables'])} var(s)  "
               f"{m['depth_min_km']:.0f}-{m['depth_max_km']:.0f} km{span}")
 
-    index = {
-        "models": models,
-        "colormaps": "colormaps.json",
-        "coastlines": {
-            "geometry": "coastlines/geometry.bin",
-            "rotations": "coastlines/rotations.json",
-            "age_min": args.age_min,
-            "age_max": args.age_max,
-        },
+    index = {"models": models, "colormaps": "colormaps.json"}
+
+    # Required by ArchiveIndex (the tomography viewer takes its age range from
+    # it), so always written -- but verify_archive.py below fails the build if
+    # the files are absent, rather than letting the viewer show a globe with
+    # no coastlines and no error.
+    index["coastlines"] = {
+        "geometry": "coastlines/geometry.bin",
+        "rotations": "coastlines/rotations.json",
+        "age_min": args.age_min,
+        "age_max": args.age_max,
     }
+    if not rot_path.exists():
+        print("  WARNING: coastlines/rotations.json not found -- age range falls back to "
+              f"{args.age_min:.0f}-{args.age_max:.0f} Ma (run prep/prep_coastlines.py)")
 
     bpath = args.archive / "boundaries" / "boundaries.json"
     if bpath.exists():
@@ -182,6 +221,12 @@ def main():
     out = args.archive / "archive.json"
     out.write_text(json.dumps(index, indent=2))
     print(f"\nwrote {out}  ({len(models)} models)")
+
+    if not args.no_verify:
+        print("\nverifying:", flush=True)
+        verify = Path(__file__).with_name("verify_archive.py")
+        result = subprocess.run([sys.executable, str(verify), "--archive", str(args.archive)])
+        sys.exit(result.returncode)
 
 
 if __name__ == "__main__":

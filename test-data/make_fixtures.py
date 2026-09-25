@@ -26,9 +26,13 @@ cannot tell them apart from REVEAL or OPT1.
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "prep"))
+from build_archive_index import model_entry  # noqa: E402
 
 NLON, NLAT, NDEPTH = 360, 181, 192
 DEPTH_MIN, DEPTH_MAX = 0.0, 2840.0
@@ -127,6 +131,26 @@ def write(name, display, frames, out_root, colormap="RdBu", high_means="fast",
     total = sum((frame_dir / f"{f['id']}.bin").stat().st_size for f in meta)
     print(f"  {name:14s} {len(meta):3d} frame(s)  {total / 1024 / 1024:.1f} MB  "
           f"range [{lo:+.2f}, {hi:+.2f}]")
+    return manifest
+
+
+def add_to_index(out_root, manifests):
+    """Add (or refresh) the fixtures' entries in an existing archive.json.
+
+    A downloaded deploy archive is packed without the fixtures, and its
+    index must not be rebuilt with build_archive_index.py (which refuses a
+    packed archive), so the fixtures register themselves instead. On a raw
+    archive this is redundant with a later build_archive_index.py run, and
+    harmless."""
+    index_path = out_root / "archive.json"
+    if not index_path.exists():
+        return
+    index = json.loads(index_path.read_text())
+    ids = {m["id"] for m in manifests}
+    index["models"] = ([e for e in index["models"] if e["id"] not in ids]
+                       + [model_entry(m) for m in manifests])
+    index_path.write_text(json.dumps(index, indent=2))
+    print(f"\n  added {len(ids)} fixture(s) to {index_path}")
 
 
 def main():
@@ -134,13 +158,16 @@ def main():
     ap.add_argument("--out", type=Path, default=Path("archive"))
     args = ap.parse_args()
 
-    write("fixture-check", "Fixture: checkerboard",
-          [(0, checkerboard())], args.out)
-    write("fixture-ramp", "Fixture: depth ramp",
-          [(0, ramp())], args.out)
-    write("fixture-drift", "Fixture: drifting blob",
-          [(a, drift(a)) for a in DRIFT_AGES], args.out,
-          colormap="RdBu_hot", high_means="hot", units="K")
+    manifests = [
+        write("fixture-check", "Fixture: checkerboard",
+              [(0, checkerboard())], args.out),
+        write("fixture-ramp", "Fixture: depth ramp",
+              [(0, ramp())], args.out),
+        write("fixture-drift", "Fixture: drifting blob",
+              [(a, drift(a)) for a in DRIFT_AGES], args.out,
+              colormap="RdBu_hot", high_means="hot", units="K"),
+    ]
+    add_to_index(args.out, manifests)
 
     print("\nExpected on a cutaway wall:")
     print("  checkerboard  30 deg cells; sign inverts crossing 660 and 1800 km")
