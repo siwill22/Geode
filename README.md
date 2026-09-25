@@ -838,7 +838,7 @@ and it **gzips the volumes** (rewriting each manifest's `path_template` to
 (coastlines, boundaries, static polygons — rewriting those manifest fields
 too, sharing one rotation file between coastlines and static polygons
 rather than gzipping it twice) so nothing else needs a flag. The whole
-deployable archive is **~836 MB** — over four-fifths of the 1 GB cap now
+deployable archive is **~770 MB** (data-v21, measured 2026-09-25) — over three-quarters of the 1 GB cap
 (see *The limits, and when they bite*, below; issue #9 tracks moving to
 object storage before this runs out). Pre-compressing is worth the trouble
 because a CDN will not compress `application/octet-stream` for you. The JSON
@@ -896,14 +896,14 @@ site.
 
 | | |
 |---|---|
-| Published Pages site | **1 GB hard** — currently **~836 MB** |
+| Published Pages site | **1 GB hard** — currently **~770 MB** (data-v21) |
 | Bandwidth | 100 GB/month soft |
 | Repo | unaffected; stays ~1 MB |
 
 Dataset *count* is cheap; what costs is **frames x variables x resolution**. A
 static tomography model is one frame-variable, ~6 MB packed. OPT1 is eleven, ~70
 MB; a 1001-frame, 9-variable series at 720x361 is the single biggest line item
-in the archive. Headroom is now **~164 MB**, not the dozen-more-series margin
+in the archive. Headroom is now **~230 MB**, not the dozen-more-series margin
 this section used to describe — a couple more series at that scale, or
 several dozen more static models, would spend it. Doubling any existing
 grid's resolution is 8x the bytes and would spend

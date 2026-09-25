@@ -1,7 +1,7 @@
 # Build the viewer and publish it to GitHub Pages.
 #
-# The data is deliberately NOT in this repository. archive/ is ~374 MB of
-# derived binary that regenerates from prep/*.py, and committing it would turn a
+# The data is deliberately NOT in this repository. archive/ is several GB of
+# derived binary (current sizes: README, "Deploying") that regenerates from prep/*.py, and committing it would turn a
 # 1 MB repo into a permanent multi-hundred-MB one -- binary does not delta
 # compress, so every regeneration would add a whole fresh copy to history with
 # no way back short of a rewrite.

@@ -9,6 +9,17 @@ const pages = [
 // spilhaus-viewer is deliberately absent: it imports nothing from shared/, and it
 // is broken independently of anything here -- simple-map.js:128 reads an
 // undefined `path`, and it fetches ../data/coastlines.json, which does not exist.
+// This drives the sibling StoryMaps repo, not anything in Geode, so it needs
+// that repo served first; without it every page is a bare navigation error.
+try {
+  await fetch(`http://localhost:${PORT}/`);
+} catch {
+  console.error(`Nothing is serving on localhost:${PORT}. check:storymaps tests the StoryMaps `
+    + 'pages that share this repo\'s globe primitives; serve a StoryMaps checkout first, e.g.\n'
+    + `  cd ../../StoryMaps && python3 -m http.server ${PORT}`);
+  process.exit(1);
+}
+
 const browser = await chromium.launch({
   args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
 });

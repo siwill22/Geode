@@ -1,5 +1,5 @@
-# Generated archive: ~87 MB of derived data, rebuilt by prep/*.py.
-# See the README for the regeneration commands.
+# Generated archive: several GB of derived data, rebuilt by prep/*.py.
+# See the README for current sizes and the regeneration commands.
 /archive/
 
 # The deployable subset, rebuilt by prep/pack_deploy.mjs and uploaded as a

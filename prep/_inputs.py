@@ -50,6 +50,24 @@ def _cache_dir():
     return cache_path(CACHE_SUBDIR)
 
 
+class InputFetchError(RuntimeError):
+    """An external input could not be downloaded. Same shape as gprm's
+    DatasetFetchError: what was wanted, from where, and where it would have gone --
+    plus the two ways round an unreachable host. The original exception is chained
+    as ``__cause__``."""
+
+
+def _fetch_error(what, url, destination, cause):
+    return InputFetchError(
+        'Could not fetch {}: {}: {}\n'
+        '  url   : {}\n'
+        '  cache : {}\n'
+        'If that host is unreachable from here, download the file on another machine and '
+        'either place it at the cache path above (it is then used without a download) or '
+        'pass it to the prep script with --input.'.format(
+            what, type(cause).__name__, cause, url, destination))
+
+
 def fetch_opt1_grids():
     """Muller et al. (2022) OPT1 mantle temperature anomaly grids.
 
@@ -59,15 +77,21 @@ def fetch_opt1_grids():
     """
     from pooch import Unzip, retrieve
 
-    files = retrieve(
-        url='https://zenodo.org/records/6622194/files/'
-            'OPT1_temperature_anomaly_grids_dimensional.zip?download=1',
-        known_hash='md5:03029ff32702d60fbbaebb59780fb60b',
-        fname='OPT1_temperature_anomaly_grids_dimensional.zip',
-        path=_cache_dir(),
-        processor=Unzip(extract_dir='OPT1'),
-        progressbar=True,
-    )
+    url = ('https://zenodo.org/records/6622194/files/'
+           'OPT1_temperature_anomaly_grids_dimensional.zip?download=1')
+    fname = 'OPT1_temperature_anomaly_grids_dimensional.zip'
+    try:
+        files = retrieve(
+            url=url,
+            known_hash='md5:03029ff32702d60fbbaebb59780fb60b',
+            fname=fname,
+            path=_cache_dir(),
+            processor=Unzip(extract_dir='OPT1'),
+            progressbar=True,
+        )
+    except Exception as e:
+        raise _fetch_error('the Muller et al. (2022) OPT1 grids', url,
+                           _cache_dir() / fname, e) from e
 
     # The zip holds a single top-level directory of grids; find it rather than assuming its
     # name, so that a repackaged archive fails loudly here instead of much later.
@@ -197,7 +221,16 @@ def fetch_zip_member(url, member, fname=None, path=None, progressbar=True):
     destination = Path(path or _cache_dir()) / (fname or member.rsplit('/', 1)[-1])
     session = requests.Session()
 
-    members = _read_zip_directory(url, session)
+    try:
+        members = _read_zip_directory(url, session)
+    except Exception as e:
+        # The directory is read even for a cached member, to check its size. A seeded
+        # cache has to work offline, so trust an existing file rather than failing.
+        if destination.exists():
+            print('warning: could not reach {} ({}); using the cached {} unverified'.format(
+                url, type(e).__name__, destination))
+            return destination
+        raise _fetch_error("'{}' from its zip archive".format(member), url, destination, e) from e
     if member not in members:
         raise FileNotFoundError(
             "'{}' is not in the archive at {}. It holds {} members; the archive may have been "
@@ -345,12 +378,17 @@ def fetch_etopo():
     """
     from pooch import retrieve
 
-    return Path(retrieve(
-        url='https://www.ngdc.noaa.gov/thredds/fileServer/global/ETOPO2022/60s/'
-            '60s_surface_elev_netcdf/ETOPO_2022_v1_60s_N90W180_surface.nc',
-        # NOAA publishes no checksum for this file, so it cannot be pinned. pooch will warn.
-        known_hash=None,
-        fname='ETOPO_2022_v1_60s_N90W180_surface.nc',
-        path=_cache_dir(),
-        progressbar=True,
-    ))
+    url = ('https://www.ngdc.noaa.gov/thredds/fileServer/global/ETOPO2022/60s/'
+           '60s_surface_elev_netcdf/ETOPO_2022_v1_60s_N90W180_surface.nc')
+    fname = 'ETOPO_2022_v1_60s_N90W180_surface.nc'
+    try:
+        return Path(retrieve(
+            url=url,
+            # NOAA publishes no checksum for this file, so it cannot be pinned. pooch will warn.
+            known_hash=None,
+            fname=fname,
+            path=_cache_dir(),
+            progressbar=True,
+        ))
+    except Exception as e:
+        raise _fetch_error('NOAA ETOPO 2022 relief', url, _cache_dir() / fname, e) from e
