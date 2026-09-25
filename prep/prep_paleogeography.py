@@ -72,6 +72,32 @@ def load_fetch_paleomap():
     return fetch_Paleomap
 
 
+def match_existing_frames(ages, existing_frames, tol_myr=1.0):
+    """Pair this run's source ages 1:1 with an existing manifest's frames,
+    nearest age within `tol_myr`, returning the EXISTING frames' entries in
+    the order of `ages`. Exits, listing the offenders, if any age has no
+    frame within tolerance or two ages claim the same frame."""
+    matched, problems, taken = [], [], set()
+    for age in ages:
+        nearest = min(existing_frames, key=lambda f: abs(f['age_ma'] - age))
+        if abs(nearest['age_ma'] - age) > tol_myr:
+            problems.append(f"{age:g} Ma: nearest existing frame is {nearest['age_ma']:g} Ma")
+        elif nearest['id'] in taken:
+            problems.append(f"{age:g} Ma: frame {nearest['id']} already matched to another age")
+        else:
+            taken.add(nearest['id'])
+            matched.append(nearest)
+            if nearest['age_ma'] != age:
+                print(f"  source age {age:g} Ma -> existing frame {nearest['id']} "
+                      f"({nearest['age_ma']:g} Ma)")
+    if len(existing_frames) != len(ages):
+        problems.append(f"{len(ages)} source ages vs {len(existing_frames)} existing frames")
+    if problems:
+        raise SystemExit("this run's ages do not pair up with the existing manifest's frames:\n  "
+                         + "\n  ".join(problems))
+    return matched
+
+
 def load_geo_master_cpt():
     """Parse GMT's own master geo.cpt: relief colours with a HARD_HINGE at
     sea level (see the file's header comment), designed by P. Wessel for
@@ -306,6 +332,36 @@ def main():
         resampled[age] = data
         shaded[age] = compute_hillshade(data, lon2, lat2, args.hillshade_azimuth)
 
+    # A second resolution of the same model (e.g. `hi` beside `std`) must
+    # agree with the manifest already on disk, which serves BOTH resolutions
+    # through one `frames` list and one encode range per variable:
+    #
+    #   - Frame ids. The 1 degree and 6 arc-minute PaleoDEM releases label
+    #     two of the same maps differently (Map67.5/Map68: 385.2/390.5 Ma vs
+    #     385/390 Ma), so ids derived from this run's own ages would write
+    #     files the shared manifest never names -- the viewer then 404s on
+    #     those frames at that resolution. Match each age to the existing
+    #     frame nearest it instead, and refuse if they do not pair up 1:1.
+    #   - Encode ranges and default_resolution, taken from the existing
+    #     manifest unless pinned on the command line, so bytes written here
+    #     decode with the same numbers the manifest states.
+    manifest_path = model_dir / 'manifest.json'
+    existing = json.loads(manifest_path.read_text()) if manifest_path.exists() else None
+    merging = existing is not None and any(
+        r['id'] != args.resolution_id for r in existing.get('resolutions', []))
+    if merging:
+        frame_meta = match_existing_frames(ages, existing['frames'])
+        ev = {v['id']: v for v in existing['variables']}
+        if args.encode_min is None:
+            args.encode_min = ev[args.var_id]['encode_min']
+        if args.encode_max is None:
+            args.encode_max = ev[args.var_id]['encode_max']
+        if args.hillshade_clip is None and args.hillshade_id in ev:
+            args.hillshade_clip = ev[args.hillshade_id]['encode_max']
+        print(f"merging with existing resolution(s) "
+              f"{[r['id'] for r in existing['resolutions'] if r['id'] != args.resolution_id]}: "
+              f"frame ids and encode ranges taken from {manifest_path}")
+
     # --encode-min/--encode-max pin the range instead of computing it from
     # THIS run's own data -- see the CLI help for why a second resolution of
     # the same variable needs to reuse the first run's range.
@@ -345,6 +401,16 @@ def main():
         total_mb += shade_path.stat().st_size / 1024 / 1024
     print(f"wrote       {len(frame_meta)} frames x 2 variables, {total_mb:.1f} MB total")
 
+    # Files from an earlier run under ids the manifest no longer names (the
+    # 385.bin/390.bin left beside 385_2.bin/390_5.bin by the id mismatch
+    # above) are dead weight that ships in the deploy archive.
+    wanted = {f"{fm['id']}.bin" for fm in frame_meta}
+    for d in (frame_dir, shade_dir):
+        for stale in sorted(d.glob('*.bin')):
+            if stale.name not in wanted:
+                stale.unlink()
+                print(f"removed stale {stale}")
+
     # If a manifest already exists (e.g. this is the second of two resolution
     # runs against the same model id), upsert this run's entry into its
     # `resolutions` list by id rather than overwriting the whole file --
@@ -352,13 +418,11 @@ def main():
     # resolution. Everything else is written fresh each run; with
     # --encode-min/--encode-max/--hillshade-clip pinned to match, the rest of
     # the manifest ends up byte-identical between runs anyway.
-    manifest_path = model_dir / 'manifest.json'
     resolutions = [{
         'id': args.resolution_id,
         'nlon': args.nlon, 'nlat': args.nlat, 'ndepth': 1,
     }]
-    if manifest_path.exists():
-        existing = json.loads(manifest_path.read_text())
+    if existing is not None:
         resolutions = [r for r in existing.get('resolutions', []) if r['id'] != args.resolution_id] + resolutions
         print(f"merging into existing manifest -- resolutions now: "
               f"{[r['id'] for r in resolutions]}")
@@ -372,7 +436,9 @@ def main():
         'lat_min': -90.0, 'lat_max': 90.0,
         'depth_min_km': 0.0, 'depth_max_km': 1.0,  # unused layer axis; see prep_climate.py
         'dtype': 'uint8',
-        'default_resolution': args.resolution_id,
+        # A second resolution is an option beside the default, not a
+        # replacement for it.
+        'default_resolution': existing['default_resolution'] if merging else args.resolution_id,
         'resolutions': resolutions,
         'frames': frame_meta,
         'path_template': 'frames/{variable}/{resolution}/{frame}.bin',
