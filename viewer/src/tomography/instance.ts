@@ -53,6 +53,9 @@ export interface GlobeInstanceHooks {
   /** Same idea for Reference Plate: fires only on a real edit through this
    *  instance's own control, never from a broadcast-driven follower update. */
   onReferencePlateChange?(self: GlobeInstance, plateId: number): void;
+  /** This instance's Model changed (including its first load), so anything
+   *  derived from which Models are on screen -- the credit line -- can follow. */
+  onModelChange?(self: GlobeInstance): void;
 }
 
 /**
@@ -75,6 +78,9 @@ export class GlobeInstance {
   readonly ui: UI;
 
   coastlines: Coastlines | null = null;
+  /** Whether this instance's boundary series actually loaded -- the credit
+   *  line names boundaries only when they are on screen. */
+  boundariesLoaded = false;
 
   manifest!: Manifest;
   variable!: VariableInfo;
@@ -172,8 +178,10 @@ export class GlobeInstance {
       try {
         await this.boundaries.load(this.deps.boundariesUrl);
         await this.boundaries.setAge(this.view.reconstructionAge);
-      } catch {
+        this.boundariesLoaded = true;
+      } catch (e) {
         // Boundaries are a layer, not a prerequisite; the globe still works.
+        console.warn(`layer not loaded: boundaries (${String(e)})`);
       }
     }
 
@@ -366,6 +374,12 @@ export class GlobeInstance {
       ?? this.manifest.variables[0];
     this.ui.setModel(this.manifest, this.variable);
     await this.selectVariable(this.variable.id);
+    this.hooks.onModelChange?.(this);
+  }
+
+  /** The active Model's catalog entry, for its `source` citation. */
+  get modelEntry(): ArchiveIndex['models'][number] | undefined {
+    return this.deps.archive.models.find((m) => m.id === this.view.modelId);
   }
 
   /**

@@ -19,6 +19,7 @@ via --input; the GEBCO One Minute Grid was the original source and is equivalent
 """
 
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
@@ -221,6 +222,11 @@ def main():
                     help="elevation in m mapped to the highest land colour")
     ap.add_argument("--out", type=Path, default=Path("archive/surface/topography.jpg"))
     ap.add_argument("--quality", type=int, default=88)
+    ap.add_argument("--source", default=None,
+                    help="citation for the elevation grid, recorded in surface/source.json and "
+                         "shown in the viewer's credit line. Defaults to ETOPO 2022 when that "
+                         "is what was fetched; required in spirit with --input, where only the "
+                         "file name is known otherwise")
     ap.add_argument("--no-validate", action="store_true")
     ap.add_argument("--max-offset-deg", type=float, default=0.75,
                     help="fail if any band's best-fit offset exceeds this")
@@ -229,6 +235,10 @@ def main():
     if args.input is None:
         from _inputs import fetch_etopo
         args.input = fetch_etopo()
+        if args.source is None:
+            args.source = "NOAA ETOPO 2022 60 arc-second global relief"
+    if args.source is None:
+        args.source = f"unrecorded (built from {args.input.name})"
 
     print(f"reading {args.input.name}")
     ds = xr.open_dataset(args.input, decode_cf=False)
@@ -306,6 +316,11 @@ def main():
 
     mb = args.out.stat().st_size / 1024 / 1024
     print(f"wrote {args.out}  {img.size[0]}x{img.size[1]}  {mb:.2f} MB")
+    # Provenance travels with the data: build_archive_index.py collects every
+    # <section>/source.json into archive.json's `sources`, and the viewer
+    # credits only what the archive states for the layers that loaded.
+    (args.out.parent / "source.json").write_text(json.dumps({"source": args.source}, indent=2))
+    print(f"source      {args.source}")
 
     if not args.no_validate:
         worst = validate(args.out, z, lon_full, lat_full, args.width, args.height,

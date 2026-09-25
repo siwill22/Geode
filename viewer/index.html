@@ -108,6 +108,7 @@
       }
       #credit {
         position: fixed; right: 12px; bottom: 8px;
+        max-width: min(80ch, calc(100vw - 24px)); text-align: right;
         color: #5d6873; font-size: 11px;
       }
       #layer-warning {
@@ -168,10 +169,9 @@
       <label class="sync-toggle"><input type="checkbox" id="sync-depth" /> sync depth slice</label>
       <label class="sync-toggle"><input type="checkbox" id="sync-reference" /> sync reference plate</label>
     </div>
-    <div id="credit">
-      Topography GEBCO &middot; coastlines M&uuml;ller et al. 2019 v2 &middot;
-      rotations, boundaries &amp; mantle M&uuml;ller et al. 2022
-    </div>
+    <!-- Filled from the archive's own provenance by updateCredit() in
+         src/tomography/main.ts, for the layers actually on screen. -->
+    <div id="credit"></div>
     <script type="module" src="/src/tomography/main.ts"></script>
   </body>
 </html>

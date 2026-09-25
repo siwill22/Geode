@@ -140,6 +140,7 @@ function createInstance(label: string, startCollapsed = false): GlobeInstance {
     onAgeChange: (self) => broadcastAge(self),
     onDepthSliceChange: (self) => broadcastDepthSlice(self),
     onReferencePlateChange: (self) => broadcastReferencePlate(self),
+    onModelChange: () => updateCredit(),
   }, label, startCollapsed);
   return inst;
 }
@@ -186,6 +187,7 @@ async function addInstance(): Promise<void> {
   const inst = createInstance(`Globe ${host.instances.length + 1}`, true);
   host.add(inst);
   await inst.boot(defaultModelId);
+  updateCredit(); // boot() loads boundaries after its Model, so once more here
   // A globe added while a sync is active joins the synced group immediately,
   // rather than booting at age 0 / the default depth-slice and waiting for
   // the next drag elsewhere to catch it up.
@@ -196,6 +198,7 @@ async function addInstance(): Promise<void> {
 
 function removeInstance(inst: GlobeInstance): void {
   host.remove(inst);
+  updateCredit();
 }
 
 addEventListener('resize', () => {
@@ -563,6 +566,27 @@ renderer.domElement.addEventListener('dblclick', (ev) => {
 
 // --- boot -------------------------------------------------------------------
 
+/**
+ * The attribution line, built from what the archive states for what is
+ * actually on screen: each globe's Model `source`, then the archive's
+ * `sources` entry for each shared layer that loaded. It used to be fixed
+ * HTML, which credited "mantle Muller et al. 2022" whichever model was shown
+ * and kept naming topography and coastlines when they had failed to load.
+ */
+function updateCredit(): void {
+  const el = document.getElementById('credit');
+  if (!el || !deps) return;
+  const sources = deps.archive.sources ?? {};
+  const models = [...new Set(host.instances.map((i) => i.modelEntry?.source).filter(Boolean))];
+  const layers: string[] = [];
+  if (deps.topography && sources.surface) layers.push(`topography ${sources.surface}`);
+  if (deps.coastlineData && sources.coastlines) layers.push(`coastlines ${sources.coastlines}`);
+  if (host.instances.some((i) => i.boundariesLoaded) && sources.boundaries) {
+    layers.push(`boundaries ${sources.boundaries}`);
+  }
+  el.textContent = [...models, ...layers].join(' \u00b7 ');
+}
+
 /** A non-blocking notice naming each layer that failed to load. */
 function showMissingLayers(missing: string[]): void {
   if (!missing.length) return;
@@ -623,6 +647,7 @@ async function boot(): Promise<void> {
   const first = createInstance('Globe 1');
   host.add(first);
   await first.boot(defaultModelId);
+  updateCredit();
 
   if (window.__geode) window.__geode.ready = true;
 }

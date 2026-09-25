@@ -168,10 +168,6 @@ export const DEFAULT_WIND_SCALE = 1;
 export const DEFAULT_WIND_DENSITY = 1.5;
 export type WindStyle = 'glyph' | 'streak';
 export const DEFAULT_WIND_STYLE: WindStyle = 'glyph';
-// No manifest field carries this -- the coastline OUTLINE (not any model's
-// own data) is always this one fixed rotation model, regardless of which
-// climate/paleogeography model is active. See updateCredit().
-const COASTLINE_CREDIT = 'continents Scotese 2008 rotation model, via Cao et al. 2018';
 
 /**
  * The two things this globe can show, plus a shared continent-outline
@@ -514,7 +510,11 @@ export class ClimateInstance {
     const parts = this.view.layer === 'climate'
       ? [this.sources[this.activeClimateModelId].manifest.source, `paleogeography ${paleoCredit}`]
       : [paleoCredit];
-    if (this.coastlines) parts.push(COASTLINE_CREDIT);
+    // The continent OUTLINE is always the Scotese coastline set, whichever
+    // model is active; its provenance comes from the archive (build_archive_index.py
+    // `sources`), not from a string here, and is omitted if the archive states none.
+    const coastSource = this.deps.archive.sources?.scotese_coastlines;
+    if (this.coastlines && coastSource) parts.push(`continents ${coastSource}`);
     this.ui.setCredit(parts.join(' · '));
   }
 

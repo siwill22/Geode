@@ -41,7 +41,6 @@ export const DEFAULT_VECTOR_STYLE: VectorStyle = 'glyph';
  *  (relief only ever showed through no-data holes, never through valid
  *  data). See ValdesInstance.applyFieldOpacity(). */
 export const DEFAULT_FIELD_OPACITY = 1;
-const COASTLINE_CREDIT = 'continents Scotese 2008 rotation model, via Cao et al. 2018';
 
 /** A hair inside R_SURFACE -- the same offset climateInstance.ts's OVERLAY_R
  *  uses outside it, just the other direction. Both Layers here reserve a
@@ -193,7 +192,11 @@ export class ValdesInstance {
 
   private updateCredit(): void {
     const parts = [this.manifest.source];
-    if (this.coastlines) parts.push(COASTLINE_CREDIT);
+    // The continent OUTLINE is always the Scotese coastline set, whichever
+    // model is active; its provenance comes from the archive (build_archive_index.py
+    // `sources`), not from a string here, and is omitted if the archive states none.
+    const coastSource = this.deps.archive.sources?.scotese_coastlines;
+    if (this.coastlines && coastSource) parts.push(`continents ${coastSource}`);
     this.ui.setCredit(parts.join(' · '));
   }
 

@@ -218,6 +218,13 @@ export interface ArchiveIndex {
   coastlines: CoastlineSet;
   /** petrify series manifest, absent if the boundaries were not exported. */
   boundaries?: string;
+  /** Provenance of the non-model layers, keyed by archive directory
+   *  ("surface", "coastlines", "boundaries", "scotese_coastlines", ...) --
+   *  each written beside its data by the prep script that built it (see
+   *  build_archive_index.py). A Model's own provenance is its manifest's
+   *  `source`. Absent in archives built before this existed; a viewer then
+   *  credits nothing for those layers rather than assuming a source. */
+  sources?: Record<string, string>;
   /** Scotese, used by the paleoclimate viewer (climate.html) -- the Li et al.
    *  climate simulations and the Scotese & Wright PaleoDEMs both sit on the
    *  Scotese plate model, so this is the one that's geographically

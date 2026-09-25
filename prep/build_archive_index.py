@@ -218,6 +218,19 @@ def main():
     if paleomag_pole_sets:
         index["paleomag_pole_sets"] = paleomag_pole_sets
 
+    # Provenance of the non-model layers (topography, coastline sets,
+    # boundaries), written beside each by its prep script as source.json and
+    # keyed here by directory name. A Model carries its own `source` in its
+    # manifest; these are everything else a viewer credits. Nothing is assumed
+    # for a layer without one -- the viewer then credits nothing for it.
+    sources = {}
+    for source_path in sorted(args.archive.glob("*/source.json")):
+        sources[source_path.parent.name] = json.loads(source_path.read_text())["source"]
+    if sources:
+        index["sources"] = sources
+        for key, text in sources.items():
+            print(f"  source  {key:24s} {text}")
+
     out = args.archive / "archive.json"
     out.write_text(json.dumps(index, indent=2))
     print(f"\nwrote {out}  ({len(models)} models)")

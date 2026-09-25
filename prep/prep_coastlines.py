@@ -546,6 +546,10 @@ def main():
                     help="topology-preserving simplification tolerance in "
                          "degrees (0 = off); see topo_simplify.py")
     ap.add_argument("--out", type=Path, default=Path("archive/coastlines"))
+    ap.add_argument("--source", default=None,
+                    help="citation for the geometry and rotations, recorded in "
+                         "<out>/source.json and shown in the viewer's credit line; "
+                         "defaults to the input file names")
     args = ap.parse_args()
 
     args.out.mkdir(parents=True, exist_ok=True)
@@ -561,7 +565,12 @@ def main():
         args.rotations, plate_ids, ages, args.anchor, args.out / "rotations.json",
         line_counts,
     )
-    print(f"\nwrote {args.out}/")
+    source = args.source or ("unrecorded (geometry "
+                             + ", ".join(f.name for f in args.coastlines) + "; rotations "
+                             + ", ".join(f.name for f in args.rotations) + ")")
+    # See prep_topography.py: collected into archive.json's `sources`.
+    (args.out / "source.json").write_text(json.dumps({"source": source}, indent=2))
+    print(f"\nwrote {args.out}/  (source: {source})")
 
 
 if __name__ == "__main__":
