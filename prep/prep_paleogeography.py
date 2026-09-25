@@ -32,7 +32,7 @@ prep_colormaps.py.
 
 Example
 -------
-    /Users/simon/anaconda3/envs/pygmt17/bin/python prep_paleogeography.py --validate
+    python prep_paleogeography.py --validate
 """
 
 import argparse

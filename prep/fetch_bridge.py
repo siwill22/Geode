@@ -42,7 +42,7 @@ Output:
 
 Example
 -------
-    /Users/simon/anaconda3/envs/pygmt17/bin/python fetch_bridge.py
+    python fetch_bridge.py
 """
 
 import argparse

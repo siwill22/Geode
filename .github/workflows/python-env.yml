@@ -1,0 +1,51 @@
+# Prove the portable Python route still installs and runs.
+#
+# requirements.txt + a system GMT is the environment an agent sandbox (e.g. a Claude Cowork VM)
+# or any CI runner will actually use -- conda is often unavailable there. Nothing else exercises
+# that route, so without this job it would drift the moment environment.yml changed alone.
+name: Python environment
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - requirements.txt
+      - environment.yml
+      - prep/**
+      - .github/workflows/python-env.yml
+  pull_request:
+    paths:
+      - requirements.txt
+      - environment.yml
+      - prep/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pip-route:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: System GMT
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gmt gmt-dcw gmt-gshhg libgmt-dev
+
+      - run: pip install -r requirements.txt
+
+      - name: The stack imports
+        run: |
+          python -c "import pygmt; pygmt.show_versions()"
+          python -c "import pygplates; print('pygplates', pygplates.__version__)"
+          python -c "from gprm.datasets import cache_path; print('gprm cache', cache_path())"
+
+      - name: A prep script runs end to end
+        run: python prep/prep_colormaps.py

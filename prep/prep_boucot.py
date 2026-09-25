@@ -25,7 +25,7 @@ read-modify-write here rather than a full prep_reconstruction.py re-run,
 since this is additive to an already-exported Reconstruction Model.
 
 Usage:
-  conda run -n pygmt17 python prep/prep_boucot.py
+  python prep/prep_boucot.py
 """
 
 import argparse

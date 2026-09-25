@@ -35,8 +35,8 @@ Three independent populations. The viewer decides how each is drawn -- small for
 ridge and plume, large for lip -- and prep only says where they are.
 
 Usage:
-  conda run -n pygmt17 python prep/prep_oldmap_volcanoes.py --model Merdith2021
-  conda run -n pygmt17 python prep/prep_oldmap_volcanoes.py --resolve-names
+  python prep/prep_oldmap_volcanoes.py --model Merdith2021
+  python prep/prep_oldmap_volcanoes.py --resolve-names
 
 
 ---- Why the plumes are in the mantle frame -----------------------------------

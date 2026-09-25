@@ -61,7 +61,7 @@ Output:
 
 Example
 -------
-    /Users/simon/anaconda3/envs/pygmt17/bin/python prep_bridge.py --validate
+    python prep_bridge.py --validate
 """
 
 import argparse

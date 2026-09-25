@@ -30,8 +30,8 @@ Output (default archive/reconstructions/<id>/oldmap/mountains.json):
 it; see "Why the candidates ride plates" below.
 
 Usage:
-  conda run -n pygmt17 python prep/prep_oldmap.py --model Merdith2021
-  conda run -n pygmt17 python prep/prep_oldmap.py --check-distances
+  python prep/prep_oldmap.py --model Merdith2021
+  python prep/prep_oldmap.py --check-distances
 
 
 ---- Why the candidates ride plates ------------------------------------------

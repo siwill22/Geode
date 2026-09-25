@@ -30,7 +30,7 @@ Outputs, under --out (default archive/reconstructions/<id>/):
                                      docs/adr/0025 (Plate-Frame Point)
 
 Usage:
-  conda run -n pygmt17 python prep/prep_reconstruction.py \\
+  python prep/prep_reconstruction.py \\
       --model Muller2019 --name "Müller et al. 2019" \\
       --citation "Müller, R.D., et al. (2019), Tectonics" --age-max 240
 """

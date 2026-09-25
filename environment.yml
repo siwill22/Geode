@@ -1,15 +1,16 @@
-# Python environment for Geode's prep/ scripts.
+# Python environment for Geode's prep/ scripts -- the conda route.
 #
 #   conda env create -f environment.yml
 #   conda activate geode
 #
-# The README's commands say `conda run -n pygmt17` because that is the environment they were
-# developed in; `-n geode` works identically against this file.
+# The portable baseline is requirements.txt (pip + one system GMT package), which works where
+# conda does not: CI runners, agent sandboxes such as a Claude Cowork VM, locked-down machines.
+# This file builds the same stack with conda, for anyone who prefers it; keep the two in step.
+# Nothing in the repo assumes either one -- scripts run whichever `python` is active.
 #
-# Almost everything here is pip-installable. The exception is GMT, which is a C library that
-# pygmt wraps but does not bundle, and which is why this is a conda environment rather than a
-# requirements.txt. GMT is needed by prep_model.py and prep_coastlines.py; the rest of the
-# pipeline, and all of gprm's data fetching and analysis, runs without it.
+# GMT is the one dependency pip cannot provide (pygmt wraps the C library but does not bundle
+# it); here conda supplies it. GMT is needed by prep_model.py and prep_coastlines.py; the rest
+# of the pipeline, and all of gprm's data fetching and analysis, runs without it.
 
 name: geode
 

@@ -70,7 +70,7 @@ new "connect live points" draw mode, applied client-side (Phase 5) -- this
 script only exports the vertices and their ages.
 
 Usage:
-  conda run -n pygmt17 python prep/prep_paleomag.py \\
+  python prep/prep_paleomag.py \\
       --source prep/sources/paleomag/T2012_TC2017.gpml \\
       --id torsvik-cocks-2017 --name "Torsvik et al. (2012)" \\
       --models torsvikcocks2017 muller2019 seton2012 scotese

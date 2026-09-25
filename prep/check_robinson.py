@@ -15,7 +15,7 @@ its CHANGELOG for v0.6.0), and is read from there rather than retyped here:
 a check with its own third transcription of the numbers would pass while the
 shipped ones were wrong.
 
-    conda run -n pygmt17 python prep/check_robinson.py
+    python prep/check_robinson.py
 """
 from __future__ import annotations
 

@@ -61,7 +61,7 @@ Output:
 
 Example
 -------
-    /Users/simon/anaconda3/envs/pygmt17/bin/python prep_pohl.py \\
+    python prep_pohl.py \\
         --input-dir "/Users/simon/Library/CloudStorage/OneDrive-UniversityofTasmania/Work/Climate/Pohl/All_NC_files" \\
         --validate
 """

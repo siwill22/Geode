@@ -54,7 +54,7 @@ Output:
 
 Example
 -------
-    /Users/simon/anaconda3/envs/pygmt17/bin/python prep_climate.py \\
+    python prep_climate.py \\
         --input "/Users/simon/Library/CloudStorage/OneDrive-UniversityofTasmania/Work/Climate/High_Resolution_Climate_Simulation_Dataset_540_Myr.nc" \\
         --id climate-540myr --name "Li et al. 2022 Paleoclimate" --validate
 """

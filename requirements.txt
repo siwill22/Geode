@@ -1,0 +1,45 @@
+# Python environment for Geode's prep/ scripts -- the portable baseline.
+#
+# Everything is on PyPI except GMT, the C library pygmt wraps but does not bundle.
+# Install GMT from the system package manager first, then this file:
+#
+#   Debian/Ubuntu:  sudo apt-get install -y gmt gmt-dcw gmt-gshhg libgmt-dev
+#                   (libgmt-dev matters: the runtime package ships only libgmt.so.6,
+#                    and pygmt looks for libgmt.so)
+#   macOS:          brew install gmt
+#
+#   python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+#
+# This is the route that works where conda does not (CI runners, agent sandboxes such as a
+# Claude Cowork VM, locked-down machines). environment.yml builds the same stack with conda,
+# for anyone who prefers it. Keep the two lists in step.
+#
+# GMT is needed by prep_model.py and prep_coastlines.py; the rest of the pipeline, and all of
+# gprm's data fetching and analysis, runs without it.
+
+numpy
+scipy
+pandas
+geopandas
+shapely
+rasterio
+xarray
+netcdf4
+matplotlib
+cartopy
+pillow
+pooch
+requests
+tqdm
+pyyaml
+openpyxl          # dataset loaders read .xlsx compilations
+scikit-image
+astropy-healpix   # equal-area point distributions; gprm falls back without it
+
+pygplates
+PlateTectonicTools
+pygmt
+
+# gprm provides the reconstruction models, the published palaeo-datasets and the proximity
+# engine. Pin to a release or commit for a reproducible build.
+gprm @ git+https://github.com/siwill22/GPlatesReconstructionModel

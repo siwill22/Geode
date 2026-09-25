@@ -22,7 +22,7 @@ Checks, all on the sphere:
 Exit status 1 if any of the first four fails.
 
 Usage:
-  conda run -n pygmt17 python prep/check_coastline_topology.py \\
+  python prep/check_coastline_topology.py \\
       --before old/geometry.bin --after archive/.../coastlines/geometry.bin \\
       --tol-deg 0.05
 """
