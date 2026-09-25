@@ -412,10 +412,15 @@ The `gh` CLI must be authenticated as the user who will own the new repo
    `petrify` library along, whether or not this recipe's wrapper
    type uses it).
 
-9. **Sanity-build it locally** before publishing anything: in `<tmpDir>`,
-   `npm install && npm run build`. If this fails, something is wrong with
-   the generator itself (a bug, not a bad recipe — validation already
-   passed) — stop and report it rather than pushing a broken repo.
+9. **Sanity-check it locally** before publishing anything: in `<tmpDir>`,
+   `npm install && npm run build`, then from this repo
+   `node generator/checkSite.mjs <tmpDir>`. The second step serves the
+   built site and passes only if it reaches `ready` with no failed archive
+   requests — a build alone cannot tell a working site from one that
+   cannot find its data. If either fails, something is wrong with the
+   generator itself (a bug, not a bad recipe — validation already passed) —
+   stop and report it, with checkSite's output, rather than pushing a
+   broken repo.
 
 10. **Create the GitHub repo**: `gh repo create <repoName> --source=<tmpDir> --push`
     with `--public` or `--private` per step 5's confirmed answer.

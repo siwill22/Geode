@@ -459,6 +459,15 @@ export async function scaffoldRepo(recipePath, outDir, validateSource) {
   writeFileSync(path.join(outDir, 'README.md'), readmeMd(recipe, resolved));
   writeFileSync(path.join(outDir, 'LICENSE'), mitLicense());
   writeFileSync(path.join(outDir, '.gitignore'), 'node_modules/\ndist/\n');
+  // The same archive location the deploy workflow sets, so a local
+  // `npm run build` produces the site that will actually ship -- without it
+  // a local build falls back to /archive on its own origin, which a
+  // generated repo never has. Not a secret: the URL is public by design.
+  writeFileSync(
+    path.join(outDir, '.env'),
+    `# Where this site's data lives -- same value the deploy workflow sets.\n`
+    + `VITE_ARCHIVE_BASE=${recipe.dataHost.archiveBase}\n`,
+  );
 
   return { outDir, resolved };
 }
