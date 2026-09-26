@@ -21,6 +21,7 @@ import {
 } from '../core/depthSlice';
 import type { SurfaceMode } from './ui';
 import type { ArchiveIndex } from '../core/types';
+import { MANTLE_CONFIG, type CameraView, type ViewPresetConfig } from '../generated/mantleConfig';
 
 // Where the data lives. Defaults to the archive shipped beside the app, under
 // whatever base path the build was given ('/' in dev, '/Geode/' on Pages).
@@ -327,9 +328,9 @@ function showIsosurfaces(inst: GlobeInstance): void {
   refreshGUI(inst);
 }
 
-function showAtlanticCutaway(inst: GlobeInstance): void {
+function showCutaway(inst: GlobeInstance, verts: [number, number][], depthKm: number): void {
   inst.applySurfaceMode('topography');
-  applyCutawayPolygon(inst, ATLANTIC_CUT_POLYGON, ATLANTIC_CUT_DEPTH_KM);
+  applyCutawayPolygon(inst, verts, depthKm);
 }
 
 /** A coloured depth slice in place of the outer surface, its depth tied to
@@ -354,40 +355,55 @@ function isoPairLabel(inst: GlobeInstance): string {
   return (inst.variable?.high_means ?? 'fast') === 'fast' ? 'slow & fast' : 'cold & hot';
 }
 
+/** All three, with their default geography, unless the config says which. */
+const VIEW_PRESETS: ViewPresetConfig[] = MANTLE_CONFIG.viewPresets
+  ?? [{ kind: 'isosurfaces' }, { kind: 'cutaway' }, { kind: 'sinking-slice' }];
+
+function viewPreset(cfg: ViewPresetConfig, inst: GlobeInstance): Preset | null {
+  const name = inst.modelEntry?.name ?? 'this model';
+  const look = (camera?: CameraView) => { if (camera) setCamera(camera); };
+  switch (cfg.kind) {
+    case 'isosurfaces':
+      return {
+        label: 'Isosurfaces',
+        sub: `${name}, surface hidden, ${isoPairLabel(inst)} isosurfaces`,
+        apply: async () => { showIsosurfaces(await singleGlobe()); look(cfg.camera); },
+      };
+    case 'cutaway': {
+      const custom = cfg.polygon !== undefined;
+      return {
+        label: 'Cutaway',
+        sub: `${name}, cut open to ${cfg.depthKm ? `${cfg.depthKm} km` : 'the core-mantle boundary'}`
+          + ` under ${cfg.region ?? (custom ? 'the chosen region' : 'the Atlantic')}`,
+        apply: async () => {
+          showCutaway(await singleGlobe(), cfg.polygon ?? ATLANTIC_CUT_POLYGON,
+            cfg.depthKm ?? ATLANTIC_CUT_DEPTH_KM);
+          look(cfg.camera ?? (custom ? undefined : ATLANTIC_CAMERA));
+        },
+      };
+    }
+    case 'sinking-slice':
+      // Sinking mode maps age to depth, which only means something for a
+      // present-day image of the mantle (canUseSinkingMode), not a model
+      // with its own time axis.
+      if (!canUseSinkingMode(inst.manifest)) return null;
+      return {
+        label: 'Depth slice through time',
+        sub: `${name}, slice depth follows age at 1.2 cm/yr -- drag the age slider`,
+        apply: async () => {
+          const g = await singleGlobe();
+          showSinkingSlice(g);
+          g.applyAge(cfg.startAge ?? SINKING_START_AGE);
+          refreshGUI(g);
+          look(cfg.camera);
+        },
+      };
+  }
+}
+
 function viewPresets(): Preset[] {
   const inst = host.instances[0];
-  const name = inst.modelEntry?.name ?? 'this model';
-  const presets: Preset[] = [
-    {
-      label: 'Isosurfaces',
-      sub: `${name}, surface hidden, ${isoPairLabel(inst)} isosurfaces`,
-      apply: async () => showIsosurfaces(await singleGlobe()),
-    },
-    {
-      label: 'Cutaway',
-      sub: `${name}, cut open to the core-mantle boundary under the Atlantic`,
-      apply: async () => {
-        showAtlanticCutaway(await singleGlobe());
-        setCamera(ATLANTIC_CAMERA);
-      },
-    },
-  ];
-  // Sinking mode maps age to depth, which only means something for a
-  // present-day image of the mantle (canUseSinkingMode), not a model with
-  // its own time axis.
-  if (canUseSinkingMode(inst.manifest)) {
-    presets.push({
-      label: 'Depth slice through time',
-      sub: `${name}, slice depth follows age at 1.2 cm/yr -- drag the age slider`,
-      apply: async () => {
-        const g = await singleGlobe();
-        showSinkingSlice(g);
-        g.applyAge(SINKING_START_AGE);
-        refreshGUI(g);
-      },
-    });
-  }
-  return presets;
+  return VIEW_PRESETS.map((cfg) => viewPreset(cfg, inst)).filter((p): p is Preset => p !== null);
 }
 
 type ModelEntry = ArchiveIndex['models'][number];
@@ -411,6 +427,7 @@ function standaloneTomography(): ModelEntry[] {
 
 function comparisonPresets(): Preset[] {
   const presets: Preset[] = [];
+  if (MANTLE_CONFIG.comparisonPresets === false) return presets;
 
   // Matched by id, not a "muller" name fragment: a fragment match picked a
   // Muller2019 age/heat-flux model once that family joined the catalog.
@@ -441,7 +458,7 @@ function comparisonPresets(): Preset[] {
           const inst = host.instances[i];
           await inst.selectModel(tomo[i].id);
           resetInstanceDisplayDefaults(inst);
-          showAtlanticCutaway(inst);
+          showCutaway(inst, ATLANTIC_CUT_POLYGON, ATLANTIC_CUT_DEPTH_KM);
         }
         host.focused = host.instances[0];
         // One shared camera for every tile, pointed at the cut.
@@ -675,8 +692,22 @@ function showMissingLayers(missing: string[]): void {
   document.body.append(box);
 }
 
+/** The Archive as this site offers it: only the configured Models, in the
+ *  configured order. Everything downstream (dropdowns, presets, credit)
+ *  sees this copy, so an unoffered Model can't appear anywhere. */
+function offeredModels(archive: ArchiveIndex): ArchiveIndex {
+  const ids = MANTLE_CONFIG.models;
+  if (!ids) return archive;
+  const missing = ids.filter((id) => !archive.models.some((m) => m.id === id));
+  if (missing.length) {
+    throw new Error(`configured models not in archive.json: ${missing.join(', ')} `
+      + `(has: ${archive.models.map((m) => m.id).join(', ')})`);
+  }
+  return { ...archive, models: ids.map((id) => archive.models.find((m) => m.id === id)!) };
+}
+
 async function boot(): Promise<void> {
-  const archive = await loadArchive(ARCHIVE);
+  const archive = offeredModels(await loadArchive(ARCHIVE));
   const colormaps = await loadColormaps(ARCHIVE, archive.colormaps);
 
   // Layers the viewer can boot without, but must not drop silently: a
@@ -713,12 +744,19 @@ async function boot(): Promise<void> {
     coastlineData,
     boundariesUrl: archive.boundaries ? `${ARCHIVE}/${archive.boundaries}` : null,
   };
-  defaultModelId = archive.models.find((m) => m.id === 'reveal')?.id ?? archive.models[0].id;
+  defaultModelId = MANTLE_CONFIG.defaultModel;
+  if (!archive.models.some((m) => m.id === defaultModelId)) {
+    // A site that lists its Models must name a real default; this repo's own
+    // dev and test Archives (no `models` list) may simply lack it.
+    if (MANTLE_CONFIG.models) throw new Error(`defaultModel "${defaultModelId}" is not among the offered models`);
+    defaultModelId = archive.models[0].id;
+  }
 
   const first = createInstance('Globe 1');
   host.add(first);
   await first.boot(defaultModelId);
   updateCredit();
+  if (MANTLE_CONFIG.defaultCamera) setCamera(MANTLE_CONFIG.defaultCamera);
 
   if (window.__geode) window.__geode.ready = true;
 }

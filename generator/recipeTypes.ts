@@ -14,6 +14,7 @@
  * viewer/src/core/types.ts's ColormapData.
  */
 import type { GlobeTool, MultiGlobeConfig } from '../viewer/src/core/tools';
+import type { CameraView, ViewPresetConfig } from '../viewer/src/generated/mantleConfig';
 
 export interface ViewerRecipe {
   recipeVersion: 1;
@@ -43,9 +44,13 @@ export interface ViewerRecipe {
    * viewer/src/reconstruction/, viewer/src/reconstructionGroup/, and
    * docs/adr/0021 for the catalog section (`archive.reconstruction_models`)
    * this reads.
+   * 'mantle-globe': the mantle viewer (viewer/index.html, src/tomography/)
+   * -- cutaway, isosurfaces, depth slices through time, View Presets --
+   * over one or more standalone tomography/convection Models from
+   * `datasets`. Configured by `mantle`, not `ui`.
    */
   wrapperType: 'single-model-globe' | 'model-group-globe'
-    | 'single-reconstruction-globe' | 'reconstruction-group-globe';
+    | 'single-reconstruction-globe' | 'reconstruction-group-globe' | 'mantle-globe';
   /**
    * For 'single-model-globe': exactly 1 entry, using that Model's own
    * default_variable/default_resolution (no per-recipe override).
@@ -93,11 +98,28 @@ export interface ViewerRecipe {
    *  offers today (see CONTEXT.md). Absent means a single, fixed instance,
    *  matching every recipe's behaviour before this existed. */
   multiGlobe?: MultiGlobeConfig;
+  /** 'mantle-globe' only. `datasets` is the Model list, in dropdown order. */
+  mantle?: {
+    /** Default: the first of `datasets`. */
+    defaultModel?: string;
+    defaultCamera?: CameraView;
+    /** View Presets (CONTEXT.md), in menu order. Default: all three with
+     *  their default geography. A `cutaway` with its own polygon must name
+     *  its region, for the menu label. */
+    viewPresets?: ViewPresetConfig[];
+    /** Default true; each is still listed only when its Models are offered. */
+    comparisonPresets?: boolean;
+  };
+  /** Exactly one of the two. */
   dataHost: {
-    /** The shared, Geode-controlled archive base URL every generated site
-     *  fetches from live -- see core/volume.ts's loadArchive(base) and
-     *  VITE_ARCHIVE_BASE. Never a copy bundled into the generated repo. */
-    archiveBase: string;
+    /** A live archive base URL every page load fetches from -- see
+     *  core/volume.ts's loadArchive(base) and VITE_ARCHIVE_BASE. */
+    archiveBase?: string;
+    /** A standalone Archive (docs/adr/0054) published as a release asset on
+     *  the site's own repo, unpacked beside the app at deploy time. Not
+     *  fetchable until published, so validation needs the local Archive
+     *  directory. */
+    release?: { tag: string; asset: string };
   };
 }
 
@@ -164,8 +186,14 @@ export interface ResolvedReconstructionGroup {
   entries: ResolvedReconstructionEntry[];
 }
 
+/** Resolved shape for a 'mantle-globe' recipe. */
+export interface ResolvedMantle {
+  models: Array<{ id: string; name: string; type: string; source: string }>;
+  defaultModel: string;
+}
+
 export type Resolved = ResolvedSingleModel | ResolvedModelGroup
-  | ResolvedSingleReconstruction | ResolvedReconstructionGroup;
+  | ResolvedSingleReconstruction | ResolvedReconstructionGroup | ResolvedMantle;
 
 export interface ValidationOk {
   ok: true;

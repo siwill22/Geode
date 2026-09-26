@@ -29,7 +29,14 @@ export const MODEL_WRAPPER_TYPES = ['single-model-globe', 'model-group-globe'];
  *  menu (Reconstruction Age is always on; a Boundary Frame toggle appears
  *  automatically per docs/adr/0019/0020). */
 export const RECONSTRUCTION_WRAPPER_TYPES = ['single-reconstruction-globe', 'reconstruction-group-globe'];
-export const WRAPPER_TYPES = [...MODEL_WRAPPER_TYPES, ...RECONSTRUCTION_WRAPPER_TYPES];
+/** The mantle viewer (viewer/index.html, src/tomography/): cutaway,
+ *  isosurfaces, depth slices and presets over 3-D volumes. Its own
+ *  `mantle` block instead of `ui.tools`. */
+export const MANTLE_WRAPPER_TYPE = 'mantle-globe';
+export const WRAPPER_TYPES = [...MODEL_WRAPPER_TYPES, ...RECONSTRUCTION_WRAPPER_TYPES, MANTLE_WRAPPER_TYPE];
+/** Model types the mantle viewer's dropdown offers (src/tomography/ui.ts). */
+const MANTLE_MODEL_TYPES = ['tomography', 'convection'];
+const VIEW_PRESET_KINDS = ['isosurfaces', 'cutaway', 'sinking-slice'];
 
 function loadJson(p) {
   return JSON.parse(readFileSync(p, 'utf8'));
@@ -45,6 +52,75 @@ function validateMultiGlobe(recipe, errors) {
     errors.push(`multiGlobe must be an object of the form { "syncAge": boolean }, `
       + `got ${JSON.stringify(recipe.multiGlobe)}`);
   }
+}
+
+/** dataHost is either a live base URL every page load fetches from
+ *  (`archiveBase`), or a release asset on the site's own repo, unpacked
+ *  beside the app at deploy time (`release`: ADR-0054's standalone
+ *  Archive). */
+function validateDataHost(recipe, errors) {
+  const dh = recipe.dataHost;
+  if (dh?.archiveBase !== undefined && dh?.release !== undefined) {
+    errors.push('dataHost takes archiveBase or release, not both');
+  } else if (dh?.release !== undefined) {
+    if (!/^[\w.-]+$/.test(dh.release.tag ?? '')) errors.push('dataHost.release.tag must be a release tag, e.g. "archive-v1"');
+    if (!/^[\w.-]+\.tar\.gz$/.test(dh.release.asset ?? '')) errors.push('dataHost.release.asset must be a .tar.gz file name');
+  } else if (!dh?.archiveBase) {
+    errors.push('dataHost needs archiveBase (a live URL) or release ({ tag, asset })');
+  }
+}
+
+function isCamera(c) {
+  return c && ['lon', 'lat', 'dist'].every((k) => typeof c[k] === 'number')
+    && Math.abs(c.lat) <= 90 && c.dist > 1;
+}
+
+/** The `mantle` block: which Models, the default, the camera, View Presets. */
+async function resolveMantle(archive, source, recipe, errors) {
+  const ids = recipe.datasets.map((d) => d.modelId);
+  if (new Set(ids).size !== ids.length) errors.push('datasets contains duplicates');
+  const models = [];
+  for (const id of ids) {
+    const entry = archive.models.find((m) => m.id === id);
+    if (!entry) {
+      errors.push({ message: `no model '${id}' in archive.json`, suggestions: nearestMatches(id, archive.models.map((m) => m.id)) });
+      continue;
+    }
+    if (!MANTLE_MODEL_TYPES.includes(entry.type) || entry.reconstruction_model || entry.comparison_role) {
+      errors.push(`'${id}' is a ${entry.type} Model${entry.comparison_role ? ' in a comparison family' : ''}; `
+        + `'mantle-globe' shows standalone ${MANTLE_MODEL_TYPES.join('/')} volumes`);
+      continue;
+    }
+    const manifest = await loadManifestFrom(source, entry.path);
+    models.push({ id, name: entry.name, type: entry.type, source: manifest.source ?? '' });
+  }
+  const m = recipe.mantle ?? {};
+  const defaultModel = m.defaultModel ?? ids[0];
+  if (!ids.includes(defaultModel)) errors.push(`mantle.defaultModel '${defaultModel}' is not in datasets`);
+  if (m.defaultCamera !== undefined && !isCamera(m.defaultCamera)) {
+    errors.push('mantle.defaultCamera must be { lon, lat, dist } with |lat| <= 90 and dist > 1 (globe radii)');
+  }
+  if (m.comparisonPresets !== undefined && typeof m.comparisonPresets !== 'boolean') {
+    errors.push('mantle.comparisonPresets must be true or false');
+  }
+  for (const [i, p] of (m.viewPresets ?? []).entries()) {
+    const at = `mantle.viewPresets[${i}]`;
+    if (!VIEW_PRESET_KINDS.includes(p?.kind)) {
+      errors.push({ message: `${at}.kind must be one of ${VIEW_PRESET_KINDS.join(', ')}`, suggestions: nearestMatches(String(p?.kind), VIEW_PRESET_KINDS) });
+      continue;
+    }
+    if (p.camera !== undefined && !isCamera(p.camera)) errors.push(`${at}.camera must be { lon, lat, dist }`);
+    if (p.kind === 'cutaway' && p.polygon !== undefined) {
+      const ok = Array.isArray(p.polygon) && p.polygon.length >= 3 && p.polygon.every(
+        (v) => Array.isArray(v) && v.length === 2 && Math.abs(v[0]) <= 180 && Math.abs(v[1]) <= 90);
+      if (!ok) errors.push(`${at}.polygon must be 3 or more [lon, lat] vertices`);
+      if (!p.region) errors.push(`${at} sets a polygon, so it needs a region for the menu label ("under <region>")`);
+    }
+    if (p.kind === 'sinking-slice' && !models.some((x) => x.type === 'tomography')) {
+      errors.push(`${at}: sinking-slice needs a tomography Model, and none is offered`);
+    }
+  }
+  return { models, defaultModel };
 }
 
 /**
@@ -298,8 +374,13 @@ function resolveReconstructionEntries(archive, ids, errors) {
  *   repo's own pre-release testing of a model not yet on the shared host.
  * @returns {Promise<{ok: true, resolved: object} | {ok: false, errors: Array}>}
  */
-export async function validateRecipe(recipe, source = recipe?.dataHost?.archiveBase ?? DEFAULT_ARCHIVE_DIR) {
+export async function validateRecipe(recipe, source = recipe?.dataHost?.archiveBase) {
   const errors = [];
+  if (source === undefined) {
+    return { ok: false, errors: [recipe?.dataHost?.release
+      ? 'dataHost.release is not published until the site is -- pass the local Archive directory to validate against'
+      : 'dataHost needs archiveBase (a live URL) or release ({ tag, asset })'] };
+  }
   let archive;
   try {
     archive = await loadArchiveFrom(source);
@@ -319,7 +400,7 @@ export async function validateRecipe(recipe, source = recipe?.dataHost?.archiveB
       + 'characters GitHub repo names don\'t allow (letters, digits, "-", "_", ".")');
   }
   if (!recipe.site?.title) errors.push('site.title is required');
-  if (!recipe.dataHost?.archiveBase) errors.push('dataHost.archiveBase is required');
+  validateDataHost(recipe, errors);
   validateMultiGlobe(recipe, errors);
 
   if (RECONSTRUCTION_WRAPPER_TYPES.includes(recipe.wrapperType)) {
@@ -356,6 +437,14 @@ export async function validateRecipe(recipe, source = recipe?.dataHost?.archiveB
       ? { reconstruction: resolvedEntries[0] }
       : { entries: resolvedEntries };
     return { ok: true, resolved };
+  }
+
+  if (recipe.wrapperType === MANTLE_WRAPPER_TYPE) {
+    if (!Array.isArray(recipe.datasets) || recipe.datasets.length === 0) {
+      return { ok: false, errors: [...errors, 'datasets must be a non-empty array'] };
+    }
+    const resolved = await resolveMantle(archive, source, recipe, errors);
+    return errors.length === 0 ? { ok: true, resolved } : { ok: false, errors };
   }
 
   const tools = recipe.ui?.tools ?? [];

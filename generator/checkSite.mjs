@@ -10,11 +10,16 @@
  * only if
  *
  *   - the wrapper's own test hook (window.__globe, __groupGlobe,
- *     __reconstruction or __reconstructionGroup) reaches ready === true, and
+ *     __reconstruction, __reconstructionGroup or, for the mantle viewer,
+ *     __geode) reaches ready === true, and reports no missingLayers, and
  *   - no request to the archive failed (HTTP >= 400 or a network error), and
  *   - the page threw no uncaught error.
  *
- * Needs network access to the recipe's dataHost.archiveBase, and Playwright,
+ * A `dataHost.release` site serves its Archive from its own /archive, so
+ * dist/archive must hold it: unpack the Archive into public/archive before
+ * `npm run build`, as the site's deploy workflow does.
+ *
+ * Needs network access to the recipe's dataHost.archiveBase (if any), and Playwright,
  * which is resolved from this monorepo's viewer/node_modules so a generated
  * repo does not have to depend on it.
  */
@@ -29,6 +34,7 @@ const HOOK = {
   'model-group-globe': '__groupGlobe',
   'single-reconstruction-globe': '__reconstruction',
   'reconstruction-group-globe': '__reconstructionGroup',
+  'mantle-globe': '__geode',
 };
 
 const MIME = {
@@ -49,7 +55,11 @@ if (!existsSync(path.join(dist, 'index.html'))) {
 }
 const recipe = JSON.parse(readFileSync(path.join(siteDir, 'recipe.json'), 'utf8'));
 const hook = HOOK[recipe.wrapperType];
-const archiveBase = recipe.dataHost.archiveBase.replace(/\/$/, '');
+if (recipe.dataHost.release && !existsSync(path.join(dist, 'archive', 'archive.json'))) {
+  console.error(`${dist}/archive/archive.json not found -- this site's Archive is a release asset; `
+    + `unpack it into ${siteDir}/public/archive and rebuild`);
+  process.exit(2);
+}
 
 const require = createRequire(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'viewer', 'package.json'));
 const { chromium } = require('playwright');
@@ -66,6 +76,7 @@ const server = createServer((req, res) => {
 });
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const url = `http://127.0.0.1:${server.address().port}/`;
+const archiveBase = recipe.dataHost.release ? `${url}archive` : recipe.dataHost.archiveBase.replace(/\/$/, '');
 
 const browser = await chromium.launch({
   args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
@@ -79,10 +90,12 @@ page.on('requestfailed', (r) => failedRequests.push(`${r.failure()?.errorText ??
 page.on('pageerror', (e) => pageErrors.push(String(e)));
 
 let ready = false;
+let missingLayers = [];
 try {
   await page.goto(url, { waitUntil: 'load' });
   await page.waitForFunction((h) => window[h]?.ready === true, hook, { timeout: 120000 });
   ready = true;
+  missingLayers = await page.evaluate((h) => window[h].missingLayers ?? [], hook);
 } catch {
   const shown = await page.locator('#error').textContent().catch(() => null);
   if (shown) pageErrors.push(`on page: ${shown}`);
@@ -103,7 +116,8 @@ console.log(`  archive requests failed: ${archiveFailures.length}`);
 for (const r of archiveFailures.slice(0, 10)) console.log(`      ${r}`);
 for (const r of otherFailures.slice(0, 10)) console.log(`  other request failed: ${r}`);
 for (const e of pageErrors) console.log(`  page error: ${e}`);
+for (const m of missingLayers) console.log(`  layer not loaded: ${m}`);
 
-const ok = ready && archiveFailures.length === 0 && pageErrors.length === 0;
+const ok = ready && archiveFailures.length === 0 && pageErrors.length === 0 && missingLayers.length === 0;
 console.log(ok ? '\nok: site loads its data' : '\nFAIL: site does not load cleanly');
 process.exit(ok ? 0 : 1);
