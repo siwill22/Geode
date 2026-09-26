@@ -15,7 +15,10 @@ import { GlobeInstance, type GlobeInstanceDeps } from './instance';
 import type { Rect } from '../core/layout';
 import { MultiInstanceHost } from '../core/multiInstanceHost';
 import type { IsosurfaceState } from './isosurface';
-import { sinkingDepthKm, type DepthSliceState } from '../core/depthSlice';
+import {
+  DEFAULT_DEPTH_SLICE, SINKING_RATE_PRESETS, canUseSinkingMode, sinkingDepthKm,
+  type DepthSliceState,
+} from '../core/depthSlice';
 import type { SurfaceMode } from './ui';
 import type { ArchiveIndex } from '../core/types';
 
@@ -222,33 +225,45 @@ document.getElementById('hint-toggle')?.addEventListener('click', () => {
 
 // --- presets -------------------------------------------------------------
 //
-// "Start Here" menu: canned starting points for someone who has never opened
+// "Start here" menu: canned starting points for someone who has never opened
 // the viewer before. Each one drives the same public instance API a user
 // action would (selectModel/applySurfaceMode/applyIso/closePolygon), so a
 // preset can never leave state a manual click couldn't also produce.
+//
+// Two kinds (CONTEXT.md):
+//   - View Presets show the loaded Model a particular way -- isosurfaces, a
+//     cutaway, a depth slice through time. They name no Model, so they work
+//     on any Archive, including one holding a single imported Model.
+//   - Comparison Presets set up specific Models side by side. Each is listed
+//     only when every Model it needs is in this Archive.
+// The menu is rebuilt each time it opens, so its labels name the Model
+// actually loaded and nothing on it can silently do nothing.
 
-document.getElementById('preset-toggle')?.addEventListener('click', () => {
-  const menu = document.getElementById('presets');
-  if (menu) menu.hidden = !menu.hidden;
-});
-
-function hidePresetsMenu(): void {
-  const menu = document.getElementById('presets');
-  if (menu) menu.hidden = true;
+interface Preset {
+  label: string;
+  sub: string;
+  apply: () => Promise<void>;
 }
 
 /** A single square cut, in lon/lat degrees, sized to the ocean gap between
  *  South America's east coast (to about -35 lon) and Africa's west coast
  *  (from about -15 lon) -- deliberately smaller than the visible hemisphere,
  *  so both coastlines stay on screen as a frame around the cut rather than
- *  the cut consuming the whole view. Reused identically across all three
- *  globes so the models line up for comparison. */
+ *  the cut consuming the whole view. Reused identically across all globes
+ *  so the models line up for comparison. */
 const ATLANTIC_CUT_POLYGON: [number, number][] = [
   [-55, 35], [-5, 35], [-5, -35], [-55, -35],
 ];
 /** All the way to the base of the volume, so the cut reveals the full column
  *  rather than just the shallow mantle. */
 const ATLANTIC_CUT_DEPTH_KM = 2890;
+const ATLANTIC_CAMERA = { lon: -30, lat: 0, dist: 3.0 };
+
+/** At age 0 sinking mode places the slice at 0 km -- inside some models'
+ *  near-surface cutoff (UU-P07's is 5 km), which reads as "broken" (flat
+ *  no-data grey) rather than "not sunk yet". 50 Ma puts the slice in the
+ *  upper mantle (600 km at 1.2 cm/yr), inside every model's depth range. */
+const SINKING_START_AGE = 50;
 
 function applyCutawayPolygon(inst: GlobeInstance, verts: [number, number][], depthKm: number): void {
   inst.cut.vertices = verts.map(([lon, lat]) => ({ lon, lat }));
@@ -257,193 +272,249 @@ function applyCutawayPolygon(inst: GlobeInstance, verts: [number, number][], dep
   refreshGUI(inst);
 }
 
-/** Matched by id, not a "muller" name fragment -- a fragment match was tried
- *  first and broke the moment the catalog grew a Muller2019 deformation/
- *  age-heat-flux family (`muller2019-deformation`, `muller2019-age-heatflux`):
- *  `archive.models.find()` returns the FIRST match in catalog order, which
- *  is now one of those (alphabetically before `opt1`), not the intended
- *  Muller 2022 OPT1 convection model -- this preset was silently loading a
- *  2D tomography-type age/heat-flux field and turning on isosurfaces over
- *  it. `opt1`'s id is stable and unique; matching it directly is the same
- *  convention `applyPresetDepthSliceComparison()` already uses for
- *  'reveal'/'uup07' below. */
-function findMullerModel(): ArchiveIndex['models'][number] | undefined {
-  return deps.archive.models.find((m) => m.id === 'opt1');
-}
-
 /**
  * Reset per-instance display state a preset must never inherit from whatever
- * a previous preset or manual edit left on screen -- Reference Plate and the
- * outer-surface rendering style/opacity. Each preset below calls this for
- * every instance it touches, BEFORE layering its own specific surfaceMode on
- * top, so a preset always looks the same regardless of prior state. Reported
- * live (2026-09-13): switching presets after setting a non-zero Reference
- * Plate left it non-zero in the new preset, and the REVEAL/UU-P07 depth-slice
- * preset never set surfaceMode at all, silently inheriting whatever an
- * earlier preset left it at.
+ * a previous preset or manual edit left on screen: Reference Plate, outer
+ * surface opacity, an open cutaway (onKeyEscape(), the same reset the Escape
+ * key drives) and the depth slice. selectModel()'s own reconcile only clears
+ * sinking mode on a non-tomography Model, not the slice itself, and a slice
+ * left on paints an opaque sphere over whatever the next preset shows. Age
+ * goes back to 0 Ma for the same reason: a preset looks the same whatever
+ * came before it. Reported live (2026-09-13): switching presets after setting a non-zero
+ * Reference Plate left it non-zero in the new preset.
  */
 function resetInstanceDisplayDefaults(inst: GlobeInstance): void {
   inst.setReferencePlate(0);
   inst.ui.setReferencePlateValue(0);
   inst.setSurfaceOpacity(1);
+  inst.applyAge(0);
+  inst.onKeyEscape();
+  inst.view.depthSlice.enabled = false;
+  inst.view.depthSlice.sinkingEnabled = false;
+  inst.applyDepthSlice();
+  inst.view.iso.coldEnabled = false;
+  inst.view.iso.hotEnabled = false;
+  inst.applyIso();
 }
 
-/** Preset 1: a single globe on the Muller et al. 2022 convection model, with
- *  the outer surface hidden and both isosurfaces on, so the mantle structure
- *  is the very first thing visible. */
-async function applyPresetConvection(): Promise<void> {
-  while (host.instances.length > 1) removeInstance(host.instances[host.instances.length - 1]);
+/** Exactly `n` globes, keeping the first ones and their Models. */
+async function setGlobeCount(n: number): Promise<void> {
+  while (host.instances.length > n) removeInstance(host.instances[host.instances.length - 1]);
+  while (host.instances.length < n) await addInstance();
+  relayout();
+}
+
+/** A View Preset starts from one globe, on whatever Model it already shows.
+ *  Syncs are dropped: they only mean something with a second globe. */
+async function singleGlobe(): Promise<GlobeInstance> {
+  await setGlobeCount(1);
+  setSyncAge(false);
+  setSyncDepthSlice(false);
   const inst = host.instances[0];
   host.focused = inst;
-
-  const model = findMullerModel();
-  if (model) await inst.selectModel(model.id);
-
   resetInstanceDisplayDefaults(inst);
+  return inst;
+}
+
+// The view steps, shared by View Presets and the Comparison Presets built
+// from them.
+
+function showIsosurfaces(inst: GlobeInstance): void {
   inst.applySurfaceMode('none');
-  // A cutaway left open from an earlier preset (the Atlantic comparison)
-  // would otherwise still be cut into whatever this preset shows -- same
-  // "each preset must reset what an earlier one might have left dirty"
-  // reasoning as the depth-slice reset below, just for a different piece of
-  // per-instance state. onKeyEscape() is the same reset the Escape key
-  // itself drives.
-  inst.onKeyEscape();
-  // selectModel()'s own reconcileDepthSliceWithModel() only clears
-  // sinkingEnabled on a non-tomography model, not `enabled` itself -- a
-  // depth slice left on from an earlier preset (e.g. the REVEAL/UU-P07
-  // depth-slice comparison) would otherwise still paint an opaque
-  // constant-depth sphere at R_SURFACE over the isosurfaces this preset
-  // means to show.
-  inst.view.depthSlice.enabled = false;
-  inst.applyDepthSlice();
   inst.view.iso.coldEnabled = true;
   inst.view.iso.hotEnabled = true;
   inst.applyIso();
   refreshGUI(inst);
 }
 
-/** Preset 2: one globe per real, STANDALONE seismic tomography model
- *  (skipping the dev fixtures), each cut open over the same Atlantic square
- *  so REVEAL/SEMUCB-WM1/UU-P07 can be compared side by side in the same
- *  region. `type === 'tomography'` alone is not enough to mean "a seismic
- *  inversion" any more -- Cao2024/Muller2019's Age & Heat Flux family
- *  members also reuse that type tag for an unrelated, incidental rendering-
- *  pipeline reason (same ADR-0018 caveat as convection), so without the
- *  reconstruction_model/comparison_role exclusion below this preset quietly
- *  grew from 3 globes to 5, mixing REVEAL/SEMUCB-WM1/UU-P07 with unrelated
- *  deformation-family products the moment that family was added to the
- *  catalog. A standalone model (no declared family axis) is what "real
- *  tomography model" actually means here. */
-async function applyPresetAtlanticComparison(): Promise<void> {
-  const models = deps.archive.models.filter(
+function showAtlanticCutaway(inst: GlobeInstance): void {
+  inst.applySurfaceMode('topography');
+  applyCutawayPolygon(inst, ATLANTIC_CUT_POLYGON, ATLANTIC_CUT_DEPTH_KM);
+}
+
+/** A coloured depth slice in place of the outer surface, its depth tied to
+ *  age by van der Meer et al. 2010's 1.2 cm/yr (the default rate), so the
+ *  age slider walks the slice down through the mantle. */
+function showSinkingSlice(inst: GlobeInstance): void {
+  inst.applySurfaceMode('none');
+  const ds = inst.view.depthSlice;
+  const rate = SINKING_RATE_PRESETS.find((p) => p.id === DEFAULT_DEPTH_SLICE.sinkingPreset)!;
+  ds.sinkingPreset = rate.id;
+  ds.rateUpperCmPerYr = rate.upperCmPerYr;
+  ds.rateLowerCmPerYr = rate.lowerCmPerYr;
+  ds.enabled = true;
+  ds.sinkingEnabled = true;
+  inst.applyDepthSlice();
+  refreshGUI(inst);
+}
+
+/** "slow & fast" for seismic velocity, "cold & hot" for temperature -- the
+ *  same naming the isosurface controls use (ui.ts setVariable). */
+function isoPairLabel(inst: GlobeInstance): string {
+  return (inst.variable?.high_means ?? 'fast') === 'fast' ? 'slow & fast' : 'cold & hot';
+}
+
+function viewPresets(): Preset[] {
+  const inst = host.instances[0];
+  const name = inst.modelEntry?.name ?? 'this model';
+  const presets: Preset[] = [
+    {
+      label: 'Isosurfaces',
+      sub: `${name}, surface hidden, ${isoPairLabel(inst)} isosurfaces`,
+      apply: async () => showIsosurfaces(await singleGlobe()),
+    },
+    {
+      label: 'Cutaway',
+      sub: `${name}, cut open to the core-mantle boundary under the Atlantic`,
+      apply: async () => {
+        showAtlanticCutaway(await singleGlobe());
+        setCamera(ATLANTIC_CAMERA);
+      },
+    },
+  ];
+  // Sinking mode maps age to depth, which only means something for a
+  // present-day image of the mantle (canUseSinkingMode), not a model with
+  // its own time axis.
+  if (canUseSinkingMode(inst.manifest)) {
+    presets.push({
+      label: 'Depth slice through time',
+      sub: `${name}, slice depth follows age at 1.2 cm/yr -- drag the age slider`,
+      apply: async () => {
+        const g = await singleGlobe();
+        showSinkingSlice(g);
+        g.applyAge(SINKING_START_AGE);
+        refreshGUI(g);
+      },
+    });
+  }
+  return presets;
+}
+
+type ModelEntry = ArchiveIndex['models'][number];
+
+function modelById(id: string): ModelEntry | undefined {
+  return deps.archive.models.find((m) => m.id === id);
+}
+
+/** Real, STANDALONE seismic tomography models. `type === 'tomography'` alone
+ *  is not enough: Cao2024/Muller2019's Age & Heat Flux family members reuse
+ *  that type tag for an incidental rendering reason (same ADR-0018 caveat as
+ *  convection), and without the reconstruction_model/comparison_role
+ *  exclusion the Atlantic comparison grew from 3 globes to 5 the moment that
+ *  family joined the catalog. */
+function standaloneTomography(): ModelEntry[] {
+  return deps.archive.models.filter(
     (m) => m.type === 'tomography' && !m.id.startsWith('fixture-')
       && !m.reconstruction_model && !m.comparison_role,
   );
-  if (models.length === 0) return;
-
-  while (host.instances.length > models.length) removeInstance(host.instances[host.instances.length - 1]);
-  while (host.instances.length < models.length) await addInstance();
-  relayout();
-
-  for (let i = 0; i < models.length; i++) {
-    const inst = host.instances[i];
-    await inst.selectModel(models[i].id);
-    resetInstanceDisplayDefaults(inst);
-    // A consistent surface across all three, regardless of what each
-    // instance's surface happened to be left at by earlier interaction (e.g.
-    // the convection preset's "none") -- the point of this preset is a
-    // like-for-like comparison.
-    inst.applySurfaceMode('topography');
-    // A depth slice left ENABLED from an earlier preset (the REVEAL/UU-P07
-    // depth-slice comparison) paints its own opaque constant-depth sphere
-    // regardless of the cutaway -- the cutaway polygon still gets recorded
-    // (closePolygon() below doesn't care), but visually the depth slice's
-    // settings are what's showing, not the cutaway this preset means to
-    // demonstrate. Same "each preset must reset what an earlier one left
-    // dirty" reasoning as the Convection preset's own identical reset, and
-    // the onKeyEscape() calls those two presets make for a cutaway left
-    // open by THIS one.
-    inst.view.depthSlice.enabled = false;
-    inst.applyDepthSlice();
-    applyCutawayPolygon(inst, ATLANTIC_CUT_POLYGON, ATLANTIC_CUT_DEPTH_KM);
-    refreshGUI(inst);
-  }
-  host.focused = host.instances[0];
-  // One shared camera for every tile: point it at the Atlantic so the cut
-  // this preset just made is actually the thing on screen, not a coincidence
-  // of wherever the camera happened to be left.
-  setCamera({ lon: -30, lat: 0, dist: 3.0 });
 }
 
-/** Preset 3: REVEAL next to UU-P07 -- two present-day tomography inversions,
- *  each showing a coloured depth slice instead of the outer surface, with
- *  both locked to age via the same published sinking rate and with time and
- *  depth slice synced across the two. Scrubbing either slider on either
- *  globe moves both together, so the same reconstructed depth is always
- *  being compared between the two models. */
-async function applyPresetDepthSliceComparison(): Promise<void> {
-  const reveal = deps.archive.models.find((m) => m.id === 'reveal');
-  const uup07 = deps.archive.models.find((m) => m.id === 'uup07');
-  const wanted = [reveal, uup07].filter((m): m is ArchiveIndex['models'][number] => !!m);
-  if (wanted.length === 0) return;
+function comparisonPresets(): Preset[] {
+  const presets: Preset[] = [];
 
-  while (host.instances.length > wanted.length) removeInstance(host.instances[host.instances.length - 1]);
-  while (host.instances.length < wanted.length) await addInstance();
-  relayout();
-
-  for (let i = 0; i < wanted.length; i++) {
-    const inst = host.instances[i];
-    await inst.selectModel(wanted[i].id);
-    resetInstanceDisplayDefaults(inst);
-    // Same reasoning as the Convection preset's own onKeyEscape() call -- a
-    // cutaway left open from the Atlantic comparison would otherwise still
-    // be cut into this depth-slice view.
-    inst.onKeyEscape();
-    // This preset shows a coloured depth slice IN PLACE OF the outer
-    // surface -- previously left unset here, so an outer surface (e.g. the
-    // Atlantic comparison's 'topography') silently kept covering the slice
-    // until a manual edit turned it off.
-    inst.applySurfaceMode('none');
-    inst.view.depthSlice.enabled = true;
-    // Both are tomography, so sinking mode (see canUseSinkingMode) applies to
-    // either -- ties each one's own slice depth to the shared age via the
-    // same published rate, rather than leaving one a fixed manual depth.
-    inst.view.depthSlice.sinkingEnabled = true;
-    inst.applyDepthSlice();
-    refreshGUI(inst);
+  // Matched by id, not a "muller" name fragment: a fragment match picked a
+  // Muller2019 age/heat-flux model once that family joined the catalog.
+  const opt1 = modelById('opt1');
+  if (opt1) {
+    presets.push({
+      label: 'Mantle convection',
+      sub: `${opt1.name}, surface hidden, hot & cold isosurfaces`,
+      apply: async () => {
+        const inst = await singleGlobe();
+        await inst.selectModel(opt1.id);
+        resetInstanceDisplayDefaults(inst);
+        showIsosurfaces(inst);
+      },
+    });
   }
-  host.focused = host.instances[0];
-  // At age 0 the sinking rate places the slice at 0 km -- inside UU-P07's own
-  // near-surface cutoff (5 km), which reads as "broken" (flat no-data grey)
-  // rather than "not sunk yet". 50 Ma puts the slice in the upper mantle,
-  // comfortably inside both models' valid depth range, so the very first
-  // thing shown actually demonstrates the feature.
-  host.instances[0].applyAge(50);
-  refreshGUI(host.instances[0]);
-  // Synced AFTER both globes already have depth slice (and REVEAL's age) set:
-  // setSyncAge/setSyncDepthSlice immediately broadcast the focused instance's
-  // current values, so turning them on first would push a still-default
-  // depth/age from a half-configured globe onto the other.
-  setSyncAge(true);
-  setSyncDepthSlice(true);
+
+  const tomo = standaloneTomography();
+  if (tomo.length >= 2) {
+    presets.push({
+      label: 'Compare tomography models',
+      sub: `${tomo.length} globes (${tomo.map((m) => m.name).join(', ')}), Atlantic cutaway`,
+      apply: async () => {
+        await setGlobeCount(tomo.length);
+        setSyncAge(false);
+        setSyncDepthSlice(false);
+        for (let i = 0; i < tomo.length; i++) {
+          const inst = host.instances[i];
+          await inst.selectModel(tomo[i].id);
+          resetInstanceDisplayDefaults(inst);
+          showAtlanticCutaway(inst);
+        }
+        host.focused = host.instances[0];
+        // One shared camera for every tile, pointed at the cut.
+        setCamera(ATLANTIC_CAMERA);
+      },
+    });
+  }
+
+  const pair = [modelById('reveal'), modelById('uup07')];
+  if (pair[0] && pair[1]) {
+    const [a, b] = pair as ModelEntry[];
+    presets.push({
+      label: 'Compare depth slices',
+      sub: `${a.name} & ${b.name}, locked to age, synced depth slice & time`,
+      apply: async () => {
+        await setGlobeCount(2);
+        setSyncAge(false);
+        setSyncDepthSlice(false);
+        for (const [i, m] of [a, b].entries()) {
+          const inst = host.instances[i];
+          await inst.selectModel(m.id);
+          resetInstanceDisplayDefaults(inst);
+          showSinkingSlice(inst);
+        }
+        host.focused = host.instances[0];
+        host.instances[0].applyAge(SINKING_START_AGE);
+        refreshGUI(host.instances[0]);
+        // Synced AFTER both globes are set up: setSyncAge/setSyncDepthSlice
+        // immediately broadcast the focused instance's current values, so
+        // turning them on first would push a half-configured globe's
+        // defaults onto the other.
+        setSyncAge(true);
+        setSyncDepthSlice(true);
+      },
+    });
+  }
+  return presets;
 }
 
-document.getElementById('preset-convection')?.addEventListener('click', () => {
-  if (!deps) return; // still booting; the first globe isn't up yet
-  hidePresetsMenu();
-  void applyPresetConvection();
-});
+function renderPresetsMenu(menu: HTMLElement): void {
+  menu.replaceChildren();
+  const groups: [string, Preset[]][] = [
+    ['Start here', viewPresets()],
+    ['Compare', comparisonPresets()],
+  ];
+  for (const [title, presets] of groups) {
+    if (presets.length === 0) continue;
+    const heading = document.createElement('div');
+    heading.className = 'presets-title';
+    heading.textContent = title;
+    menu.append(heading);
+    for (const p of presets) {
+      const btn = document.createElement('button');
+      btn.className = 'preset-btn';
+      btn.textContent = p.label;
+      const sub = document.createElement('span');
+      sub.className = 'sub';
+      sub.textContent = p.sub;
+      btn.append(sub);
+      btn.addEventListener('click', () => {
+        menu.hidden = true;
+        void p.apply();
+      });
+      menu.append(btn);
+    }
+  }
+}
 
-document.getElementById('preset-atlantic')?.addEventListener('click', () => {
-  if (!deps) return;
-  hidePresetsMenu();
-  void applyPresetAtlanticComparison();
-});
-
-document.getElementById('preset-depthslice')?.addEventListener('click', () => {
-  if (!deps) return;
-  hidePresetsMenu();
-  void applyPresetDepthSliceComparison();
+document.getElementById('preset-toggle')?.addEventListener('click', () => {
+  const menu = document.getElementById('presets');
+  if (!menu || !deps || host.instances.length === 0) return; // still booting
+  if (menu.hidden) renderPresetsMenu(menu);
+  menu.hidden = !menu.hidden;
 });
 
 // --- interaction -------------------------------------------------------

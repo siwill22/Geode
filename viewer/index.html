@@ -140,21 +140,9 @@
       the toolbar link those sliders across globes too, once turned on.
     </div>
     <button id="preset-toggle" aria-label="Start Here" title="Start Here">&#9733;</button>
-    <div id="presets" hidden>
-      <div class="presets-title">Start here</div>
-      <button class="preset-btn" id="preset-convection">
-        Mantle convection
-        <span class="sub">M&uuml;ller 2022 OPT1, surface hidden, hot &amp; cold isosurfaces</span>
-      </button>
-      <button class="preset-btn" id="preset-atlantic">
-        Compare tomography models
-        <span class="sub">Three globes, one per model, Atlantic cutaway</span>
-      </button>
-      <button class="preset-btn" id="preset-depthslice">
-        Compare depth slices
-        <span class="sub">REVEAL &amp; UU-P07, locked to age, synced depth slice &amp; time</span>
-      </button>
-    </div>
+    <!-- Filled by src/tomography/main.ts each time it opens: which presets
+         apply depends on the Archive's Models and on the loaded one. -->
+    <div id="presets" hidden></div>
     <button id="globe-menu-toggle" aria-label="Multi-Globe options" title="Multi-Globe options">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="7" height="7" rx="1.2"/>
