@@ -14,13 +14,14 @@ the design decisions behind this, and `generator/recipeTypes.ts` for the
 recipe shape itself — read them if anything below is unclear or if the
 catalog/tooling has visibly moved on since this was written.
 
-**Scope**: v1.9 only composes from the existing, pre-vetted data catalog
-(`archive/archive.json`, served live from
-`https://siwill22.github.io/Geode/archive`). It never imports data itself
-or invents a colormap/clip-range/coastline pairing. Importing a Model is a
-separate step with no manual parts (docs/adr/0056): its judgement calls are
-asked, recorded in an Ingest Config and shown on a Verification Card for
-approval, producing an Archive this Skill then consumes.
+**Scope**: this Skill composes a site from an Archive that already exists:
+either the shared Geode catalog (served live from
+`https://siwill22.github.io/Geode/archive`), or a standalone Archive the
+`geode-model-archive` Skill built for a newly imported Model (ADR-0054),
+whose Verification Card the user has already approved. It never imports
+data itself or invents a colormap/clip-range/coastline pairing. If the
+request names a Model in neither, that is the `geode-model-archive` Skill's
+job first (ADR-0056); don't work around it here.
 
 **Vocabulary** (see `CONTEXT.md` — this Skill uses its terms precisely, not
 loosely): a **Model** is one named field from one published source (a
@@ -54,7 +55,7 @@ A fixed menu of four bundled UI tools (`legend`/`age-slider`/
 plus one opt-in `time-series` panel — asked about separately, the same way
 Multi-Globe is (see step 4/5), never silently bundled into the other
 four's default — applies to the two numerical-Model wrapper types only.
-Four wrapper types total (see step 3 for how to choose):
+Five wrapper types total (see step 3 for how to choose):
 - `single-model-globe` — exactly one Model, no comparison controls.
 - `model-group-globe` — several Models from ONE comparison family, varying
   along at least one shared axis (which reconstruction; which role),
@@ -68,9 +69,18 @@ Four wrapper types total (see step 3 for how to choose):
   e.g. "compare Müller 2019's continent polygons and plate boundaries
   against Scotese's continent polygons alone," the actual request that
   motivated building this pair.
+- `mantle-globe` — the mantle viewer: one or more standalone tomography or
+  convection Models (a Model dropdown if several), with cutaway,
+  isosurfaces, depth slices tied to age, multi-globe and a "Start here"
+  menu of **View Presets** (CONTEXT.md). Configured by a `mantle` block
+  instead of `ui.tools`. This is the type for any seismic tomography
+  request, and the one a `geode-model-archive` Archive of a tomography
+  Model is built for.
 
 **Multi-Globe** (see `docs/adr/0022`, `CONTEXT.md`'s Multi-Globe / Synced
-Field entries) is available on all four wrapper types: an opt-in
+Field entries) is available on the first four wrapper types (`mantle-globe`
+always has its own multi-globe menu, with time and depth-slice sync, and
+ignores the `multiGlobe` field): an opt-in
 `"+ Add globe"` toolbar that tiles N copies of the SAME recipe's globe side
 by side, with Reconstruction Age optionally synced between them
 (`multiGlobe.syncAge` — the only Synced Field this menu offers; there is no
@@ -91,7 +101,7 @@ field, deliberately, not because nobody's built it yet (see
 applies, rather than forcing a request like that into Multi-Globe or one of
 the four existing shapes.
 
-If a request needs something else none of the four wrapper types can do
+If a request needs something else none of the five wrapper types can do
 (an arbitrary multi-Model mix, three+ axes, on-the-fly data prep), say so
 plainly rather than attempting it.
 
@@ -105,7 +115,8 @@ wrapper directory the recipe needs (`viewer/src/globe/` + `viewer/globe.html`
 for `single-model-globe`; `viewer/src/groupGlobe/` + `viewer/groupGlobe.html`
 for `model-group-globe`; `viewer/src/reconstruction/` + `viewer/reconstruction.html`
 for `single-reconstruction-globe`; `viewer/src/reconstructionGroup/` +
-`viewer/reconstructionGroup.html` for `reconstruction-group-globe`) — it
+`viewer/reconstructionGroup.html` for `reconstruction-group-globe`;
+`viewer/src/tomography/` + `viewer/index.html` for `mantle-globe`) — it
 needs to be run with a checkout of the Geode repo (github.com/siwill22/Geode) available on
 disk. If the current working directory isn't inside one, clone it to a
 temp directory first (read-only use — never push to it).
@@ -176,6 +187,11 @@ The `gh` CLI must be authenticated as the user who will own the new repo
      ask which was meant.
 
    **For a `models[]`-based request**, match against the grouped catalog:
+   - If the match is one or more standalone `tomography` or `convection`
+     Models, and the request is about the mantle (inside the Earth,
+     slabs, plumes, cutaways, isosurfaces, depth slices) →
+     `mantle-globe`, with every such Model named. Only a request for a
+     plain surface map of one of them goes to `single-model-globe`.
    - If wording confidently matches exactly one standalone Model (by
      `models[].id`/`.name`/`.source`, or a manifest `variables[].id`/`.name`
      for the variable), and it stands alone (not part of a family) →
@@ -382,7 +398,36 @@ The `gh` CLI must be authenticated as the user who will own the new repo
    Always use `https://siwill22.github.io/Geode/archive` as `dataHost.archiveBase`
    unless the user explicitly names a different Geode data host.
 
-   Any of the four shapes above may add a top-level `multiGlobe` field when
+   Mantle viewer — `datasets` is the Model dropdown, in order; `mantle` is
+   optional throughout (defaults: first Model, the viewer's own camera, all
+   three View Presets with Atlantic geography). Give a View Preset the
+   geography that suits the Model's story — a `cutaway` with its own
+   `polygon` must name its `region` for the menu label:
+   ```jsonc
+   {
+     "recipeVersion": 1,
+     "site": { "repoName": "...", "title": "...", "description": "..." },
+     "wrapperType": "mantle-globe",
+     "datasets": [{ "modelId": "detox-p2" }],
+     "mantle": {
+       "defaultCamera": { "lon": -95, "lat": 25, "dist": 2.7 },
+       "viewPresets": [
+         { "kind": "cutaway", "region": "the Americas",
+           "polygon": [[-125, 50], [-70, 50], [-70, 0], [-125, 0]],
+           "camera": { "lon": -95, "lat": 25, "dist": 2.7 } },
+         { "kind": "sinking-slice" },
+         { "kind": "isosurfaces" }
+       ]
+     },
+     "dataHost": { "release": { "tag": "archive-v1", "asset": "archive.tar.gz" } }
+   }
+   ```
+   `dataHost.release` is for a standalone Archive: the site's own repo
+   carries it as a release asset, unpacked into the site at deploy (steps
+   9–12). Use it for every `geode-model-archive` Archive; use
+   `archiveBase` for the shared catalog.
+
+   Any of the first four shapes above may add a top-level `multiGlobe` field when
    step 4/5 included it — never inside `ui`, and valid regardless of
    `wrapperType`:
    ```jsonc
@@ -396,7 +441,9 @@ The `gh` CLI must be authenticated as the user who will own the new repo
 
 7. **Validate**: `node generator/validateRecipe.mjs <recipe.json>` (no
    third argument — let it check against the live host, per step 2's
-   reasoning). On failure, read the structured errors: each one may include
+   reasoning). A `dataHost.release` recipe is the exception: its Archive is
+   not published until the site is, so pass the assembled Archive
+   directory as the third argument. On failure, read the structured errors: each one may include
    `suggestions` (near-matches) you can silently apply and re-validate, or
    may need a question back to the user (step 5) — a "datasets must form a
    COMPLETE grid" error means step 3's family assembly missed a member;
@@ -413,7 +460,12 @@ The `gh` CLI must be authenticated as the user who will own the new repo
    `petrify` library along, whether or not this recipe's wrapper
    type uses it).
 
-9. **Sanity-check it locally** before publishing anything: in `<tmpDir>`,
+9. **Sanity-check it locally** before publishing anything. For a
+   `dataHost.release` site, first pack the Archive and unpack it where the
+   deploy workflow will:
+   `tar -czf <tmp>/archive.tar.gz -C <archiveDir> .` then
+   `mkdir -p <tmpDir>/public/archive && tar -xzf <tmp>/archive.tar.gz -C <tmpDir>/public/archive`
+   (`public/archive/` is gitignored in the site). Then in `<tmpDir>`,
    `npm install && npm run build`, then from this repo
    `node generator/checkSite.mjs <tmpDir>`. The second step serves the
    built site and passes only if it reaches `ready` with no failed archive
@@ -424,7 +476,12 @@ The `gh` CLI must be authenticated as the user who will own the new repo
    broken repo.
 
 10. **Create the GitHub repo**: `gh repo create <repoName> --source=<tmpDir> --push`
-    with `--public` or `--private` per step 5's confirmed answer.
+    with `--public` or `--private` per step 5's confirmed answer. For a
+    `dataHost.release` site, then publish the Archive:
+    `gh release create <tag> <tmp>/archive.tar.gz --repo <owner>/<repoName> --title "Archive <tag>" --notes "..."`
+    (notes: which Models, copied from which Geode release). The
+    push-triggered deploy runs before the release exists and fails on its
+    "Fetch the Archive" step — expected; step 12 re-runs it.
 
 11. **Enable Pages**: `gh api -X POST repos/<owner>/<repoName>/pages -f build_type=workflow`.
     Check GitHub's current REST API docs for this endpoint's exact shape if
@@ -432,7 +489,9 @@ The `gh` CLI must be authenticated as the user who will own the new repo
     versions and shouldn't be assumed stable from memory.
 
 12. **Watch the deploy**: the push already triggered
-    `.github/workflows/deploy.yml`. `gh run watch` (or `gh run list` +
+    `.github/workflows/deploy.yml` (for a `dataHost.release` site, start
+    the run that counts with `gh workflow run deploy.yml --repo <owner>/<repoName>`
+    once the release exists). `gh run watch` (or `gh run list` +
     poll) until it finishes. On failure, fetch and read the log
     (`gh run view --log-failed`) and report what broke rather than guessing.
 
@@ -445,12 +504,27 @@ The `gh` CLI must be authenticated as the user who will own the new repo
     a pointer to `recipe.json` in the new repo for
     anyone who wants to see exactly what was requested.
 
+## Updating an existing site
+
+A Generated Site is updated by regenerating it, never by editing its files
+(ADR-0055). Clone it, edit its `recipe.json` if the request changes what it
+shows, then from a Geode checkout:
+`node generator/scaffoldRepo.mjs <site>/recipe.json <site> [archiveDir] --update`.
+It refuses, naming the files, if any generated file was edited by hand
+since `.geode/generated.json` was written: report that to the user rather
+than passing `--force`, which discards those edits. A site generated before
+stamps existed has no `.geode/generated.json`; `--update --force` adopts it —
+show the user `git diff` before committing. Then steps 9–12 as for a new
+site (commit and push instead of `gh repo create`). Generate from a clean
+Geode checkout: the stamp records `dirty: true` otherwise, and the site
+would carry uncommitted code.
+
 ## What this is not
 
 Don't hand-write Three.js, shaders, or a new `main.ts`/`Instance`/`UI`
 triad for a generated site — that defeats the entire point of the recipe
 + generator (deterministic, tested output vs. an LLM re-deriving
 domain-specific footguns like ADR-0004/0005 from scratch each time). If a
-request needs something none of the four wrapper types genuinely can do,
+request needs something none of the five wrapper types genuinely can do,
 say so and suggest it as a future enhancement to this skill/generator
 rather than improvising code around it.
