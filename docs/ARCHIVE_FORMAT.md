@@ -52,9 +52,10 @@ longitude `-180 + i * 360 / nlon` (i = 0 .. nlon-1: the seam is not
 repeated), latitude `-90 + j * 180 / (nlat - 1)` (both poles included) and
 depth `depth_min_km + k * (depth_max_km - depth_min_km) / (ndepth - 1)` --
 the positions `volumeUVW` in `core/glsl/geographic.ts` reads. A byte `b` decodes to
-`encode_min + b / 255 * (encode_max - encode_min)`. Encoding truncates, so a
-decoded value lies within one stored level *below* its source value; values
-outside the encode range are clamped to it. There is no no-data byte unless
+`encode_min + b / 255 * (encode_max - encode_min)`. Encoding rounds to the
+nearest byte, so a decoded value lies within half a stored level of its
+source; values outside the encode range are clamped to it. (Models built
+before 2026-09-26 were truncated instead: up to one level *below* source.) There is no no-data byte unless
 the manifest declares `no_data_sentinel`.
 
 **Provenance.** A Model's citation is its manifest's `source`. Every other

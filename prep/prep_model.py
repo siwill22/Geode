@@ -370,8 +370,15 @@ def resample_horizontal(data, lon, lat, nlon, nlat, kind="linear"):
 
 
 def encode_uint8(data, clip_lo, clip_hi):
+    """Encode onto 0..255 over [clip_lo, clip_hi], ROUNDING to the nearest
+    byte, so a decoded value is within half a stored level of its source.
+
+    This used to truncate (astype alone floors), which biased every value
+    down by up to a whole level. Archives built before 2026-09-26 still
+    carry truncated bytes; docs/ARCHIVE_FORMAT.md says so.
+    """
     scaled = (data - clip_lo) / (clip_hi - clip_lo)
-    return np.clip(scaled * 255.0, 0, 255).astype(np.uint8)
+    return np.clip(np.rint(scaled * 255.0), 0, 255).astype(np.uint8)
 
 
 def choose_clip(data, diverging, percentile, override):
@@ -591,6 +598,11 @@ def main():
         clip_lo, clip_hi = choose_clip(
             data, diverging, args.clip_percentile, args.clip
         )
+        # Encode with exactly the numbers the manifest will record (rounded
+        # to 4 dp below), since those are what every reader decodes with --
+        # encoding with the unrounded range put some bytes just over half a
+        # level away once the Verification Card gated on it.
+        clip_lo, clip_hi = round(clip_lo, 4), round(clip_hi, 4)
         vol = encode_uint8(data, clip_lo, clip_hi)
 
         frame_dir = model_dir / "frames" / vid / args.resolution_id

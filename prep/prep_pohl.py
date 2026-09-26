@@ -345,10 +345,10 @@ def main():
         "default_colormap": "gray",
     })
 
-    # --- koppen: same band-centre-encoding trick prep_climate.py uses
-    # (encode_uint8 truncates; the shader's uSteps decode floors -- landing
-    # exactly on an integer class would round-trip to the class BELOW it
-    # for every class but 0, see prep_climate.py's own comment on this).
+    # --- koppen: same band-centre-encoding trick prep_climate.py uses (the
+    # shader's uSteps decode floors, so a class stored exactly on an integer
+    # boundary is one byte from the class below; the band centre leaves a
+    # wide margin either way -- see prep_climate.py's own comment on this).
     print(f"\n=== KOPPEN  (precomputed, static -> broadcast to every layer)")
     koppen_vol = np.repeat(
         (np.stack(koppen_frames) + 0.5)[:, np.newaxis, :, :], N_LAYERS, axis=1,

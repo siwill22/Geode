@@ -536,15 +536,15 @@ def main():
     print(f"\n=== KOPPEN  (derived from T + P, static -> broadcast to every layer)")
     koppen_2d = compute_koppen(physical["T"], physical["P"], physical["LANDFRAC"][:, 0], lat2)
     # Encode each class at its BAND CENTRE (c + 0.5), not the raw integer c.
-    # encode_uint8's astype(np.uint8) TRUNCATES rather than rounds, and the
-    # shader recovers a class from uSteps=N via floor(t*N) -- composing a
-    # truncating encode with a flooring decode shifts every class except 0
-    # down by one band (class 9 "Desert" was being stored and rendered as
+    # The shader recovers a class from uSteps=N via floor(t*N), so a value
+    # stored exactly on an integer boundary lands in whichever band a
+    # one-byte error pushes it into -- with encode_uint8's old truncation,
+    # every class except 0 fell one band (class 9 "Desert" was being stored and rendered as
     # class 8 "Temperate, no dry season" -- confirmed by reading back the
     # actual written frame, which is why the spot checks below decode from
     # the real encoded bytes rather than this pre-encoding array). Landing
-    # on the band centre leaves 1/(2*N_KOPPEN_CLASSES) of margin either side
-    # of the encode step (~1/255), more than enough to absorb it.
+    # on the band centre leaves 1/(2*N_KOPPEN_CLASSES) of margin either side,
+    # far more than the one-byte error of either truncating or (now) rounding.
     koppen_vol = broadcast_static(koppen_2d.astype(np.float32) + 0.5, N_LAYERS)
     encoded = encode_uint8(koppen_vol, 0.0, float(N_KOPPEN_CLASSES))
     total_mb = write_frames(model_dir, args.resolution_id, "KOPPEN", encoded, frame_meta)

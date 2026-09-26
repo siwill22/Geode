@@ -17,8 +17,8 @@ stored bytes decoded exactly as the viewer decodes them
 
 Gate (exit 1): wherever a stored sample sits exactly on a source grid node
 and the source value is inside the encode range, the decoded value must lie
-within one stored level below the source (encoding truncates). Clamped
-values and interpolated positions are reported, not gated.
+within half a stored level of the source (encoding rounds). Clamped values
+and interpolated positions are reported, not gated.
 
 Needs only numpy, xarray and matplotlib: no PyGMT, no cartopy, no map
 downloads, so it runs anywhere the import does. Plain lon/lat panels are
@@ -173,7 +173,9 @@ def main():
         cells_total += sv.size
         worst = float(np.abs(err[inside]).max()) if inside.any() else 0.0
         if on_nodes:
-            bad = inside & ((err > 1e-6 * max(1, abs(hi))) | (err < -step * (1 + 1e-6)))
+            # 1e-4 of a level: float32 source grids alone put some cells a few
+            # millionths of a level past the half-level mark (measured, DETOX).
+            bad = inside & (np.abs(err) > (0.5 + 1e-4) * step)
             if bad.any():
                 gate_fail.append((float(d), int(bad.sum())))
         per_depth.append({"depth_km": float(d), "on_source_nodes": bool(on_nodes),

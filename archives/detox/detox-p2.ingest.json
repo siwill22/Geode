@@ -1,0 +1,47 @@
+{
+  "ingest": 1,
+  "id": "detox-p2",
+  "name": "DETOX-P2",
+  "type": "tomography",
+  "source": "Hosseini, K., Sigloch, K., Tsekhmistrenko, M., Zaheri, A., Nissen-Meyer, T. & Igel, H. (2020), Global mantle structure from multifrequency tomography using P, PP and P-diffracted waves, Geophys. J. Int. 220(1), 96-141, https://doi.org/10.1093/gji/ggz394 (model DETOX-P2: P + Pdiff)",
+  "doi": "10.5281/zenodo.3993276",
+  "license": "CC-BY-4.0",
+  "input": {
+    "zip_url": "https://zenodo.org/api/records/3993276/files/DETOX_MODELS.zip/content",
+    "members": "^DETOX_MODELS/DETOX-P2/grid_nc4/DETOX-P2_[0-9.]+\\.grd$"
+  },
+  "depth_regex": "_([0-9.]+)\\.grd$",
+  "slice_var": "z",
+  "vars": [
+    "z:vp:Vp anomaly"
+  ],
+  "units": "%",
+  "high_means": "fast",
+  "nlon": 720,
+  "nlat": 361,
+  "ndepth": 59,
+  "depth_range": [
+    0,
+    2900
+  ],
+  "clip_percentile": 99.9,
+  "max_nan_fraction": 0.01,
+  "roughness_factor": 2.0,
+  "reconstruction": {
+    "computed_in": null,
+    "shown_with": "muller2022"
+  },
+  "evidence": {
+    "units": "Grid values are dlnVp in percent: sampling the 1000 km and 2000 km grids at the native tetrahedral nodes (DETOX-P2.solx, labelled dlnVp, fractional) gives slopes 97.3 and 98.2 with r = 0.999 (100 less spline smoothing).",
+    "depth_reference": "Grid depths are measured below a 6371 km surface: the same regression with a 6421 km reference (the native mesh's outer radius) drops to r = 0.97-0.98.",
+    "polarity": "Positive dlnVp is fast, i.e. cold; subducted slabs appear as positive anomalies (high_means = fast).",
+    "resolution": "Native 0.5 deg x 0.5 deg x 50 km (720 x 361 x 59 after dropping the repeated 360 deg column); not resampled.",
+    "choice_of_model": "DETOX-P2 (P + Pdiff): the paper's abstract reports that Pdiff data sharpen subducted-slab geometries under the Americas, Eurasia and the Northern Pacific in the upper 2000 km; DETOX-P3 adds PP but introduces low-velocity artefacts beneath oceans.",
+    "encode_range": "clip_percentile 99.9, not the 99.5 used for REVEAL/SEMUCB/UU-P07: at 99.5 (+-0.94 %) the Verification Card showed 2-3 % of cells clamped from 0 to 300 km, where strong upper-mantle anomalies (slab cores among them) sit. At 99.9 (+-1.46 %) one stored level is 0.0115 %, still far finer than the signal.",
+    "default_display": "default_clip +-0.5 %, the 95th percentile of |dVp| over the volume (0.498 %), rather than prep_model's default of half that (+-0.25 %), which rendered most of the cutaway and depth slice saturated."
+  },
+  "default_clip": [
+    -0.5,
+    0.5
+  ]
+}
