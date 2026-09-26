@@ -184,9 +184,9 @@ def load_and_condition(ds, spec: VarSpec, nlon: int, nlat: int):
 
     flat, lon2 = normalise_longitude(flat, lon)
     flat, lon2 = drop_duplicate_seam(flat, lon2)
-    # len(lon2) == nlon would false-positive on resample_horizontal's count-only
-    # fast path if the native grid happened to match -- it doesn't here (288x192
-    # native vs 360x181 target), so the real interpolation branch always runs.
+    # resample_horizontal's fast path now checks positions, not just counts,
+    # so a native grid that happened to match 360x181 in size alone could not
+    # slip through unresampled (it doesn't here: 288x192 native).
     flat, lon2, lat2 = resample_horizontal(flat, lon2, lat, nlon, nlat)
 
     if spec.monthly:

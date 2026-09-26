@@ -350,16 +350,23 @@ def resample_horizontal(data, lon, lat, nlon, nlat, kind="linear"):
     # latitudes include both poles.
     tlon = np.linspace(-180.0, 180.0, nlon, endpoint=False)
     tlat = np.linspace(-90.0, 90.0, nlat)
-    if len(lon) == nlon and len(lat) == nlat:
-        return data, lon, lat
+    # Skip only when the source already sits ON the target positions -- a
+    # count match alone would pass an offset grid (e.g. cell-centred -179.75..)
+    # through unresampled and half a cell out of place.
+    if (len(lon) == nlon and len(lat) == nlat
+            and np.allclose(lon, tlon) and np.allclose(lat, tlat)):
+        return data, tlon, tlat
 
-    if len(lat) != nlat:
+    if not (len(lat) == nlat and np.allclose(lat, tlat)):
         data = _interp_axis(data, lat, tlat, axis=1, kind=kind)
-    if len(lon) != nlon:
-        # Pad by one wrapped column so targets past the last source longitude
-        # interpolate across the seam rather than clamping to it.
-        lon_p = np.append(lon, lon[0] + 360.0)
-        data_p = np.concatenate([data, data[:, :, :1]], axis=2)
+    if not (len(lon) == nlon and np.allclose(lon, tlon)):
+        # Pad by one wrapped column at EACH end, so targets past the last
+        # source longitude, and before the first, interpolate across the seam
+        # rather than clamping. Padding the far end alone left a cell-centred
+        # grid (Pohl: first column -178.59) clamping the -180 and -179 targets
+        # to the same source column.
+        lon_p = np.concatenate([[lon[-1] - 360.0], lon, [lon[0] + 360.0]])
+        data_p = np.concatenate([data[:, :, -1:], data, data[:, :, :1]], axis=2)
         data = _interp_axis(data_p, lon_p, tlon, axis=2, kind=kind)
     return data, tlon, tlat
 
