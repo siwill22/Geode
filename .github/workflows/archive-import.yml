@@ -1,0 +1,70 @@
+# Rebuild the DETOX-P2 Archive from its Ingest Config on a bare runner.
+#
+# The stand-in for a Claude Cowork VM: no conda, and deliberately no system GMT, so any
+# import-path script that reaches for pygmt fails here (requirements.txt: GMT is needed only
+# by prep_paleogeography.py and prep_pbdb.py). Runs the one command in archives/detox/README.md
+# -- copy from a data release, download the source slices, import, verify, Verification
+# Card -- and fails if the verify step or the card's gate does. The card is uploaded so a
+# person can look at what CI built.
+name: Archive import
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - requirements.txt
+      - archives/**
+      - prep/_inputs.py
+      - prep/prep_model.py
+      - prep/assemble_archive.py
+      - prep/build_archive_index.py
+      - prep/verify_archive.py
+      - prep/verification_card.py
+      - .github/workflows/archive-import.yml
+  pull_request:
+    paths:
+      - requirements.txt
+      - archives/**
+      - prep/_inputs.py
+      - prep/prep_model.py
+      - prep/assemble_archive.py
+      - prep/build_archive_index.py
+      - prep/verify_archive.py
+      - prep/verification_card.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  detox-p2:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # The release tarball and the source slices, ~0.8 GB. Keyed on the configs, so a
+      # changed input is fetched fresh; a cold cache just means a slower run.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/gprm/geode
+          key: archive-inputs-${{ hashFiles('archives/**/*.ingest.json') }}
+
+      - name: Assemble the Archive
+        run: |
+          python prep/assemble_archive.py --out archive-detox --from-release data-v22 \
+            --copy colormaps.json coastlines boundaries surface \
+            --model archives/detox/detox-p2.ingest.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: detox-p2-verification-card
+          path: archive-detox/models/detox-p2/verification/
+          if-no-files-found: warn
