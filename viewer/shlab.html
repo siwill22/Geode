@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Geode SH Lab</title>
+    <link rel="stylesheet" href="/src/core/lilgui-theme.css" />
+    <style>
+      :root { color-scheme: dark; }
+      html, body {
+        margin: 0; height: 100%; overflow: hidden; background: #0b0d10;
+        font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, sans-serif; color: #d8dee4;
+      }
+      canvas { display: block; }
+      .status {
+        position: fixed; left: 10px; bottom: 10px; padding: 6px 10px; border-radius: 4px;
+        background: rgba(0, 0, 0, 0.55); font-variant-numeric: tabular-nums;
+      }
+      .divider { position: fixed; top: 0; bottom: 0; width: 2px; background: #fff; opacity: 0.8; pointer-events: none; }
+    </style>
+  </head>
+  <body>
+    <div class="status" id="status">loading coefficients...</div>
+    <div class="divider" id="divider" hidden></div>
+    <script type="module" src="/src/shlab/main.ts"></script>
+  </body>
+</html>

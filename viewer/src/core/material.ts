@@ -85,10 +85,17 @@ uniform float uSteps;   // 0 = continuous ramp, else this many discrete bands
 uniform float uDebug;   // 0 off, 1 pDep, 2 lat, 3 raw sample
 uniform float uProjectionMode; // 0 = globe (sphere), 1 = plate carree, 2 = robinson (both flat planes) -- see core/projection.ts
 uniform vec4 uRefQuat; // see VERT's copy -- only used here for the Plate Carrée round-trip
+uniform float uSwipeSide; // 0 = off, 1 = keep left of uSwipeX, -1 = keep right -- see setSwipe()
+uniform float uSwipeX;    // window x in device pixels (gl_FragCoord space)
 
 varying vec3 vGeoPos;
 
 void main() {
+  // Swipe: a screen-space split, so two layers at the same radius can show
+  // either side of one divider without z-fighting. It splits the view, not
+  // the Earth, by design.
+  if (uSwipeSide != 0.0 && (gl_FragCoord.x - uSwipeX) * uSwipeSide > 0.0) discard;
+
   // Globe: vGeoPos is already the TRUE (unrotated) position -- VERT moved
   // gl_Position, not this -- so the ordinary sphere inverse is exactly the
   // vertex's own true (lon, lat).
@@ -254,6 +261,8 @@ export function createVolumeSurfaceMaterial(): ShaderMaterial {
       uDebug: { value: 0 },
       uProjectionMode: { value: 0 },
       uRefQuat: { value: [0, 0, 0, 1] },
+      uSwipeSide: { value: 0 },
+      uSwipeX: { value: 0 },
     },
   });
 }
@@ -272,6 +281,18 @@ export function setReferenceRotation(mat: ShaderMaterial, q: readonly [number, n
  *  position back into (lon, lat). */
 export function setProjectionMode(mat: ShaderMaterial, mode: ProjectionMode): void {
   mat.uniforms.uProjectionMode.value = PROJECTION_UNIFORM[mode];
+}
+
+export type SwipeSide = 'off' | 'left' | 'right';
+
+/** Show only the part of this surface left (or right) of a vertical divider
+ *  at window x = `xDevicePx`. That is gl_FragCoord space: device pixels from
+ *  the canvas's left edge (CSS px x devicePixelRatio), not a Multi-Globe
+ *  tile's own origin -- a tile adds its viewport offset. 'off' draws it all,
+ *  as every viewer did before swipe existed. */
+export function setSwipe(mat: ShaderMaterial, side: SwipeSide, xDevicePx = 0): void {
+  mat.uniforms.uSwipeSide.value = side === 'off' ? 0 : side === 'left' ? 1 : -1;
+  mat.uniforms.uSwipeX.value = xDevicePx;
 }
 
 export function setMaskMode(mat: ShaderMaterial, mode: MaskMode): void {
