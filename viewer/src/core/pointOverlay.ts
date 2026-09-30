@@ -14,6 +14,12 @@ import type { ArchiveIndex, PaleomagPoleSetEntry } from './types';
 import { toRenderFrameRotation, type Quaternion } from './rotation';
 import type { Rect } from './layout';
 
+/** petrify's per-point style hook: return any of the symbol's properties to
+ *  override them (see PointLayer.restyle()). */
+export type PointStyleHook = (
+  point: Record<string, unknown>, category: Record<string, unknown>, defaults: Record<string, unknown>,
+) => { symbol?: string; fill?: string; size?: number } | undefined;
+
 /** petrify's generic points.json shape, kept structural/minimal rather than
  *  modelled fully -- callers only ever need `points` (see `loadData()`/
  *  `payload()`) and pass the rest straight back to `PointLayer` untouched. */
@@ -120,6 +126,47 @@ export class PointOverlay {
 
   setTime(age: number): void {
     this.layer?.setTime(age);
+  }
+
+  /** Replace the per-point style hook (petrify's `style(point, category,
+   *  defaults)`) and re-resolve every symbol -- for a page whose colouring
+   *  changes at run time (e.g. "colour by" a chosen value), which is exactly
+   *  the case petrify's `restyle()` exists for. A no-op before `load()`. */
+  setStyle(style: PointStyleHook | undefined): void {
+    if (!this.layer) return;
+    (this.layer.options as { style?: PointStyleHook }).style = style;
+    this.layer.restyle();
+  }
+
+  /** Show or hide whole categories (`points[].type`), as a legend filter --
+   *  PointLayer's own `types` map, which draw() and pick() both honour. */
+  setTypeVisible(type: string, visible: boolean): void {
+    if (this.layer) (this.layer.types as Record<string, boolean>)[type] = visible;
+  }
+
+  /** Switch PointLayer's `lifespan` rule (see petrify SCHEMA.md, "Deciding
+   *  when a point is drawn") and re-apply the current time, since which
+   *  points are live is decided in setTime(). */
+  setLifespan(lifespan: 'since' | 'window' | 'range' | 'always', ageWindow?: number): void {
+    if (!this.layer) return;
+    const options = this.layer.options as { lifespan: string; ageWindow: number };
+    options.lifespan = lifespan;
+    if (ageWindow !== undefined) options.ageWindow = ageWindow;
+    if (this.layer.currentTime != null) this.layer.setTime(this.layer.currentTime);
+  }
+
+  /** Whether point `index` is drawn at the current time (lifespan, plate
+   *  begin age and category filter all applied). */
+  isLive(index: number): boolean {
+    const l = this.layer;
+    if (!l) return false;
+    return !!(l as unknown as { _live: Uint8Array })._live[index] && l.isTypeVisible(l.points[index]);
+  }
+
+  /** True while a spiderfy fan is still animating open/closed -- a page that
+   *  only repaints on demand must keep drawing until this goes false. */
+  isAnimating(): boolean {
+    return this.layer?.isAnimating() ?? false;
   }
 
   /** Track the caller's own camera swaps (Globe <-> Plate Carrée, docs/adr/

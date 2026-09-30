@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Geode RiftsClimate deposits</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/src/core/lilgui-theme.css" />
+    <style>
+      :root { color-scheme: dark; }
+      html, body {
+        margin: 0; height: 100%; overflow: hidden;
+        background: #0b0d10;
+        font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, sans-serif;
+        color: #d8dee4;
+      }
+      canvas { display: block; }
+
+      .status {
+        position: fixed; left: 50%; top: 12px; transform: translateX(-50%);
+        padding: 6px 10px; border-radius: 4px;
+        background: rgba(0, 0, 0, 0.6); color: #cfd6dd;
+      }
+
+      /* What is on screen and what could not be drawn: always visible, not
+         behind a disclosure (the paleobio caption's rule). */
+      .caption {
+        position: fixed; left: 12px; bottom: 12px; max-width: 62ch;
+        color: #93a0ac; font-size: 11px; line-height: 1.5;
+        background: rgba(10, 13, 17, 0.6); padding: 6px 9px; border-radius: 4px;
+      }
+      .caption-counts { margin-top: 3px; color: #7d8894; }
+
+      .legend {
+        position: fixed; left: 12px; top: 12px;
+        width: 290px; max-height: calc(100vh - 170px); overflow-y: auto;
+        display: flex; flex-direction: column; gap: 8px;
+      }
+      .legend-block {
+        padding: 8px 10px; border-radius: 5px;
+        background: rgba(10, 13, 17, 0.8); border: 1px solid #262c33;
+      }
+      .legend-title {
+        color: #cfd6dd; font-size: 11px; letter-spacing: 0.02em; margin-bottom: 5px;
+      }
+      .legend-row { display: flex; align-items: center; gap: 7px; font-size: 12px; color: #c3ccd5; padding: 1px 0; }
+      .legend-swatch { flex: none; width: 11px; height: 11px; border-radius: 2px; border: 1px solid rgba(255,255,255,0.25); }
+      .legend-label { flex: 1 1 auto; }
+      .legend-count { color: #8d99a5; font-variant-numeric: tabular-nums; font-size: 11px; }
+      .legend-ramp { height: 10px; border-radius: 2px; margin-top: 2px; }
+      .legend-ends { display: flex; justify-content: space-between; font-size: 10.5px; color: #97a3ad; margin-top: 2px; gap: 8px; }
+      .legend-note { margin-top: 5px; color: #8d99a5; font-size: 10.5px; line-height: 1.45; }
+
+      .gui-swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+
+      .popup {
+        position: fixed; z-index: 2000; pointer-events: none;
+        padding: 6px 9px; border-radius: 4px;
+        background: rgba(10, 12, 15, 0.95); border: 1px solid #3a4048;
+        color: #aeb8c2; font-size: 11px; line-height: 1.55; white-space: nowrap;
+      }
+      .popup-title { color: #e6ebf0; font-weight: 600; }
+
+      /* The deposit panel, docked right. */
+      .deposit-panel {
+        position: fixed; right: 12px; top: 12px; bottom: 12px; width: 410px; z-index: 40;
+        display: flex; flex-direction: column;
+        background: rgba(10, 12, 15, 0.96); border: 1px solid #3a4048; border-radius: 5px;
+        color: #cfd6dd; font-size: 12px;
+      }
+      .dp-close {
+        position: absolute; top: 6px; right: 8px; background: none; border: none;
+        color: #8a929b; font-size: 14px; cursor: pointer;
+      }
+      .dp-close:hover { color: #fff; }
+      .dp-header { padding: 10px 12px 6px; border-bottom: 1px solid #262c33; }
+      .dp-title { font-size: 15px; font-weight: 600; color: #f0f3f6; padding-right: 20px; }
+      .dp-class { display: flex; align-items: center; gap: 6px; margin: 3px 0 4px; color: #c3ccd5; }
+      .dp-swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+      .dp-line { line-height: 1.55; }
+      .dp-dim { color: #8d99a5; font-size: 11px; }
+      .dp-ok { color: #8fd18f; font-size: 11px; }
+      .dp-warn { color: #e0b068; font-size: 11px; }
+      .dp-search {
+        margin: 8px 12px 4px; padding: 5px 7px; border-radius: 3px;
+        background: #151a20; border: 1px solid #2d343c; color: #d8dee4; font: inherit;
+      }
+      .dp-key { padding: 2px 12px 6px; color: #8d99a5; font-size: 10.5px; }
+      .dp-key span { display: inline-block; vertical-align: middle; }
+      .dp-key-all { width: 10px; height: 8px; background: rgba(150,158,168,0.45); }
+      .dp-key-cls { width: 6px; height: 8px; background: #d8dee4; margin-left: 6px; }
+      .dp-key-mark { width: 2px; height: 10px; background: #fff; margin-left: 6px; }
+      .dp-key-note { color: #6d7883; margin-left: 4px; }
+      .dp-body { overflow-y: auto; padding: 0 8px 10px; flex: 1 1 auto; }
+      .dp-section { margin: 4px 0; border-top: 1px solid #1e242b; }
+      .dp-section > summary {
+        cursor: pointer; padding: 6px 4px; color: #e0e6ec; font-weight: 600; font-size: 12px;
+        list-style-position: inside;
+      }
+      .dp-sub > summary { font-weight: 500; color: #b9c3cc; font-size: 11.5px; }
+      .dp-sub { margin-left: 8px; border-top: none; }
+      .dp-badge { color: #6d7883; font-weight: 400; margin-left: 6px; font-size: 10.5px; }
+      .dp-row { padding: 5px 4px 6px; border-bottom: 1px solid #161b21; }
+      .dp-child { margin-left: 10px; border-bottom: none; padding-top: 3px; }
+      .dp-row-top { display: flex; justify-content: space-between; gap: 10px; }
+      .dp-label { color: #c3ccd5; cursor: help; flex: 1 1 auto; }
+      .dp-label:hover { color: #fff; text-decoration: underline dotted; }
+      .dp-value { color: #f0f3f6; font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: 600; }
+      .dp-missing { color: #6d7883; font-weight: 400; }
+      .dp-row-bottom { display: flex; gap: 9px; align-items: flex-end; margin-top: 3px; }
+      .dp-hist { flex: none; }
+      .dp-pct { color: #8d99a5; font-size: 10.5px; line-height: 1.4; }
+      .dp-pct div { cursor: help; }
+      .dp-inline { display: flex; flex-wrap: wrap; gap: 3px 12px; margin-top: 3px; color: #a9b4be; font-size: 10.5px; }
+      .dp-more {
+        margin-top: 3px; background: none; border: none; padding: 0; cursor: pointer;
+        color: #6fa8dc; font: inherit; font-size: 10.5px;
+      }
+      .dp-more:hover { color: #a8d0f5; }
+
+      #error {
+        position: fixed; left: 12px; top: 90px; max-width: 70ch;
+        padding: 10px; border-radius: 4px; white-space: pre-wrap;
+        background: #3a1416; color: #ffb4b4; z-index: 50;
+      }
+    </style>
+  </head>
+  <body>
+    <script type="module" src="/src/riftsclimate/main.ts"></script>
+  </body>
+</html>

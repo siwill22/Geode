@@ -15,6 +15,7 @@
     "check:static-polygons": "node scripts/check_static_polygons.mjs",
     "check:render": "node scripts/shoot.mjs shots",
     "check:paleobio": "node scripts/check_paleobio.mjs shots-paleobio",
+    "check:riftsclimate": "node scripts/check_riftsclimate.mjs shots-riftsclimate",
     "check:boundaries": "cd .. && PYTHONPATH=\"$PYTHONPATH:$PWD/viewer/vendor/petrify/python\" ${GEODE_PYTHON:-python} prep/check_boundaries.py",
     "check:projections": "node scripts/check_projections.mjs shots-projections",
     "check:flat-direction": "node scripts/check_flat_direction.mjs",

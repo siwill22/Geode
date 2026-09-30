@@ -68,6 +68,7 @@ npm run dev   # http://localhost:5173                        mantle viewer
               # http://localhost:5173/valdes.html              Valdes/BRIDGE viewer
               # http://localhost:5173/oldmap.html               Old Map viewer
               # http://localhost:5173/paleobio.html              paleobiology viewer
+              # http://localhost:5173/riftsclimate.html          RiftsClimate deposit viewer
               # http://localhost:5173/themelab.html               Theme Lab
               # http://localhost:5173/globe.html                generated: single-model-globe
               # http://localhost:5173/groupGlobe.html            generated: model-group-globe
@@ -516,6 +517,27 @@ python test-data/make_fixtures.py
 python prep/build_archive_index.py
 ```
 
+### The RiftsClimate deposit viewer
+
+The deposit values are the RiftsClimate project's; Geode only draws them. Rebuild in two
+steps, both in the RiftsClimate conda environment (so the rotation models are the ones the
+analysis used):
+
+```bash
+# 1. in the RiftsClimate repo: deposit values, their distributions, rift margins -> data/geode/
+cd /path/to/RiftsClimate
+env -u PYTHONPATH conda run -n riftsclimate python prep/geode_export.py
+# 2. here: -> archive/riftsclimate/ (--skip-deformation reuses the deformation Models)
+cd /path/to/Geode
+env -u PYTHONPATH conda run -n riftsclimate python prep/prep_riftsclimate.py \
+    --riftsclimate /path/to/RiftsClimate
+python prep/build_archive_index.py   # only adds sources.riftsclimate
+```
+
+Coastline geometry and 0-540 Ma rotations are read from the archive's own
+`reconstructions/scotese` and `reconstructions/merdith2021`; only 540-1000 Ma rotations for
+the same plates are added. Every layer is shown only under its own plate model (ADR-0057).
+
 ### Unresolved inputs
 
 These still need a path supplied, because no public source is recorded for them. Both are used
@@ -757,6 +779,7 @@ npm run check:query-point      # Anchored Point / Month Profile / Age Series ari
 npm run check:static-polygons  # Plate-Frame Point assignment + trajectory
 npm run check:oldmap           # Old Map viewer: kilometre-true wash/ring/glyph scale
 npm run check:paleobio         # paleobiology viewer's headless render
+npm run check:riftsclimate     # RiftsClimate deposit viewer: layers per plate model, deposit panel
 npm run check:themelab         # Theme Lab's headless render
 npm run check:themes           # theme colours land only on furniture, never the ramp
 npm run check:theme-roles      # every furniture role is set by every theme
@@ -932,9 +955,11 @@ prep/prep_staticpolygons.py      static polygons for Plate-Frame Point, per Reco
 prep/prep_oldmap.py               mountain-glyph positions for the Old Map viewer
 prep/prep_oldmap_volcanoes.py     volcano-glyph positions for the Old Map viewer
 prep/prep_pbdb.py                 Paleobiology Database occurrences for the paleobiology viewer
+prep/prep_riftsclimate.py         RiftsClimate deposits, values and defamation grids -> archive/riftsclimate/
 prep/pack_deploy.mjs             archive/ -> archive-deploy/, for the deployed site
 archive/                         generated data, served statically, not tracked
 archive/reconstructions/<id>/    one Reconstruction Model's own manifest + assets (ADR-0021)
+archive/riftsclimate/            the RiftsClimate deposit viewer's own section (ADR-0057)
 archive-deploy/                  packed subset that ships; not tracked
 generator/                       scaffolds a new standalone viewer repo from the data catalog
 viewer/                          TypeScript + Vite + three.js
@@ -943,6 +968,7 @@ viewer/climate.html              the paleoclimate viewer's entry page
 viewer/valdes.html               the Valdes/BRIDGE viewer's entry page
 viewer/oldmap.html               the Old Map viewer's entry page
 viewer/paleobio.html             the paleobiology viewer's entry page
+viewer/riftsclimate.html         the RiftsClimate deposit viewer's entry page
 viewer/themelab.html             Theme Lab's entry page
 viewer/globe.html                generated: single-model-globe
 viewer/groupGlobe.html           generated: model-group-globe
@@ -954,6 +980,7 @@ viewer/src/climate/              paleoclimate viewer only
 viewer/src/valdes/               Valdes/BRIDGE viewer only
 viewer/src/oldmap/               Old Map viewer only
 viewer/src/paleobio/             paleobiology viewer only
+viewer/src/riftsclimate/         RiftsClimate deposit viewer only
 viewer/src/themelab/             Theme Lab only
 viewer/src/globe/                single-model-globe wrapper
 viewer/src/groupGlobe/           model-group-globe wrapper

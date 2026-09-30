@@ -700,6 +700,15 @@ export class Coastlines {
 
   set landVisible(v: boolean) { this.land.visible = v; }
 
+  /** Pen colour for the lines, outside the Theme system -- for a caller that
+   *  never calls applyTheme() and wants a pen other than the default white
+   *  (the RiftsClimate deposit viewer's grey continent edges). */
+  setLineColor(color: number): void {
+    const c = passthroughColor(color);
+    this.lineMatFlat.uniforms.uColor.value = c;
+    this.lineMatGlobe.uniforms.uColor.value = c;
+  }
+
   /** Whether the CURRENT Theme provides a pen at all (false for Outline
    *  Treatment 'none'). */
   private themeHasPen = true;
