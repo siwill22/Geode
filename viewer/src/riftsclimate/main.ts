@@ -2,9 +2,11 @@ import { Clock, WebGLRenderer, type Camera } from 'three';
 import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 import {
-  createProjectionCamera, createProjectionControls, updateProjectionCameraAspect,
+  createProjectionCamera, createProjectionControls, isFlat, updateProjectionCameraAspect,
   type ProjectionMode,
 } from '../core/projection';
+import { wireMapOrientationDrag } from '../core/mapOrientationDrag';
+import { wireProjectionToggle } from '../core/projectionToggle';
 import { loadArchive, loadColormaps } from '../core/volume';
 import { fetchMaybeGzippedJSON } from '../../vendor/petrify/js/gzipFetch.js';
 import { RiftsInstance } from './riftsclimateInstance';
@@ -38,9 +40,21 @@ function rebuildCamera(mode: ProjectionMode): Camera {
   controls.dispose();
   camera = createProjectionCamera(mode, innerWidth / innerHeight);
   controls = createProjectionControls(mode, camera, renderer.domElement);
+  // A flat map is turned, not slid: a sideways drag changes its centre
+  // longitude (wireMapOrientationDrag below), so OrbitControls must not also
+  // pan it -- reconstruction/main.ts's rule (ADR-0058). Zoom is unchanged.
+  if (isFlat(mode)) controls.enablePan = false;
   needsRender();
   return camera;
 }
+
+// Flat maps: drag sideways, or scroll sideways on a trackpad, to move the
+// centre longitude. A no-op on the globe, which orbits as before.
+wireMapOrientationDrag(renderer.domElement, {
+  getCamera: () => camera,
+  getMode: () => instance?.view.projection ?? 'globe',
+  getOrientation: () => instance?.orientation ?? [0, 0, 0, 1],
+}, (q) => instance?.setOrientation(q), { longitudeOnly: true, horizontalWheel: true });
 
 let dirty = true;
 const needsRender = () => { dirty = true; };
@@ -98,6 +112,13 @@ async function boot(): Promise<void> {
   instance.setCameraAspect(camera);
   instance.resize();
   await instance.boot();
+
+  // The round projection button (core/projectionToggle.ts), beside the age
+  // slider as in climate.html; its icon is the projection it switches to.
+  const toggle = document.getElementById('projection-toggle');
+  if (toggle) instance.ui.mountProjectionToggle(toggle);
+  const inst = instance;
+  wireProjectionToggle(toggle, () => inst.view.projection, (m) => inst.setProjection(m));
   (window as unknown as { __rifts: RiftsInstance }).__rifts = instance;
   document.body.dataset.ready = '1';
   needsRender();

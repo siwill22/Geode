@@ -8,6 +8,10 @@ import { Coastlines, LAND_R_UNDER_SURFACE, fetchCoastlineData, parseGeometry } f
 import { R_SURFACE } from '../core/constants';
 import { createMaskTexture } from '../core/mask';
 import { DepthSlice } from '../core/depthSlice';
+import { Graticule } from '../core/graticule';
+import {
+  lonLatFromGeoVec, orientationQuaternion, rotateVector, toRenderFrameRotation, type Quaternion,
+} from '../core/rotation';
 import {
   PROJECTION_UNIFORM, createSurfaceGeometry, isFlat, type ProjectionMode,
 } from '../core/projection';
@@ -80,6 +84,11 @@ export class RiftsInstance {
   private readonly climate = new DepthSlice();
   private readonly deformation = new DepthSlice(OVERLAY_R);
   private readonly backdrop: Mesh;
+  private readonly graticule = new Graticule();
+  /** Map Orientation (CONTEXT.md): in a flat Projection, which longitude sits
+   *  in the middle of the map. A pure turn about the pole, so the equator
+   *  never tilts; identity (0 deg E) by default. Geographic frame. */
+  private qOrient: Quaternion = [0, 0, 0, 1];
   private coastlines: Coastlines | null = null;
   private readonly rifts: RiftLines;
   private readonly points: PointOverlay;
@@ -127,7 +136,7 @@ export class RiftsInstance {
       createSurfaceGeometry('globe', BACKDROP_R),
       new MeshBasicMaterial({ side: FrontSide, color: BACKDROP_COLOR }),
     );
-    this.scene.add(this.backdrop);
+    this.scene.add(this.backdrop, this.graticule.lines);
     // Margins first, so the deposits' canvas sits above them.
     this.rifts = new RiftLines(camera);
     this.points = new PointOverlay(camera);
@@ -136,7 +145,7 @@ export class RiftsInstance {
     for (const c of deps.index.classes) classes[c.id] = true;
     this.view = {
       model: deps.index.models[0].id, age: 0, projection: 'globe',
-      coastlines: true, climate: 'none', deformation: 'none', rifts: {},
+      coastlines: true, graticule: true, climate: 'none', deformation: 'none', rifts: {},
       colourBy: 'class', lifespan: 'since', window: 10, classes,
     };
 
@@ -145,7 +154,7 @@ export class RiftsInstance {
     this.ui = new RiftsUI(this.view, {
       onModel: () => void this.loadModel(),
       onAge: (age) => this.applyAge(age),
-      onProjection: (m) => this.setProjection(m),
+      onGraticule: (on) => { this.graticule.lines.visible = on; this.onNeedsRender(); },
       onCoastlines: (on) => { if (this.coastlines) this.coastlines.lines.visible = this.coastlines.land.visible = on; this.onNeedsRender(); },
       onClimate: () => { void this.loadClimateFrame(); this.refreshLegend(); },
       onDeformation: () => { void this.loadDeformationFrame(); this.refreshLegend(); },
@@ -212,6 +221,7 @@ export class RiftsInstance {
     this.coastlines.setMaskEnabled(false);
     this.coastlines.setLineColor(0x9aa5b1);
     this.coastlines.setProjection(this.view.projection);
+    this.coastlines.setOrientation(this.qOrient);
     this.coastlines.lines.visible = this.coastlines.land.visible = this.view.coastlines;
     this.scene.add(this.coastlines.lines, this.coastlines.land);
 
@@ -270,6 +280,7 @@ export class RiftsInstance {
 
   applyAge(age: number): void {
     this.view.age = age;
+    this.ui.setAge(age);
     this.coastlines?.setAge(age);
     this.rifts.setAge(age);
     this.points.setTime(age);
@@ -535,10 +546,59 @@ export class RiftsInstance {
     oldMat.dispose();
 
     this.coastlines?.setProjection(mode);
+    this.graticule.setProjection(mode);
     this.rifts.setCamera(camera, mode);
     this.points.setCamera(camera, mode);
+    this.applyOrientation();
     this.resize();
     this.onNeedsRender();
+  }
+
+  get orientation(): Quaternion { return this.qOrient; }
+
+  /** Turn a flat map so that `q` (a Map Orientation, geographic frame) holds.
+   *  Every layer moves together: rasters, continents, graticule, margins and
+   *  deposits -- and picking, which reads the same projected positions the
+   *  deposits were drawn at. */
+  setOrientation(q: Quaternion): void {
+    this.qOrient = q;
+    this.applyOrientation();
+    this.onNeedsRender();
+  }
+
+  /** Centre the flat map on a longitude (degrees east). */
+  setCentreLongitude(lon: number): void {
+    this.setOrientation(orientationQuaternion(lon, 0, 0));
+  }
+
+  /** The longitude now in the middle of a flat map. */
+  get centreLongitude(): number {
+    const [x, y, z, w] = this.qOrient;
+    // The true point that orientation carries to display (0, 0).
+    return lonLatFromGeoVec(rotateVector([-x, -y, -z, w], 1, 0, 0)).lon;
+  }
+
+  /** Map Orientation reaches the deposits, margins and rasters only in a flat
+   *  Projection: on the globe, OrbitControls turns the view and the data must
+   *  stay put (the guard reconstructionInstance.ts's applyReferenceRotation()
+   *  documents). Coastlines and the graticule gate this themselves. */
+  private applyOrientation(): void {
+    const flat = isFlat(this.view.projection);
+    const q: Quaternion = flat ? this.qOrient : [0, 0, 0, 1];
+    this.coastlines?.setOrientation(this.qOrient);
+    this.graticule.setOrientation(this.qOrient);
+    this.points.setReferenceRotation(q);
+    this.rifts.setOrientation(q);
+    // The raster shader already round-trips a flat map's display (lon, lat)
+    // through this rotation (core/material.ts, the Reference Plate path), so a
+    // turned map samples BRIDGE and the deformation grids at the right place.
+    const r = toRenderFrameRotation(q);
+    this.climate.setReferenceRotation(r);
+    this.deformation.setReferenceRotation(r);
+    const lon = this.centreLongitude;
+    this.ui.setMapHint(flat
+      ? `Map centred on ${Math.abs(lon).toFixed(0)}°${lon < 0 ? 'W' : 'E'} · drag sideways to turn it`
+      : '');
   }
 
   // --- pointer -----------------------------------------------------------------

@@ -1,5 +1,4 @@
 import GUI, { type Controller } from 'lil-gui';
-import type { ProjectionMode } from '../core/projection';
 import type {
   ClimateLayer, DeformationLayer, DepositClass, FieldDef, RiftsModel, RiftsViewState,
 } from './types';
@@ -7,8 +6,8 @@ import type {
 export interface RiftsUICallbacks {
   onModel(id: string): void;
   onAge(age: number): void;
-  onProjection(mode: ProjectionMode): void;
   onCoastlines(on: boolean): void;
+  onGraticule(on: boolean): void;
   onClimate(layer: ClimateLayer): void;
   onDeformation(layer: DeformationLayer): void;
   onRift(phase: string, on: boolean): void;
@@ -32,7 +31,16 @@ export interface LegendRow { label: string; fill: string; count?: string }
 export class RiftsUI {
   readonly gui: GUI;
   private modelCtrl: Controller;
-  private ageCtrl: Controller;
+  /** Age lives in a bottom bar, off the settings panel (ADR-0058): the same
+   *  native range input + "N Ma" readout as reconstruction.html/climate.html,
+   *  with the readout's number editable so an exact age can still be typed,
+   *  as the lil-gui number box allowed. */
+  private ageSlider: HTMLInputElement;
+  private ageInput: HTMLInputElement;
+  private ageSliderWrap: HTMLDivElement;
+  private mapHint: HTMLDivElement;
+  readonly ageGroup: HTMLDivElement;
+  private bottomBar: HTMLDivElement;
   private climateCtrl: Controller;
   private deformationCtrl: Controller;
   private riftCtrls: Controller[] = [];
@@ -57,11 +65,6 @@ export class RiftsUI {
     for (const m of models) names[m.label] = m.id;
     this.modelCtrl = this.gui.add(state, 'model', names).name('Plate model')
       .onChange((id: string) => this.cb.onModel(id));
-    this.ageCtrl = this.gui.add(state, 'age', 0, 1000, 1).name('Age (Ma)')
-      .onChange((age: number) => this.cb.onAge(age));
-    this.gui.add(state, 'projection', { Globe: 'globe', Robinson: 'robinson', 'Plate Carrée': 'plateCarree' })
-      .name('Projection')
-      .onChange((m: ProjectionMode) => this.cb.onProjection(m));
 
     const dep = this.gui.addFolder('Deposits');
     dep.add(state, 'lifespan', { 'Formed by this age': 'since', 'Forming near this age': 'window' })
@@ -87,6 +90,8 @@ export class RiftsUI {
     const layers = this.gui.addFolder('Map layers');
     layers.add(state, 'coastlines').name('Continents')
       .onChange((on: boolean) => this.cb.onCoastlines(on));
+    layers.add(state, 'graticule').name('Latitude/longitude lines')
+      .onChange((on: boolean) => this.cb.onGraticule(on));
     this.climateCtrl = layers.add(state, 'climate', {
       None: 'none', 'Annual rainfall (BRIDGE)': 'P', 'Annual temperature (BRIDGE)': 'T',
     }).name('Climate')
@@ -104,7 +109,63 @@ export class RiftsUI {
     this.caption = el('div', 'caption');
     this.tooltip = el('div', 'popup');
     this.tooltip.style.display = 'none';
-    document.body.append(this.status, this.legend, this.caption, this.tooltip);
+
+    this.ageSlider = el('input', 'age-slider');
+    this.ageSlider.type = 'range';
+    this.ageSlider.step = '1';
+    this.ageSlider.setAttribute('aria-label', 'Age (Ma)');
+    this.ageSlider.addEventListener('input', () => this.commitAge(Number(this.ageSlider.value)));
+    const readout = el('span', 'age-readout');
+    this.ageInput = el('input', 'age-input');
+    this.ageInput.type = 'text';
+    this.ageInput.inputMode = 'numeric';
+    this.ageInput.setAttribute('aria-label', 'Age in Ma');
+    this.ageInput.addEventListener('change', () => {
+      const v = Number(this.ageInput.value);
+      if (Number.isFinite(v)) this.commitAge(v); else this.setAge(this.state.age);
+    });
+    this.ageInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.ageInput.blur(); });
+    readout.append(this.ageInput, document.createTextNode(' Ma'));
+    this.mapHint = el('div', 'map-hint');
+    this.ageSliderWrap = el('div', 'age-slider-wrap');
+    this.ageSliderWrap.append(this.ageSlider, readout, this.mapHint);
+    this.ageGroup = el('div', 'age-group');
+    this.ageGroup.append(this.ageSliderWrap);
+    this.bottomBar = el('div', 'bottom-bar');
+    this.bottomBar.append(this.caption, this.ageGroup);
+    document.body.append(this.status, this.legend, this.bottomBar, this.tooltip);
+    this.layout();
+    addEventListener('resize', () => this.layout());
+  }
+
+  /** The projection button sits beside the age slider, as in climate.html. */
+  mountProjectionToggle(button: HTMLElement): void {
+    this.ageGroup.prepend(button);
+  }
+
+  private layout(): void {
+    this.ageSliderWrap.style.width = `${Math.max(220, Math.min(620, innerWidth * 0.36))}px`;
+  }
+
+  private commitAge(age: number): void {
+    const lo = Number(this.ageSlider.min);
+    const hi = Number(this.ageSlider.max);
+    const a = Math.round(Math.max(lo, Math.min(hi, age)));
+    this.state.age = a;
+    this.setAge(a);
+    this.cb.onAge(a);
+  }
+
+  setAge(age: number): void {
+    this.ageSlider.value = String(age);
+    this.ageInput.value = String(Math.round(age));
+  }
+
+  /** One line under the slider in a flat map: where it is centred and how to
+   *  turn it. Empty on the globe. */
+  setMapHint(text: string): void {
+    this.mapHint.textContent = text;
+    this.mapHint.style.display = text ? '' : 'none';
   }
 
   private syncWindow(): void {
@@ -113,7 +174,9 @@ export class RiftsUI {
 
   /** Show only the layers the selected plate model has. */
   setModel(m: RiftsModel): void {
-    this.ageCtrl.min(m.age_min).max(m.age_max).updateDisplay();
+    this.ageSlider.min = String(m.age_min);
+    this.ageSlider.max = String(m.age_max);
+    this.setAge(this.state.age);
     this.climateCtrl.domElement.style.display = m.climate_model ? '' : 'none';
     this.deformationCtrl.domElement.style.display = m.deformation ? '' : 'none';
     for (const c of this.riftCtrls) c.destroy();
@@ -133,6 +196,7 @@ export class RiftsUI {
 
   refreshDisplay(): void {
     this.gui.controllersRecursive().forEach((c) => c.updateDisplay());
+    this.setAge(this.state.age);
   }
 
   /** Make room for the deposit panel on the right. */

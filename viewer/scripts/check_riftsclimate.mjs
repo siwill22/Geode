@@ -59,6 +59,51 @@ async function setControl(label, value, kind) {
   await page.waitForTimeout(2500);
 }
 
+// Age is the bottom-bar range input now, not a lil-gui controller.
+async function setAge(age) {
+  await page.evaluate((a) => {
+    const el = document.querySelector('.age-slider');
+    el.value = String(a);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }, age);
+  await page.waitForTimeout(2500);
+}
+
+// Projection is the round #projection-toggle button: click until it is `mode`.
+async function setProjection(mode) {
+  for (let i = 0; i < 3; i++) {
+    if (await page.evaluate(() => window.__rifts.view.projection) === mode) break;
+    await page.click('#projection-toggle');
+    await page.waitForTimeout(800);
+  }
+  await page.waitForTimeout(1500);
+}
+
+// Click deposit `want` (or the first lone deposit drawn) where it is drawn now,
+// and report whether the panel opened on that same deposit.
+async function clickDeposit(want) {
+  const t = await page.evaluate((want) => {
+    const layer = window.__rifts.points.layer;
+    for (let i = 0; i < layer.points.length; i++) {
+      const s = layer._screen[i];
+      if (!s) continue;
+      if (want ? layer.points[i].deposit_id !== want : layer.points[i].type !== 'PbZn-CD') continue;
+      if (s[0] > 1050 || s[1] > 760 || layer.clusterSizeAt(s[0], s[1]) > 1) continue;
+      return { x: s[0], y: s[1], id: layer.points[i].deposit_id, name: layer.points[i].name };
+    }
+    return null;
+  }, want ?? null);
+  if (!t) { console.log('no clickable deposit', want); return null; }
+  await page.mouse.move(t.x, t.y);
+  await page.waitForTimeout(300);
+  await page.mouse.click(t.x, t.y);
+  await page.waitForTimeout(1200);
+  const shown = await page.evaluate(() => document.querySelector('.dp-header .dp-line.dp-dim:last-child')?.textContent);
+  console.log(`clicked ${t.name} (${t.id}) at ${t.x.toFixed(0)},${t.y.toFixed(0)}; panel shows ${shown}:`,
+    shown === t.id ? 'MATCH' : 'MISMATCH');
+  return t;
+}
+
 const text = (sel) => page.evaluate((s) => document.querySelector(s)?.innerText ?? '', sel);
 
 async function shot(name) {
@@ -95,7 +140,7 @@ const firstRows = await page.evaluate(() => [...document.querySelectorAll('.dp-r
   .map((r) => r.innerText.replace(/\n/g, ' | ')));
 console.log('first rows:\n  ' + firstRows.join('\n  '));
 
-await setControl('Age (Ma)', 200, 'number');
+await setAge(200);
 await setControl('Climate', 'Annual rainfall (BRIDGE)', 'select');
 await page.waitForTimeout(1500);
 await shot('03-scotese-200Ma-rainfall');
@@ -103,7 +148,7 @@ await shot('03-scotese-200Ma-rainfall');
 await setControl('Climate', 'None', 'select');
 await setControl('Plate model', 'Merdith 2021', 'select');
 await page.waitForTimeout(2500);
-await setControl('Age (Ma)', 400, 'number');
+await setAge(400);
 await setControl('Deformation', 'Stretching (+) / squeezing (−)', 'select');
 await setControl('Post-rift margins', true, 'bool');
 await setControl('Collision margins', true, 'bool');
@@ -111,22 +156,76 @@ await page.waitForTimeout(1500);
 await shot('04-merdith-400Ma-rifts-deformation');
 
 await setControl('Deformation', 'Deformation style', 'select');
-await setControl('Projection', 'Robinson', 'select');
+await setProjection('robinson');
 await page.waitForTimeout(2000);
 await shot('05-merdith-400Ma-robinson-style');
 
 await setControl('Plate model', 'Scotese', 'select');
-await setControl('Age (Ma)', 800, 'number');
+await setAge(800);
 await shot('06-scotese-800Ma-robinson');
 
-await setControl('Projection', 'Globe', 'select');
-await setControl('Age (Ma)', 250, 'number');
+await setProjection('globe');
+await setAge(250);
 await setControl('Show', 'Forming near this age', 'select');
 await setControl('Colour by', 'BRIDGE: rainfall, own cell', 'select');
 await page.fill('.dp-search', 'rainfall');
 await page.waitForTimeout(1500);
 await shot('07-scotese-250Ma-coloured-by-rainfall-panel-search');
 console.log('panel rows matching "rainfall":', await page.evaluate(() => document.querySelectorAll('.dp-row').length));
+
+// The readout's number can be typed into, as the old panel number box allowed.
+await page.fill('.age-input', '333');
+await page.press('.age-input', 'Enter');
+await page.waitForTimeout(800);
+console.log('typed age 333 ->', await page.evaluate(() => [window.__rifts.view.age,
+  document.querySelector('.age-slider').value]));
+
+// Robinson, Scotese, 150 Ma, BRIDGE rainfall; then turn the map to ~150E by
+// dragging sideways, as a reader would.
+await page.fill('.dp-search', '');
+await setControl('Colour by', 'Deposit class', 'select');
+await setControl('Show', 'Formed by this age', 'select');
+await setControl('Deformation', 'None', 'select');
+await setAge(150);
+await setControl('Climate', 'Annual rainfall (BRIDGE)', 'select');
+await setProjection('robinson');
+await shot('08-robinson-centre-0E-rainfall');
+const before = await page.evaluate(() => window.__rifts.centreLongitude);
+// Grab the map at the middle and pull it 300 px left: what was to the east
+// comes to the centre.
+await page.mouse.move(700, 450);
+await page.mouse.down();
+for (let k = 1; k <= 15; k++) { await page.mouse.move(700 - 20 * k, 452); await page.waitForTimeout(20); }
+await page.mouse.up();
+await page.waitForTimeout(500);
+const afterDrag = await page.evaluate(() => window.__rifts.centreLongitude);
+console.log(`drag: centre longitude ${before.toFixed(1)} -> ${afterDrag.toFixed(1)}`);
+// Sideways trackpad scroll moves it too, and must not zoom.
+const zoom0 = await page.evaluate(() => window.__rifts.camera.zoom);
+await page.mouse.move(700, 450);
+await page.mouse.wheel(120, 0);
+await page.waitForTimeout(500);
+const afterWheel = await page.evaluate(() => window.__rifts.centreLongitude);
+const zoom1 = await page.evaluate(() => window.__rifts.camera.zoom);
+console.log(`sideways scroll: centre longitude ${afterDrag.toFixed(1)} -> ${afterWheel.toFixed(1)}; zoom ${zoom0} -> ${zoom1}`);
+await page.evaluate(() => window.__rifts.setCentreLongitude(150));
+await page.waitForTimeout(1500);
+console.log('map hint:', await text('.map-hint'));
+await shot('09-robinson-centre-150E-rainfall');
+await clickDeposit(null);
+await page.waitForTimeout(800);
+await shot('10-robinson-150E-clicked-deposit');
+
+// The same turned map under Merdith 2021: margins and deformation must turn
+// with the continents.
+await setControl('Plate model', 'Merdith 2021', 'select');
+await setAge(400);
+await setControl('Deformation', 'Stretching (+) / squeezing (−)', 'select');
+await shot('11-merdith-400Ma-robinson-150E-rifts-deformation');
+// Back to the globe: the turn is a flat-map setting and must not reach it.
+await setProjection('globe');
+await shot('12-merdith-400Ma-globe-after-turn');
+await clickDeposit(null);
 
 console.log(errors.length ? `console errors:\n  ${errors.join('\n  ')}` : 'no console errors');
 await browser.close();

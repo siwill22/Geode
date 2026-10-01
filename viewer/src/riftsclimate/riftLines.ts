@@ -3,7 +3,7 @@ import type { Camera, PerspectiveCamera } from 'three';
 import { ThreeProjector } from '../core/boundaries';
 import { FlatProjector } from '../core/flatProjector';
 import type { ProjectionMode } from '../core/projection';
-import { rotateVector, rotationAt } from '../core/rotation';
+import { rotateVector, rotationAt, toRenderFrameRotation, type Quaternion } from '../core/rotation';
 import type { Rect } from '../core/layout';
 import type { CoastlineLine, RotationTable } from '../core/types';
 import { tracePolyline } from '../../vendor/petrify/js/polyline.js';
@@ -68,6 +68,13 @@ export class RiftLines {
     this.globe.setCamera(camera as PerspectiveCamera);
     this.flat.setCamera(camera);
     if (mode !== 'globe') this.flat.setFlatMode(mode);
+  }
+
+  /** Map Orientation, geographic frame -- used by the flat projector only (the
+   *  caller passes identity on the globe). FlatProjector wants it in the
+   *  render frame, as PointOverlay.setReferenceRotation() converts it. */
+  setOrientation(q: Quaternion): void {
+    this.flat.setReferenceRotation(toRenderFrameRotation(q));
   }
 
   clear(): void {

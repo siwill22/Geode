@@ -142,6 +142,7 @@ export interface RiftsViewState {
   age: number;
   projection: ProjectionMode;
   coastlines: boolean;
+  graticule: boolean;
   climate: ClimateLayer;
   deformation: DeformationLayer;
   rifts: Record<string, boolean>;

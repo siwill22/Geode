@@ -1,12 +1,40 @@
 import { Vector3, type Camera } from 'three';
 
 import { flatWorldToLonLat, isFlat, type ProjectionMode } from './projection';
-import { composeQuaternions, deltaRotation, geoVecFromLonLat, type Quaternion } from './rotation';
+import {
+  composeQuaternions, deltaRotation, geoVecFromLonLat, quaternionFromAxisAngle, type Quaternion,
+} from './rotation';
 
 export interface MapOrientationDragDeps {
   getCamera(): Camera;
   getMode(): ProjectionMode;
   getOrientation(): Quaternion;
+}
+
+/**
+ * Optional behaviour; leaving it out (every caller before this existed) keeps
+ * the full versor drag exactly as it was.
+ */
+export interface MapOrientationDragOptions {
+  /** Drag changes only the map's centre LONGITUDE: the cursor's change in
+   *  display longitude becomes a turn about the pole, so a horizontal drag
+   *  spins the map around and a vertical one does nothing. The equator stays
+   *  where it is. Use with an orientation that is itself a pure longitude
+   *  turn (e.g. `orientationQuaternion(lon, 0, 0)`), which then stays one. */
+  longitudeOnly?: boolean;
+  /** A mostly-sideways wheel/trackpad scroll also turns the centre longitude
+   *  (in flat Projections only). Taken before OrbitControls sees the event,
+   *  so a vertical scroll still zooms exactly as before. */
+  horizontalWheel?: boolean;
+}
+
+const DEG = Math.PI / 180;
+/** Degrees of centre longitude per pixel of sideways scroll. */
+const WHEEL_DEG_PER_PX = 0.25;
+
+/** A longitude difference wrapped into (-180, 180]. */
+function wrapDeg(d: number): number {
+  return d - 360 * Math.round(d / 360);
 }
 
 /**
@@ -42,39 +70,89 @@ export function wireMapOrientationDrag(
   el: HTMLElement,
   deps: MapOrientationDragDeps,
   onChange: (q: Quaternion) => void,
+  options: MapOrientationDragOptions = {},
 ): void {
   let dragStart: [number, number, number] | null = null;
   let qAtDragStart: Quaternion = [0, 0, 0, 1];
+  // longitudeOnly: the display longitude last under the cursor, and the
+  // orientation built up so far in this drag. Accumulated move by move, so a
+  // drag that carries the cursor across the map's edge (display longitude
+  // jumping from +180 to -180) still turns smoothly rather than by a full lap.
+  let lastLon: number | null = null;
+  let qDrag: Quaternion = [0, 0, 0, 1];
 
-  function pointToGeoVec(ev: PointerEvent): [number, number, number] | null {
+  function pointToLonLat(ev: PointerEvent): { lon: number; lat: number } | null {
     const mode = deps.getMode();
     if (!isFlat(mode)) return null;
     const rect = el.getBoundingClientRect();
     const ndcX = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
     const ndcY = -(((ev.clientY - rect.top) / rect.height) * 2 - 1);
     const world = new Vector3(ndcX, ndcY, 0).unproject(deps.getCamera());
-    const ll = flatWorldToLonLat(mode, world.x, world.y);
+    return flatWorldToLonLat(mode, world.x, world.y);
+  }
+
+  function pointToGeoVec(ev: PointerEvent): [number, number, number] | null {
+    const ll = pointToLonLat(ev);
     return ll ? geoVecFromLonLat(ll.lon, ll.lat) : null;
+  }
+
+  /** `q` turned about the pole by `deg` of display longitude. */
+  function turned(q: Quaternion, deg: number): Quaternion {
+    return composeQuaternions(quaternionFromAxisAngle([0, 0, 1], deg * DEG), q);
   }
 
   el.addEventListener('pointerdown', (ev) => {
     if (ev.button !== 0) return;
-    const p = pointToGeoVec(ev);
-    if (!p) return;
-    dragStart = p;
-    qAtDragStart = deps.getOrientation();
+    if (options.longitudeOnly) {
+      const ll = pointToLonLat(ev);
+      if (!ll) return;
+      lastLon = ll.lon;
+      qDrag = deps.getOrientation();
+    } else {
+      const p = pointToGeoVec(ev);
+      if (!p) return;
+      dragStart = p;
+      qAtDragStart = deps.getOrientation();
+    }
     el.setPointerCapture(ev.pointerId);
     ev.preventDefault();
   });
 
   el.addEventListener('pointermove', (ev) => {
+    if (options.longitudeOnly) {
+      if (lastLon === null) return;
+      const ll = pointToLonLat(ev);
+      if (!ll) return;
+      const d = wrapDeg(ll.lon - lastLon);
+      lastLon = ll.lon;
+      if (d === 0) return;
+      qDrag = turned(qDrag, d);
+      onChange(qDrag);
+      return;
+    }
     if (!dragStart) return;
     const cur = pointToGeoVec(ev);
     if (!cur) return;
     onChange(composeQuaternions(deltaRotation(dragStart, cur), qAtDragStart));
   });
 
-  const endDrag = (): void => { dragStart = null; };
+  const endDrag = (): void => { dragStart = null; lastLon = null; };
   el.addEventListener('pointerup', endDrag);
   el.addEventListener('pointercancel', endDrag);
+
+  if (options.horizontalWheel) {
+    // Capture phase on the same element: at the target, capture listeners run
+    // before OrbitControls' own (non-capture) wheel listener, so a sideways
+    // scroll can be kept from it while an up/down scroll passes through.
+    el.addEventListener('wheel', (ev) => {
+      if (!isFlat(deps.getMode())) return;
+      if (Math.abs(ev.deltaX) <= Math.abs(ev.deltaY)) return;
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
+      const px = ev.deltaX * (ev.deltaMode === 1 ? 16 : ev.deltaMode === 2 ? el.clientWidth : 1);
+      // Scrolling right brings what is to the east into view: the map moves
+      // west under a fixed frame, so display longitudes decrease.
+      onChange(turned(deps.getOrientation(), -px * WHEEL_DEG_PER_PX));
+    }, { capture: true, passive: false });
+  }
 }

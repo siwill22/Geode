@@ -55,6 +55,7 @@ A fixed menu of four bundled UI tools (`legend`/`age-slider`/
 plus one opt-in `time-series` panel — asked about separately, the same way
 Multi-Globe is (see step 4/5), never silently bundled into the other
 four's default — applies to the two numerical-Model wrapper types only.
+Every Geode viewer's UI defaults are ADR-0058 (age slider at the bottom, flat maps turned by a sideways drag, a projection button); the reconstruction wrappers follow them, but `single-model-globe`/`model-group-globe`/`mantle-globe` do not yet (age in the panel, globe only), so do not promise those to the user.
 Five wrapper types total (see step 3 for how to choose):
 - `single-model-globe` — exactly one Model, no comparison controls.
 - `model-group-globe` — several Models from ONE comparison family, varying
