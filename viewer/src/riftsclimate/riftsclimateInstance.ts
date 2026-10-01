@@ -504,7 +504,7 @@ export class RiftsInstance {
       `${c.drawable_at_own_age.toLocaleString()} of ${c.deposits.toLocaleString()} deposits can be drawn at their own age; `
       + `${c.unassigned} sit on no plate and ${c.older_than_their_plate} are older than their plate's continent polygon`
       + (c.no_rotation_at_own_age ? `; ${c.no_rotation_at_own_age} has no rotation at its age` : '')
-      + `. The analysis placed ${c.placed_by_analysis.toLocaleString()} (it uses the nearest snapshot's age, `
+      + `. The analysis placed ${c.placed_by_analysis.toLocaleString()} (also at each deposit's own age, `
       + `so ${c.disagree_with_analysis} differ).`,
       m.climate_model
         ? 'Jackson & MacDonald margins carry Merdith 2021 plate IDs, so they are shown only with Merdith 2021.'
