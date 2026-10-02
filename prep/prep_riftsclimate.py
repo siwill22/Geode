@@ -27,9 +27,9 @@ archive/riftsclimate/ only:
                               prep_coastlines.py's geometry.bin format
   <model>/polygons/<group>/geometry.bin, <model>/polygons/rotations.json.gz
                               the model's continent polygon outlines in RiftsClimate's four
-                              begin-age groups (original; unchanged; extended and riding
-                              on an existing block; extended otherwise), for checking the
-                              begin-age corrections (RiftsClimate ADR-0004) by eye
+                              begin-age groups (original; unchanged; extended; could be
+                              extended but is not), for checking the begin-age corrections
+                              (RiftsClimate ADR-0004) by eye
   models/defamation-<model>/  the defamation deformation grids as a Geode Model (frames
                               gzipped; horizontal divergence and deformation style)
 
@@ -72,9 +72,9 @@ MODELS = {
 }
 POLYGON_GROUPS = [
     ("original", "Original begin ages (all polygons)", "#c8ced6"),
-    ("unchanged", "Corrected: unchanged", "#7f8a96"),
-    ("extended_rides", "Corrected: extended, rides on an existing block", "#5ad17a"),
-    ("extended_other", "Corrected: extended, does not ride on one", "#ffb020"),
+    ("unchanged", "Unchanged", "#7f8a96"),
+    ("extended", "Extended (used by the analysis)", "#5ad17a"),
+    ("candidate", "Could be extended, not used", "#ffb020"),
 ]
 PHASES = [
     ("syn_rift", "Syn-rift margins", "#ff8c42"),

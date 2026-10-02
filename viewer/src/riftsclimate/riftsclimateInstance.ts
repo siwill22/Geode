@@ -513,15 +513,12 @@ export class RiftsInstance {
       blocks.push({
         title: `Continent polygons (${this.model.label})`,
         rows: outlineRows,
-        note: 'Each outline is drawn from its begin age to its end age. "Original" uses the begin ages the '
-          + 'model ships with; the other three use the begin ages the analysis now uses (RiftsClimate '
-          + 'ADR-0004: extended to the other plate model\'s age for the same ground). "Rides on an existing '
-          + 'block": at every age the extension opens, its plate already has a polygon then, or it moves '
-          + 'rigidly with a parent plate that does. '
-          + (this.model.id === 'scotese'
-            ? 'Scotese: only those extensions are applied; amber outlines are NOT used by the analysis and '
-              + 'are drawn with the age they would have had.'
-            : 'Merdith 2021: every extension is applied, amber ones included.'),
+        note: 'Each outline is drawn from its begin age to its end age. "Original": the begin ages the '
+          + 'model ships with. "Extended": the begin age the analysis now uses (RiftsClimate ADR-0004), '
+          + 'taken from the other plate model for the same ground, only where the polygon rides on a block '
+          + 'the model already has (its plate, or a parent it moves rigidly with, has a polygon then) and '
+          + 'brings at least one ore deposit into range. "Could be extended, not used": drawn with the age '
+          + 'it would have had; the analysis keeps its original age.',
       });
     }
     this.ui.setLegend(blocks);
