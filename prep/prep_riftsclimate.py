@@ -128,7 +128,10 @@ def deposit_points(model, dep, prefix, label):
         begin = clean(row[f"{prefix}_plate_from_ma"])
         records.append((None, {
             "lon": round(float(row["lon"]), 4), "lat": round(float(row["lat"]), 4),
-            "age": clean(row["age_ma"]),
+            # Rounded to a year: arithmetic noise in a source age (600.0000000000001)
+            # must not decide whether the deposit is drawn (RiftsClimate's
+            # coregistration.AGE_TOLERANCE_MYR does the same).
+            "age": round(clean(row["age_ma"]), 6) if clean(row["age_ma"]) is not None else None,
             "plate_id": pid,
             # The continent polygon's own begin age: PointLayer never draws a deposit
             # older than the crust it was put on (ADR-0032/0033).
@@ -147,7 +150,7 @@ def count_drawable(dep, prefix, model):
     pid = dep[f"{prefix}_plate"].to_numpy(int)
     begin = dep[f"{prefix}_plate_from_ma"].to_numpy(float)
     end = dep[f"{prefix}_plate_to_ma"].to_numpy(float)
-    age = dep["age_ma"].to_numpy(float)
+    age = np.round(dep["age_ma"].to_numpy(float), 6)
     unassigned = pid == 0
     too_old = ~unassigned & ~(np.nan_to_num(begin, nan=-1) >= age)
     # A rotation that is the identity above 0 Ma means the model does not cover that
