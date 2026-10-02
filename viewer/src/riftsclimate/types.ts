@@ -109,6 +109,9 @@ export interface RiftsModel {
   climate_model: string | null;
   climate_age_max: number | null;
   rifts: RiftPhase[] | null;
+  /** Continent polygon outlines in RiftsClimate's begin-age groups (its ADR-0004),
+   *  drawn like the margins; each outline exists only from its begin age. */
+  polygons: RiftPhase[] | null;
   deformation: { base: string; path: string; id: string; frames: number } | null;
 }
 
@@ -146,6 +149,7 @@ export interface RiftsViewState {
   climate: ClimateLayer;
   deformation: DeformationLayer;
   rifts: Record<string, boolean>;
+  polygons: Record<string, boolean>;
   /** 'class', or a field key to colour the deposits by. */
   colourBy: string;
   /** 'since': every deposit formed by this age; 'window': only those forming

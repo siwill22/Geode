@@ -41,7 +41,8 @@ export class RiftLines {
   private phases = new Map<string, PhaseLines>();
   private age = 0;
 
-  constructor(camera: Camera) {
+  /** `width` is the coloured line in px (margins 2.2; polygon outlines thinner). */
+  constructor(camera: Camera, private readonly width = 2.2) {
     this.globe = new ThreeProjector(camera as PerspectiveCamera);
     this.flat = new FlatProjector(camera);
     this.canvas = document.createElement('canvas');
@@ -137,10 +138,10 @@ export class RiftLines {
       for (const [offset, count] of p.runs) tracePolyline(ctx, project, p.xyz, offset, count, { seam });
       // A dark casing first, so a margin reads against land and ocean alike.
       ctx.strokeStyle = 'rgba(5, 8, 12, 0.8)';
-      ctx.lineWidth = 4;
+      ctx.lineWidth = this.width + 1.8;
       ctx.stroke();
       ctx.strokeStyle = p.colour;
-      ctx.lineWidth = 2.2;
+      ctx.lineWidth = this.width;
       ctx.stroke();
     }
   }

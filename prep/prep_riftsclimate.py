@@ -25,6 +25,11 @@ archive/riftsclimate/ only:
   merdith2021/rifts_<phase>/{geometry.bin, rotations.json.gz}
                               Jackson & MacDonald margins by phase (Merdith 2021 only), in
                               prep_coastlines.py's geometry.bin format
+  <model>/polygons/<group>/geometry.bin, <model>/polygons/rotations.json.gz
+                              the model's continent polygon outlines in RiftsClimate's four
+                              begin-age groups (original; unchanged; extended and riding
+                              on an existing block; extended otherwise), for checking the
+                              begin-age corrections (RiftsClimate ADR-0004) by eye
   models/defamation-<model>/  the defamation deformation grids as a Geode Model (frames
                               gzipped; horizontal divergence and deformation style)
 
@@ -65,6 +70,12 @@ MODELS = {
     "scotese": ("Scotese", "scotese", "Scotese", "Scotese", "scotese"),
     "merdith2021": ("Merdith2021", "merdith2021", "Merdith 2021", "Merdith2021", "merdith"),
 }
+POLYGON_GROUPS = [
+    ("original", "Original begin ages (all polygons)", "#c8ced6"),
+    ("unchanged", "Corrected: unchanged", "#7f8a96"),
+    ("extended_rides", "Corrected: extended, rides on an existing block", "#5ad17a"),
+    ("extended_other", "Corrected: extended, does not ride on one", "#ffb020"),
+]
 PHASES = [
     ("syn_rift", "Syn-rift margins", "#ff8c42"),
     ("post_rift", "Post-rift margins", "#4fc3f7"),
@@ -257,6 +268,29 @@ def export_rifts(archive, model, geode_dir, out_dir):
     return phases
 
 
+def export_polygons(archive, model, geode_dir, prefix, out_dir):
+    """The four continent-polygon groups RiftsClimate's geode_export.py wrote, each as a
+    geometry.bin, sharing one 0-1000 Ma rotation table."""
+    from prep_coastlines import export_geometry
+
+    groups, plates = [], set()
+    for group, label, colour in POLYGON_GROUPS:
+        src = geode_dir / f"polygons_{prefix}_{group}.gpmlz"
+        d = out_dir / "polygons" / group
+        d.mkdir(parents=True, exist_ok=True)
+        print(f"  polygons {group}:")
+        ids, _ = export_geometry([src], d / "geometry.bin", 2.0)
+        plates |= set(ids)
+        groups.append({"id": group, "label": label, "colour": colour,
+                       "geometry": str((d / "geometry.bin").relative_to(archive))})
+    rot = out_dir / "polygons" / "rotations.json.gz"
+    size = write_gz_json(rot, rotation_table(model, sorted(plates), range(0, AGE_MAX + 1)))
+    print(f"    rotations {len(plates)} plates, {size / 1e6:.1f} MB")
+    for g in groups:
+        g["rotations"] = str(rot.relative_to(archive))
+    return groups
+
+
 # --- deformation ---------------------------------------------------------------------
 
 
@@ -415,6 +449,7 @@ def main():
             "climate_model": (bridge["path"] if key == "scotese" and bridge else None),
             "climate_age_max": 541 if key == "scotese" else None,
             "rifts": None,
+            "polygons": export_polygons(archive, model, geode_dir, prefix, out / key),
             "deformation": None,
         }
         if key == "merdith2021":

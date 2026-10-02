@@ -11,6 +11,7 @@ export interface RiftsUICallbacks {
   onClimate(layer: ClimateLayer): void;
   onDeformation(layer: DeformationLayer): void;
   onRift(phase: string, on: boolean): void;
+  onPolygon(group: string, on: boolean): void;
   onColourBy(key: string): void;
   onLifespan(): void;
   onClass(cls: string, on: boolean): void;
@@ -45,6 +46,8 @@ export class RiftsUI {
   private deformationCtrl: Controller;
   private riftCtrls: Controller[] = [];
   private riftFolder: GUI;
+  private polygonFolder: GUI;
+  private polygonCtrls: Controller[] = [];
   private windowCtrl: Controller;
 
   private status: HTMLDivElement;
@@ -103,6 +106,7 @@ export class RiftsUI {
     }).name('Deformation')
       .onChange((v: DeformationLayer) => this.cb.onDeformation(v));
     this.riftFolder = layers.addFolder('Jackson & MacDonald margins');
+    this.polygonFolder = layers.addFolder('Continent polygons (begin ages)');
 
     this.status = el('div', 'status');
     this.legend = el('div', 'legend');
@@ -191,6 +195,18 @@ export class RiftsUI {
       this.riftCtrls.push(c);
     }
     this.riftFolder.domElement.style.display = m.rifts?.length ? '' : 'none';
+    for (const c of this.polygonCtrls) c.destroy();
+    this.polygonCtrls = [];
+    for (const p of m.polygons ?? []) {
+      if (!(p.id in this.state.polygons)) this.state.polygons[p.id] = false;
+      const c = this.polygonFolder.add(this.state.polygons, p.id).name(p.label)
+        .onChange((on: boolean) => this.cb.onPolygon(p.id, on));
+      const sw = el('span', 'gui-swatch');
+      sw.style.background = p.colour;
+      (c.domElement.querySelector('.lil-name') ?? c.domElement.querySelector('.name'))?.prepend(sw);
+      this.polygonCtrls.push(c);
+    }
+    this.polygonFolder.domElement.style.display = m.polygons?.length ? '' : 'none';
     this.refreshDisplay();
   }
 

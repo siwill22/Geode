@@ -91,6 +91,8 @@ export class RiftsInstance {
   private qOrient: Quaternion = [0, 0, 0, 1];
   private coastlines: Coastlines | null = null;
   private readonly rifts: RiftLines;
+  /** Continent polygon outlines, under the margins. */
+  private readonly outlines: RiftLines;
   private readonly points: PointOverlay;
   private payload: PointsPayload | null = null;
 
@@ -137,7 +139,8 @@ export class RiftsInstance {
       new MeshBasicMaterial({ side: FrontSide, color: BACKDROP_COLOR }),
     );
     this.scene.add(this.backdrop, this.graticule.lines);
-    // Margins first, so the deposits' canvas sits above them.
+    // Outlines, then margins, then deposits: each canvas sits above the last.
+    this.outlines = new RiftLines(camera, 1.3);
     this.rifts = new RiftLines(camera);
     this.points = new PointOverlay(camera);
 
@@ -145,7 +148,7 @@ export class RiftsInstance {
     for (const c of deps.index.classes) classes[c.id] = true;
     this.view = {
       model: deps.index.models[0].id, age: 0, projection: 'globe',
-      coastlines: true, graticule: true, climate: 'none', deformation: 'none', rifts: {},
+      coastlines: true, graticule: true, climate: 'none', deformation: 'none', rifts: {}, polygons: {},
       colourBy: 'class', lifespan: 'since', window: 10, classes,
     };
 
@@ -160,6 +163,11 @@ export class RiftsInstance {
       onDeformation: () => { void this.loadDeformationFrame(); this.refreshLegend(); },
       onRift: (phase, on) => {
         this.rifts.setVisible(phase, on);
+        this.refreshLegend();
+        this.onNeedsRender();
+      },
+      onPolygon: (group, on) => {
+        this.outlines.setVisible(group, on);
         this.refreshLegend();
         this.onNeedsRender();
       },
@@ -197,9 +205,12 @@ export class RiftsInstance {
     this.ui.refreshDisplay();
 
     const base = this.deps.archiveBase;
-    const [coast, rifts, payload, climateManifest, deformationManifest] = await Promise.all([
+    const [coast, rifts, outlines, payload, climateManifest, deformationManifest] = await Promise.all([
       this.fetchCoastlines(m),
       Promise.all((m.rifts ?? []).map(async (p) => ({
+        p, data: await fetchCoastlineData(base, p.geometry, p.rotations),
+      }))),
+      Promise.all((m.polygons ?? []).map(async (p) => ({
         p, data: await fetchCoastlineData(base, p.geometry, p.rotations),
       }))),
       fetchMaybeGzippedJSON(`${base}/${m.points}`) as Promise<PointsPayload>,
@@ -215,6 +226,7 @@ export class RiftsInstance {
       this.coastlines.dispose();
     }
     this.rifts.clear();
+    this.outlines.clear();
 
     this.coastlines = new Coastlines(coast.lines, coast.table, createMaskTexture(),
       LAND_R_UNDER_SURFACE, LAND_FILL_COLOR);
@@ -227,6 +239,9 @@ export class RiftsInstance {
 
     for (const { p, data } of rifts) {
       this.rifts.addPhase(p.id, p.colour, data.lines, data.table, !!this.view.rifts[p.id]);
+    }
+    for (const { p, data } of outlines) {
+      this.outlines.addPhase(p.id, p.colour, data.lines, data.table, !!this.view.polygons[p.id]);
     }
 
     this.climateManifest = climateManifest;
@@ -283,6 +298,7 @@ export class RiftsInstance {
     this.ui.setAge(age);
     this.coastlines?.setAge(age);
     this.rifts.setAge(age);
+    this.outlines.setAge(age);
     this.points.setTime(age);
     void this.loadClimateFrame();
     void this.loadDeformationFrame();
@@ -491,6 +507,23 @@ export class RiftsInstance {
         note: 'Each margin is drawn only while it is in that phase.',
       });
     }
+    const outlineRows = (this.model.polygons ?? []).filter((p) => this.view.polygons[p.id])
+      .map((p) => ({ label: p.label, fill: p.colour }));
+    if (outlineRows.length) {
+      blocks.push({
+        title: `Continent polygons (${this.model.label})`,
+        rows: outlineRows,
+        note: 'Each outline is drawn from its begin age to its end age. "Original" uses the begin ages the '
+          + 'model ships with; the other three use the begin ages the analysis now uses (RiftsClimate '
+          + 'ADR-0004: extended to the other plate model\'s age for the same ground). "Rides on an existing '
+          + 'block": at every age the extension opens, its plate already has a polygon then, or it moves '
+          + 'rigidly with a parent plate that does. '
+          + (this.model.id === 'scotese'
+            ? 'Scotese: only those extensions are applied; amber outlines are NOT used by the analysis and '
+              + 'are drawn with the age they would have had.'
+            : 'Merdith 2021: every extension is applied, amber ones included.'),
+      });
+    }
     this.ui.setLegend(blocks);
   }
 
@@ -548,6 +581,7 @@ export class RiftsInstance {
     this.coastlines?.setProjection(mode);
     this.graticule.setProjection(mode);
     this.rifts.setCamera(camera, mode);
+    this.outlines.setCamera(camera, mode);
     this.points.setCamera(camera, mode);
     this.applyOrientation();
     this.resize();
@@ -589,6 +623,7 @@ export class RiftsInstance {
     this.graticule.setOrientation(this.qOrient);
     this.points.setReferenceRotation(q);
     this.rifts.setOrientation(q);
+    this.outlines.setOrientation(q);
     // The raster shader already round-trips a flat map's display (lon, lat)
     // through this rotation (core/material.ts, the Reference Plate path), so a
     // turned map samples BRIDGE and the deformation grids at the right place.
@@ -711,12 +746,14 @@ export class RiftsInstance {
   setCameraAspect(camera: Camera): void {
     this.camera = camera;
     this.rifts.setCamera(camera, this.view.projection);
+    this.outlines.setCamera(camera, this.view.projection);
     this.points.setCamera(camera, this.view.projection);
   }
 
   resize(): void {
     const rect = { x: 0, y: 0, width: innerWidth, height: innerHeight };
     this.rifts.setRect(rect);
+    this.outlines.setRect(rect);
     this.points.setRect(rect);
   }
 
@@ -726,6 +763,7 @@ export class RiftsInstance {
 
   render(renderer: WebGLRenderer): void {
     renderer.render(this.scene, this.camera);
+    this.outlines.draw();
     this.rifts.draw();
     this.points.draw();
   }
