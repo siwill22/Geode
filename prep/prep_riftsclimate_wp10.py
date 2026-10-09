@@ -15,8 +15,10 @@ reconstructed on the plates the analysis gave them (archive/riftsclimate/merdith
 points.json.gz, written by prep_riftsclimate.py). New content goes under
 archive/riftsclimate/wp10/ only:
 
-  index.json        what the page loads first: walk settings, rungs, the age histograms
-                    (predicted against observed, 5 Myr bins), provenance
+  index.json        what the page loads first: walk settings, rungs and their fitted
+                    formation parameters, the age histograms (predicted against observed,
+                    5 Myr bins), the shares by subduction distance (from RiftsClimate's
+                    prep/wp10_porphyry_ladder_shares.csv), provenance
   boxes.json.gz     every place (present-day position) and, for each place and time
                     snapshot, where the place was (Merdith 2021), its distance to a
                     subduction zone, each rung's formation rate and each walk's chance of
@@ -102,8 +104,19 @@ def main():
         walkers = json.load(fh)
 
     walk_names = list(walkers["walks"])
-    rate_cols = [c for c in boxes.columns if c.startswith("formation rate, rung ")]
+    # 'formation rate, rung <rung>' is the rate under the first walk setting (Kesler &
+    # Wilkinson 2009); a rung fitted with the walk included (1c, 1d, 1e) also has
+    # 'formation rate, rung <rung> | <walk>' for the other walk. All are relative to the
+    # highest box (max 1).
+    rate_cols = [c for c in boxes.columns if c.startswith("formation rate, rung ") and SEP not in c]
     rung_names = [c[len("formation rate, rung "):] for c in rate_cols]
+    walk_rate_cols = {}
+    for c in boxes.columns:
+        if c.startswith("formation rate, rung ") and SEP in c:
+            rung, wk = c[len("formation rate, rung "):].split(SEP)
+            if rung not in rung_names or wk not in walk_names:
+                raise SystemExit(f"unexpected column {c!r}")
+            walk_rate_cols[f"{wk}{SEP}{rung}"] = c
     chance_cols = {w: f"found chance, {w}" for w in walk_names}
     missing = [c for c in chance_cols.values() if c not in boxes.columns]
     if missing:
@@ -143,7 +156,10 @@ def main():
         "m_lat": rounded(grid("m_lat"), 2),
         "subduction_km": rounded(grid("subduction_km"), 0),
         "found_chance": {w: rounded(grid(c), 4) for w, c in chance_cols.items()},
-        "formation_rate": {r: rounded(grid(c), 4) for r, c in zip(rung_names, rate_cols)},
+        # Per rung, the first walk setting's rate; per "<walk> | <rung>", the rate under that
+        # walk where it differs (fitted rungs). The page uses the second where it exists.
+        "formation_rate": {r: rounded(grid(c), 5) for r, c in zip(rung_names, rate_cols)},
+        "formation_rate_by_walk": {k: rounded(grid(c), 5) for k, c in walk_rate_cols.items()},
     }
     size = write_gz_json(out / "boxes.json.gz", box_obj)
     print(f"boxes: {P} places x {S} snapshots ({len(boxes)} boxes), {size / 1e6:.2f} MB")
@@ -213,29 +229,46 @@ def main():
           f"{len(f_obj['predicted_found'])} predicted-find maps, {size / 1e6:.2f} MB")
 
     # --- index ----------------------------------------------------------------------------
+    # How far from a subduction zone porphyries formed: share of ground (weighted by the
+    # chance of being found), predicted share of finds and real share, per distance band.
+    # This table lives in RiftsClimate's prep/, not data/geode/.
+    shares_obj = {}
+    sp = args.riftsclimate / "prep" / "wp10_porphyry_ladder_shares.csv"
+    if sp.exists():
+        sh = pd.read_csv(sp)
+        for (wk, rung), g in sh.groupby(["walk", "rung"], sort=False):
+            shares_obj[f"{wk}{SEP}{rung}"] = {
+                "bands": g["distance when formed"].tolist(),
+                "ground": rounded(g["share of ground (weighted by chance found)"], 4),
+                "predicted": rounded(g["predicted share of finds"], 4),
+                "real": rounded(g["real share"], 4),
+            }
+        print(f"shares: {len(shares_obj)} rung/walk settings from {sp.name}")
+    else:
+        print(f"no {sp}: the distance-band chart will be empty")
+
     bins = sorted(curves["bin_start_ma"].unique())
     curve_obj = {}
     for (wk, rung), g in curves.groupby(["walk", "rung"], sort=False):
         g = g.set_index("bin_start_ma").reindex(bins)
         curve_obj[f"{wk}{SEP}{rung}"] = {"predicted": rounded(g["predicted"], 3),
                                          "observed": rounded(g["observed"], 0)}
-    beta = walkers.get("b_per_log_km", {})
+    params = walkers.get("formation_rate_parameters", {})
     index = {
         "title": "RiftsClimate WP10: porphyry Cu, form, walk, survive",
         "plate_model": PLATE_MODEL,
         "age_max": AGE_MAX,
         "walks": [{"id": w, "label": w, **walkers["walks"][w]} for w in walk_names],
         "rungs": [{"id": r, "label": r,
-                   "b_per_log_km": {w: beta.get(f"{w}{SEP}{r}") for w in walk_names}} for r in rung_names],
-        # boxes.csv.gz holds one formation-rate column per rung; RiftsClimate's write_view()
-        # makes rung 1c's with the slope b fitted under the first walk setting.
-        "formation_rate_walk": walk_names[0],
+                   # [b] for 1c, five band rates for 1d, [b1, b2] for 1e, null otherwise
+                   "parameters": {w: params.get(f"{w}{SEP}{r}") for w in walk_names}} for r in rung_names],
         "formation_depth_km": walkers["formation_depth_km"][0],
         "formation_depth_sd_km": walkers["formation_depth_km"][1],
         "extent_km": walkers["extent_km"],
         "bin_myr": int(bins[1] - bins[0]),
         "bins_start_ma": [int(b) for b in bins],
         "curves": curve_obj,
+        "shares": shares_obj,
         "counts": {"places": P, "snapshots": S, "boxes": len(boxes), "porphyries": len(porph),
                    "porphyries_in_points": int(in_points.sum()),
                    "porphyries_on_plate_at_own_age": int(sum(on_plate_at_age)),

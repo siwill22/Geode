@@ -173,6 +173,17 @@ export class Wp10Instance {
 
   get key(): string { return `${this.view.walk}${SEP}${this.view.rung}`; }
 
+  /** The formation rate per box for this rung, under this walk where the rung was fitted
+   *  with the walk included (1c, 1d, 1e). */
+  private get rateColumn(): Array<number | null> {
+    return this.deps.boxes.formation_rate_by_walk[this.key] ?? this.deps.boxes.formation_rate[this.view.rung];
+  }
+
+  /** A rung whose rate was fitted (graded by distance), not on/off. */
+  private get fitted(): boolean {
+    return !!this.deps.index.rungs.find((r) => r.id === this.view.rung)?.parameters[this.view.walk];
+  }
+
   async boot(): Promise<void> {
     this.ui.setStatus('loading continents ...');
     const m = this.deps.rifts.models.find((x) => x.id === this.deps.index.plate_model);
@@ -202,7 +213,7 @@ export class Wp10Instance {
     if (this.selection?.kind === 'sim') this.select(null);
 
     // Colour-scale tops, over every box of this rung (and walk).
-    const rate = this.deps.boxes.formation_rate[this.view.rung];
+    const rate = this.rateColumn;
     const chance = this.deps.boxes.found_chance[this.view.walk];
     let r = 0;
     let rf = 0;
@@ -233,6 +244,7 @@ export class Wp10Instance {
       binsStart: ix.bins_start_ma,
       binMyr: ix.bin_myr,
       curve: ix.curves[this.key] ?? null,
+      shares: ix.shares?.[this.key] ?? null,
       title: `rung ${this.view.rung}; ${this.view.walk}`,
     });
     this.rebuildFinds();
@@ -305,7 +317,7 @@ export class Wp10Instance {
     const s = b.snapshotAt(this.view.age);
     const pts: Array<Record<string, unknown>> = [];
     this.formationIdx = [];
-    const rate = this.deps.boxes.formation_rate[this.view.rung];
+    const rate = this.rateColumn;
     const chance = this.deps.boxes.found_chance[this.view.walk];
     if (s >= 0) {
       // Zero-rate boxes first, so the forming ones are drawn on top.
@@ -388,7 +400,7 @@ export class Wp10Instance {
   /** The lowest non-zero rate of this rung over every box (the rate ramp's low end). */
   private minPositiveRate(): number {
     let m = Infinity;
-    for (const v of this.deps.boxes.formation_rate[this.view.rung]) if (v != null && v > 0 && v < m) m = v;
+    for (const v of this.rateColumn) if (v != null && v > 0 && v < m) m = v;
     return Number.isFinite(m) ? m : 0;
   }
 
@@ -420,8 +432,7 @@ export class Wp10Instance {
     } else if (v.formation) {
       const n = this.formationIdx.length;
       const forming = (this.formationLayer.payload()?.points ?? []).filter((p) => ((p.rate as number) ?? 0) > 0).length;
-      const graded = v.rung.startsWith('1c');
-      blocks.push(v.formationColour === 'rate' && !graded
+      blocks.push(v.formationColour === 'rate' && !this.fitted
         ? {
           title: `Where porphyries form at ${age}`,
           rows: [
@@ -435,7 +446,7 @@ export class Wp10Instance {
           title: `Where porphyries form at ${age}: rate per area`,
           rows: n > forming ? [{ label: 'none forming', fill: NO_FORMATION, count: `${n - forming}` }] : [],
           ramp: { css: rampCss(this.deps.colormaps.plasma.colors, RATE_LO, RATE_HI), lo: `${fmtN(Math.max(this.minPositiveRate(), this.rateMax / 10 ** DECADES))} or less`, hi: `${fmtN(this.rateMax)}` },
-          note: 'Relative to a place at a subduction zone (1); log scale. A square is a place (~290 km) '
+          note: 'Fitted rate, relative to the highest place and time (1); log scale. A square is a place (~290 km) '
             + 'where it was then.',
         }
         : {
@@ -489,12 +500,22 @@ export class Wp10Instance {
       'Simulated porphyries and the formation squares sit where their place was in the box covering each age; '
         + 'real porphyries move with the plate the analysis gave them, as in the deposit viewer.',
     ];
-    if (rung && this.view.rung.startsWith('1c')) {
-      const bw = rung.b_per_log_km[this.view.walk];
-      const from = ix.formation_rate_walk;
-      lines.push(`Rung 1c rate falls with distance to a subduction zone as (distance + 10 km)^b, b = ${bw?.toFixed(2)} `
-        + `for this walk.${from && from !== this.view.walk
-          ? ` The squares use RiftsClimate's map, made with b from ${from} (${rung.b_per_log_km[from]?.toFixed(2)}).` : ''}`);
+    const par = rung?.parameters[this.view.walk];
+    if (par) {
+      const id = this.view.rung.split(':')[0];
+      if (id === '1c' && par.length === 1) {
+        lines.push(`Fitted for this walk: rate ~ (distance to a subduction zone + 10 km)^b, b = ${par[0].toFixed(2)}.`);
+      } else if (id === '1e' && par.length === 2) {
+        // Where the fitted hump is highest: x = -b1 / (2 b2), distance = e^x - 10 km.
+        const peak = Math.exp(-par[0] / (2 * par[1])) - 10;
+        lines.push(`Fitted for this walk: rate ~ exp(b1 x + b2 x²), x = log(distance + 10 km); b1 = ${par[0].toFixed(2)}, `
+          + `b2 = ${par[1].toFixed(2)}: highest at about ${Math.round(peak)} km.`);
+      } else {
+        const bands = ix.shares[this.key]?.bands ?? par.map((_, i) => `band ${i + 1}`);
+        const top = Math.max(...par);
+        lines.push(`Fitted for this walk, rate per distance band relative to the highest: `
+          + par.map((v, i) => `${bands[i] ?? `band ${i + 1}`} ${fmtN(v / top)}`).join(', ') + '.');
+      }
     }
     lines.push(`Values from RiftsClimate ${b.riftsclimate_commit ?? '?'} (${b.script}, ${b.script_state}), `
       + `written ${b.data_written}.`);
@@ -636,7 +657,7 @@ export class Wp10Instance {
       const pos = b.position(p, sn);
       if (!pos) return [{ text: `No box for this place at ${Math.round(t)} Ma`, color: '#9aa2ab' }];
       const sk = b.at(this.deps.boxes.subduction_km, p, sn);
-      const r = b.at(this.deps.boxes.formation_rate[v.rung], p, sn);
+      const r = b.at(this.rateColumn, p, sn);
       const c = b.at(this.deps.boxes.found_chance[v.walk], p, sn);
       const snaps = this.deps.boxes.snapshots;
       return [

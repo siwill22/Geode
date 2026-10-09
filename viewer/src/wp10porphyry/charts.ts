@@ -1,5 +1,5 @@
 import { ERODED, FATE_COLOUR, FATE_LABEL, FOUND, type Walkers } from './data';
-import type { LineColour, WalkFactor } from './types';
+import type { LineColour, SharesByBand, WalkFactor } from './types';
 
 /** What the two charts draw: one rung and walk setting. */
 export interface ChartsData {
@@ -10,6 +10,8 @@ export interface ChartsData {
   binsStart: number[];
   binMyr: number;
   curve: { predicted: Array<number | null>; observed: Array<number | null> } | null;
+  /** Shares by distance to a subduction zone when formed, or null. */
+  shares: SharesByBand | null;
   title: string;
 }
 
@@ -34,6 +36,14 @@ const CURSOR = 'rgba(230, 235, 240, 0.75)';
 const BAR = 'rgba(150, 160, 172, 0.55)';
 const PREDICTED = '#e0a100';
 const HIT_PX = 6;
+/** Distance-band chart: share of ground, predicted share of finds, real share. Checked with
+ *  the dataviz palette validator on the dark surface (colour-blind and normal-vision
+ *  separation pass); predicted is the age chart's predicted colour, real its grey. */
+const SHARE_SERIES: Array<{ key: 'ground' | 'predicted' | 'real'; label: string; colour: string }> = [
+  { key: 'ground', label: 'share of ground, weighted by the chance of being found', colour: '#6f8aa6' },
+  { key: 'predicted', label: 'predicted share of finds', colour: '#e0a100' },
+  { key: 'real', label: 'real share', colour: '#c9cfd6' },
+];
 
 /**
  * The Kesler & Wilkinson-style charts, docked right of the map:
@@ -59,6 +69,10 @@ export class ChartsPanel {
   private readonly depthTitle: HTMLDivElement;
   private readonly depthKey: HTMLDivElement;
   private readonly agesKey: HTMLDivElement;
+  private readonly sharesCanvas: HTMLCanvasElement;
+  private readonly sharesKey: HTMLDivElement;
+  /** Bars as drawn, for hover: [x0, y0, x1, y1, band, series]. */
+  private bars: Array<[number, number, number, number, number, number]> = [];
   private readonly tip: HTMLDivElement;
 
   private data: ChartsData | null = null;
@@ -86,9 +100,16 @@ export class ChartsPanel {
     this.agesKey = el('div', 'chart-key');
     b.append(bt, this.agesCanvas, this.agesKey);
 
+    const c = el('div', 'chart-block chart-block-shares');
+    const ct = el('div', 'chart-title');
+    ct.textContent = 'How far from a subduction zone porphyries formed';
+    this.sharesCanvas = el('canvas', 'chart-canvas chart-canvas-shares');
+    this.sharesKey = el('div', 'chart-key');
+    c.append(ct, this.sharesCanvas, this.sharesKey);
+
     this.tip = el('div', 'popup');
     this.tip.style.display = 'none';
-    this.root.append(a, b);
+    this.root.append(a, b, c);
     document.body.append(this.root, this.tip);
 
     this.depthCanvas.addEventListener('pointermove', (e) => this.hover(e));
@@ -104,6 +125,8 @@ export class ChartsPanel {
       const i = this.hovered ?? this.nearest(x, y);
       this.cb.onPickWalker(i, this.ageAtX(x, this.depthCanvas));
     });
+    this.sharesCanvas.addEventListener('pointermove', (e) => this.hoverShares(e));
+    this.sharesCanvas.addEventListener('pointerleave', () => { this.tip.style.display = 'none'; });
     this.agesCanvas.addEventListener('click', (e) => {
       const [x] = this.local(this.agesCanvas, e);
       this.cb.onPickAge(Math.round(this.ageAtX(x, this.agesCanvas)));
@@ -148,21 +171,24 @@ export class ChartsPanel {
     this.drawn = this.chooseLines();
     this.updateDepthText();
     this.updateAgesText();
+    this.updateSharesText();
     this.fit(this.depthCanvas, this.depthBase);
     this.fit(this.agesCanvas, this.agesBase);
+    this.fit(this.sharesCanvas, null);
     this.drawDepthBase();
     this.drawAgesBase();
+    this.drawShares();
     this.paintDepth();
     this.paintAges();
   }
 
   // --- geometry ---------------------------------------------------------------------
 
-  private fit(c: HTMLCanvasElement, base: HTMLCanvasElement): void {
+  private fit(c: HTMLCanvasElement, base: HTMLCanvasElement | null): void {
     const dpr = Math.min(devicePixelRatio, 2);
     const w = Math.max(50, c.clientWidth);
     const h = Math.max(50, c.clientHeight);
-    for (const k of [c, base]) {
+    for (const k of base ? [c, base] : [c]) {
       k.width = Math.round(w * dpr);
       k.height = Math.round(h * dpr);
       k.getContext('2d')!.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -305,9 +331,16 @@ export class ChartsPanel {
     ctx.setLineDash([]);
     // Labels at the left, on a dark plate so the lines under them do not hide them.
     ctx.font = '10px ui-sans-serif, system-ui, sans-serif';
-    plate(ctx, 'surface', L + 4, this.y(0), '#cfd6dd');
-    plate(ctx, 'within reach', L + 4, this.y(-ext / 2), '#e0a100');
+    // When the band is thin (deep paths stretch the axis), "surface" goes just under its
+    // line and "within reach" is left to the key, so the three labels never pile up.
+    const band = this.y(0) - this.y(-ext);
     plate(ctx, `eroded through: top ${ext} km above the surface`, L + 4, this.y(-ext), '#d98a82');
+    if (band >= 30) {
+      plate(ctx, 'within reach', L + 4, this.y(-ext / 2), '#e0a100');
+      plate(ctx, 'surface', L + 4, this.y(0), '#cfd6dd');
+    } else {
+      plate(ctx, 'surface (shaded above: within reach)', L + 4, this.y(0) + 8, '#cfd6dd');
+    }
   }
 
   private yAxis(ctx: CanvasRenderingContext2D, W: number, H: number): void {
@@ -485,6 +518,99 @@ export class ChartsPanel {
     this.tip.style.top = `${e.clientY + 14}px`;
   }
 
+  // --- (c) distance to a subduction zone when formed ----------------------------------
+
+  private drawShares(): void {
+    const c = this.sharesCanvas;
+    const ctx = c.getContext('2d')!;
+    const { w: W, h: H } = this.size(c);
+    ctx.clearRect(0, 0, W, H);
+    this.bars = [];
+    const sh = this.data!.shares;
+    if (!sh) return;
+    const L = MARGIN.left;
+    const R = W - MARGIN.right;
+    const T = 6;
+    const B = H - 18;
+    let max = 0.05;
+    for (const k of ['ground', 'predicted', 'real'] as const) for (const v of sh[k]) max = Math.max(max, v ?? 0);
+    const yMax = Math.ceil((max * 1.08) * 10) / 10;
+    const y = (v: number) => B - (v / yMax) * (B - T);
+
+    ctx.font = '10px ui-sans-serif, system-ui, sans-serif';
+    ctx.strokeStyle = AXIS;
+    ctx.fillStyle = INK;
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    const step = yMax > 0.5 ? 0.2 : 0.1;
+    for (let v = 0; v <= yMax + 1e-9; v += step) {
+      ctx.globalAlpha = 0.35;
+      ctx.beginPath();
+      ctx.moveTo(L, y(v));
+      ctx.lineTo(R, y(v));
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.fillText(`${Math.round(v * 100)}%`, L - 5, y(v));
+    }
+
+    const n = sh.bands.length;
+    const groupW = (R - L) / n;
+    const barW = Math.max(3, (groupW - 14) / 3);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    sh.bands.forEach((band, i) => {
+      const g0 = L + i * groupW + (groupW - 3 * barW - 4) / 2;
+      SHARE_SERIES.forEach((series, j) => {
+        const v = sh[series.key][i] ?? 0;
+        const x0 = g0 + j * (barW + 2);
+        ctx.fillStyle = series.colour;
+        // A thin mark at the baseline for a zero, so "none" reads as a value, not a gap.
+        const top = v > 0 ? y(v) : B - 1;
+        ctx.fillRect(x0, top, barW, B - top);
+        this.bars.push([x0, Math.min(top, B - 6), x0 + barW, B, i, j]);
+      });
+      ctx.fillStyle = INK;
+      ctx.fillText(band, L + (i + 0.5) * groupW, B + 4);
+    });
+  }
+
+  private updateSharesText(): void {
+    const sh = this.data!.shares;
+    if (!sh) {
+      const none = el('div', 'chart-note');
+      none.textContent = 'No distance shares for this rung and walk.';
+      this.sharesKey.replaceChildren(none);
+      return;
+    }
+    const rows = SHARE_SERIES.map((s) => {
+      const r = el('div', 'chart-key-row');
+      const sw = el('span', 'chart-swatch');
+      sw.style.background = s.colour;
+      r.append(sw, document.createTextNode(s.label));
+      return r;
+    });
+    const note = el('div', 'chart-note');
+    note.textContent = 'Distance to a subduction zone when each formed (real porphyries at their own age). '
+      + 'Each colour adds up to 100% across the bands.';
+    this.sharesKey.replaceChildren(...rows, note);
+  }
+
+  private hoverShares(e: PointerEvent): void {
+    const sh = this.data?.shares;
+    const [x, y] = this.local(this.sharesCanvas, e);
+    const hit = sh && this.bars.find((b) => x >= b[0] - 1 && x <= b[2] + 1 && y >= b[1] - 2 && y <= b[3]);
+    if (!sh || !hit) { this.tip.style.display = 'none'; return; }
+    const i = hit[4];
+    this.tip.replaceChildren(
+      line(`${sh.bands[i]} from a subduction zone`, 'popup-title'),
+      ...SHARE_SERIES.map((s) => line(`${s.label}: ${pct(sh[s.key][i])}`)),
+    );
+    this.tip.style.display = '';
+    const tw = this.tip.offsetWidth;
+    this.tip.style.left = `${e.clientX + 14 + tw > innerWidth - 4 ? e.clientX - 14 - tw : e.clientX + 14}px`;
+    this.tip.style.top = `${e.clientY - 70}px`;
+  }
+
   // --- (b) ages found today ------------------------------------------------------------
 
   private agesScale(): { yMax: number } {
@@ -587,6 +713,11 @@ export class ChartsPanel {
     ctx.drawImage(this.agesBase, 0, 0, W, H);
     this.cursor(ctx, c, H);
   }
+}
+
+function pct(v: number | null): string {
+  if (v == null) return '-';
+  return v > 0 && v < 0.001 ? '<0.1%' : `${(v * 100).toFixed(1)}%`;
 }
 
 export function fmtDepth(d: number): string {

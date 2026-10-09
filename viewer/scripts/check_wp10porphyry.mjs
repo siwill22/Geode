@@ -12,6 +12,7 @@
  *  - every simulated porphyry drawn sits on its place's box at that age.
  *
  * Needs the dev server up:  npx vite --port 5183 &  node scripts/check_wp10porphyry.mjs [outdir] [url]
+ * (another port: pass the url, e.g. http://localhost:5184/wp10porphyry.html)
  */
 import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
@@ -214,6 +215,18 @@ await setControl('Where they form (rung)', '1c', 'select');
 await shot('rung1c-050Ma-forming-and-found');
 await page.evaluate(() => { window.__wp10.view.formationColour = 'rate'; window.__wp10.applyLayers(); });
 await shot('rung1c-050Ma-rate');
+// The fitted distance rungs: bands (1d) and a hump (1e), under both walk settings.
+for (const rung of ['1d', '1e']) {
+  await setControl('Where they form (rung)', rung, 'select');
+  await shot(`rung${rung}-050Ma-rate`);
+}
+await setAge(10);
+await shot('rung1e-010Ma-rate');
+await setControl('Walk setting', 'our 5 Myr fit', 'select');
+await shot('rung1e-5Myr-010Ma-rate');
+await setControl('Where they form (rung)', '1d', 'select');
+await shot('rung1d-5Myr-010Ma-rate');
+await setControl('Walk setting', 'Kesler', 'select');
 
 // The other walk setting, rung 1b, with the charts' age axis from 150 Ma.
 await page.evaluate(() => { window.__wp10.view.formationColour = 'rate'; window.__wp10.applyLayers(); });

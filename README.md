@@ -552,7 +552,8 @@ real porphyries' plates from `archive/riftsclimate/`), then:
 ```bash
 # 1. in the RiftsClimate repo: -> data/geode/wp10/
 env -u PYTHONPATH conda run -n riftsclimate python prep/wp10_porphyry_ladder.py
-# 2. here: -> archive/riftsclimate/wp10/ (repacking only; nothing is computed)
+# 2. here: -> archive/riftsclimate/wp10/ (repacking only; nothing is computed; also reads
+#    RiftsClimate's prep/wp10_porphyry_ladder_shares.csv for the distance-band chart)
 env -u PYTHONPATH conda run -n riftsclimate python prep/prep_riftsclimate_wp10.py \
     --riftsclimate /path/to/RiftsClimate
 ```

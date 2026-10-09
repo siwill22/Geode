@@ -21,8 +21,11 @@ export interface WalkSetting {
 export interface Rung {
   id: string;
   label: string;
-  /** Rung 1c only: the fitted slope of formation rate against log subduction distance. */
-  b_per_log_km: Record<string, number | null>;
+  /** Per walk setting, the fitted formation parameters of a fitted rung: [b] for 1c
+   *  (rate ~ (distance + 10 km)^b), five band rates for 1d (0-250, 250-500, 500-1000,
+   *  1000-2000, over 2000 km), [b1, b2] for 1e (exp(b1 x + b2 x^2), x = log(distance +
+   *  10 km)); null for rungs with nothing fitted. */
+  parameters: Record<string, number[] | null>;
 }
 
 export interface Wp10Index {
@@ -33,9 +36,6 @@ export interface Wp10Index {
   age_max: number;
   walks: WalkSetting[];
   rungs: Rung[];
-  /** RiftsClimate writes one formation-rate map per rung, made with the first walk
-   *  setting's fit (only rung 1c depends on the walk: its slope b is fitted with it). */
-  formation_rate_walk: string;
   formation_depth_km: number;
   formation_depth_sd_km: number;
   /** Vertical extent of the body: eroded once its top is this far above the surface. */
@@ -45,9 +45,19 @@ export interface Wp10Index {
   /** Ages of porphyries found today, per bin: predicted (scaled to the number of real
    *  porphyries) and observed. */
   curves: Record<string, { predicted: Array<number | null>; observed: Array<number | null> }>;
+  /** How far from a subduction zone porphyries formed, per distance band: share of ground
+   *  (weighted by the chance of being found), predicted share of finds, real share. */
+  shares: Record<string, SharesByBand>;
   counts: Record<string, number>;
   files: { boxes: string; walkers: string; finds: string };
   built_from: Record<string, string | null>;
+}
+
+export interface SharesByBand {
+  bands: string[];
+  ground: Array<number | null>;
+  predicted: Array<number | null>;
+  real: Array<number | null>;
 }
 
 /** Places (present-day) and their place-and-time boxes, place-major:
@@ -61,8 +71,12 @@ export interface BoxesFile {
   subduction_km: Array<number | null>;
   /** Chance that a porphyry formed in this box is found today, per walk setting. */
   found_chance: Record<string, Array<number | null>>;
-  /** Relative formation rate per area, per rung (1c: relative to a place at 0 km). */
+  /** Relative formation rate per area, per rung, under the first walk setting (relative
+   *  to the highest box: max 1). */
   formation_rate: Record<string, Array<number | null>>;
+  /** "<walk> | <rung>": the rate under that walk, for rungs fitted with the walk included
+   *  (1c, 1d, 1e). Use this where it exists. */
+  formation_rate_by_walk: Record<string, Array<number | null>>;
 }
 
 /** One rung and walk's sample of simulated porphyries, column by column. */
