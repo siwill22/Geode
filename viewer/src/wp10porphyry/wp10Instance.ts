@@ -551,25 +551,8 @@ export class Wp10Instance {
         rows: [{ label: 'porphyry Cu (Hoggard et al. 2020)', fill: REAL_FILL, count: `${n} / ${pts.length}` }],
       });
     }
-    const bf = this.deps.boundaries;
-    if (v.boundaries && bf && this.boundarySnap !== null) {
-      const thr = bf.convergent_cm_yr;
-      const where = `at the ${this.boundarySnap} Ma snapshot (as the squares)`;
-      const only = v.convergentOnly ? ` Only where the plates close at ${thr} cm/yr or more, any type.` : '';
-      const teeth = this.teeth.visible ? ' Teeth on the overriding plate (Geode\'s Merdith 2021 boundary frames).' : '';
-      blocks.push(v.boundaryColour === 'label'
-        ? {
-          title: `Plate boundaries ${where}`,
-          rows: LABEL_GROUPS.map((g) => ({ label: g.label, fill: g.colour })),
-          note: `Type as labelled in Merdith 2021.${only}${teeth}`,
-        }
-        : {
-          title: `Plate boundaries ${where}: closing or opening`,
-          rows: [{ label: 'unknown (a plate on one side only), dashed', fill: UNKNOWN_COLOUR }],
-          ramp: { css: convergenceCss(this.deps.colormaps.RdBu.colors), lo: `${CONV_MAX} cm/yr opening`, mid: '0', hi: `${CONV_MAX} closing` },
-          note: `The plates on either side, moving towards (warm) or apart (cool), whatever the label.${only}${teeth}`,
-        });
-    }
+    // Plate boundaries have no legend block (it took too much of the map); the popup on
+    // hover or click gives each boundary's type and rate.
     this.ui.setLegend(blocks);
   }
 
@@ -940,13 +923,6 @@ function diverge(colors: [number, number, number][], s: number): string {
  *  saturating at CONV_MAX either way. */
 function convergenceColour(colors: [number, number, number][], cmYr: number): string {
   return diverge(colors, -clampSym(cmYr / CONV_MAX));
-}
-
-/** Legend bar for convergence: opening (left) to closing (right). */
-function convergenceCss(colors: [number, number, number][]): string {
-  const stops = [];
-  for (let i = 0; i <= 8; i++) stops.push(`${diverge(colors, 1 - i / 4)} ${(i / 8) * 100}%`);
-  return `linear-gradient(to right, ${stops.join(', ')})`;
 }
 
 function divergeCss(colors: [number, number, number][]): string {
