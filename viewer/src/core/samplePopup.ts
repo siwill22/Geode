@@ -97,6 +97,49 @@ export function showSamplePopup(
   panel.style.display = 'block';
 }
 
+/** One line of a generic popup: plain text, optionally coloured, optionally
+ *  led by a small colour swatch (a legend key for the value). */
+export interface PopupLine { text: string; color?: string; swatch?: string }
+
+/**
+ * The same page-global panel, for any clicked map object that is not a
+ * paleomagnetic sample (a simulated deposit, a place-and-time box, a real
+ * deposit): a title and a list of lines, with the same close button and
+ * `onDismiss` contract as `showSamplePopup()`.
+ */
+export function showInfoPopup(title: string, lines: Array<string | PopupLine>, onDismiss: () => void): void {
+  panel.replaceChildren();
+
+  const close = document.createElement('span');
+  Object.assign(close.style, {
+    position: 'absolute', top: '4px', right: '7px', cursor: 'pointer',
+    color: '#8a929b', fontSize: '12px', lineHeight: '1',
+  });
+  close.textContent = '✕';
+  close.addEventListener('click', () => { onDismiss(); hideSamplePopup(); });
+  panel.appendChild(close);
+
+  const head = row(title);
+  Object.assign(head.style, { fontWeight: '600', paddingRight: '14px' });
+  panel.appendChild(head);
+
+  for (const l of lines) {
+    const line = typeof l === 'string' ? { text: l } : l;
+    const el = row('', line.color);
+    if (line.swatch) {
+      const sw = document.createElement('span');
+      Object.assign(sw.style, {
+        display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%',
+        background: line.swatch, marginRight: '5px',
+      });
+      el.appendChild(sw);
+    }
+    el.appendChild(document.createTextNode(line.text));
+    panel.appendChild(el);
+  }
+  panel.style.display = 'block';
+}
+
 export function hideSamplePopup(): void {
   panel.style.display = 'none';
 }

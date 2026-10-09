@@ -69,6 +69,7 @@ npm run dev   # http://localhost:5173                        mantle viewer
               # http://localhost:5173/oldmap.html               Old Map viewer
               # http://localhost:5173/paleobio.html              paleobiology viewer
               # http://localhost:5173/riftsclimate.html          RiftsClimate deposit viewer
+              # http://localhost:5173/wp10porphyry.html          RiftsClimate WP10 porphyry Cu viewer
               # http://localhost:5173/themelab.html               Theme Lab
               # http://localhost:5173/globe.html                generated: single-model-globe
               # http://localhost:5173/groupGlobe.html            generated: model-group-globe
@@ -538,6 +539,29 @@ Coastline geometry and 0-540 Ma rotations are read from the archive's own
 `reconstructions/scotese` and `reconstructions/merdith2021`; only 540-1000 Ma rotations for
 the same plates are added. Every layer is shown only under its own plate model (ADR-0057).
 
+### The RiftsClimate WP10 porphyry Cu viewer
+
+`wp10porphyry.html` shows RiftsClimate's porphyry Cu "ladder" (its
+`docs/spec/wp10-preservation.md`): where porphyries form at each age for each rung, the
+simulated porphyries following Kesler & Wilkinson's burial-exhumation walk (depth at each
+age, fate today), the real porphyries, today's predicted finds per place, and Kesler &
+Wilkinson-style charts (depth through time; ages of those found today). All in Merdith 2021.
+It needs the deposit viewer's section first (it reads its Merdith 2021 coastlines and the
+real porphyries' plates from `archive/riftsclimate/`), then:
+
+```bash
+# 1. in the RiftsClimate repo: -> data/geode/wp10/
+env -u PYTHONPATH conda run -n riftsclimate python prep/wp10_porphyry_ladder.py
+# 2. here: -> archive/riftsclimate/wp10/ (repacking only; nothing is computed)
+env -u PYTHONPATH conda run -n riftsclimate python prep/prep_riftsclimate_wp10.py \
+    --riftsclimate /path/to/RiftsClimate
+```
+
+Simulated porphyries and the formation squares are drawn where RiftsClimate puts their
+place in the place-and-time box covering each age; real porphyries move with the plate the
+analysis gave them, exactly as in the deposit viewer (checked by `npm run check:wp10porphyry`:
+at its own age each sits within a few km of RiftsClimate's own reconstructed position).
+
 ### Unresolved inputs
 
 These still need a path supplied, because no public source is recorded for them. Both are used
@@ -780,6 +804,7 @@ npm run check:static-polygons  # Plate-Frame Point assignment + trajectory
 npm run check:oldmap           # Old Map viewer: kilometre-true wash/ring/glyph scale
 npm run check:paleobio         # paleobiology viewer's headless render
 npm run check:riftsclimate     # RiftsClimate deposit viewer: layers per plate model, deposit panel
+npm run check:wp10porphyry     # RiftsClimate WP10 porphyry viewer: rungs x ages, chart <-> map picking
 npm run check:themelab         # Theme Lab's headless render
 npm run check:themes           # theme colours land only on furniture, never the ramp
 npm run check:theme-roles      # every furniture role is set by every theme
@@ -956,6 +981,7 @@ prep/prep_oldmap.py               mountain-glyph positions for the Old Map viewe
 prep/prep_oldmap_volcanoes.py     volcano-glyph positions for the Old Map viewer
 prep/prep_pbdb.py                 Paleobiology Database occurrences for the paleobiology viewer
 prep/prep_riftsclimate.py         RiftsClimate deposits, values and defamation grids -> archive/riftsclimate/
+prep/prep_riftsclimate_wp10.py    RiftsClimate WP10 porphyry Cu simulation -> archive/riftsclimate/wp10/
 prep/pack_deploy.mjs             archive/ -> archive-deploy/, for the deployed site
 archive/                         generated data, served statically, not tracked
 archive/reconstructions/<id>/    one Reconstruction Model's own manifest + assets (ADR-0021)
@@ -969,6 +995,7 @@ viewer/valdes.html               the Valdes/BRIDGE viewer's entry page
 viewer/oldmap.html               the Old Map viewer's entry page
 viewer/paleobio.html             the paleobiology viewer's entry page
 viewer/riftsclimate.html         the RiftsClimate deposit viewer's entry page
+viewer/wp10porphyry.html         the RiftsClimate WP10 porphyry Cu viewer's entry page
 viewer/themelab.html             Theme Lab's entry page
 viewer/globe.html                generated: single-model-globe
 viewer/groupGlobe.html           generated: model-group-globe
@@ -981,6 +1008,7 @@ viewer/src/valdes/               Valdes/BRIDGE viewer only
 viewer/src/oldmap/               Old Map viewer only
 viewer/src/paleobio/             paleobiology viewer only
 viewer/src/riftsclimate/         RiftsClimate deposit viewer only
+viewer/src/wp10porphyry/         RiftsClimate WP10 porphyry Cu viewer only
 viewer/src/themelab/             Theme Lab only
 viewer/src/globe/                single-model-globe wrapper
 viewer/src/groupGlobe/           model-group-globe wrapper

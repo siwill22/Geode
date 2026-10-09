@@ -278,17 +278,8 @@ export class RiftsInstance {
   /** The archive's own coastlines for this model (geometry, and its 0-540 Ma
    *  rotations), with the 540-1000 Ma rotations for the same plates appended.
    *  Nothing already in the archive is re-exported. */
-  private async fetchCoastlines(m: RiftsModel): Promise<{ lines: ReturnType<typeof parseGeometry>; table: RotationTable }> {
-    const base = this.deps.archiveBase;
-    const [g, r, x] = await Promise.all([
-      fetchVolumeBytes(`${base}/${m.coastlines.geometry}`),
-      fetchVolumeBytes(`${base}/${m.coastlines.rotations}`),
-      fetchVolumeBytes(`${base}/${m.coastlines.rotations_extension}`),
-    ]);
-    const lines = parseGeometry(g.buffer.slice(g.byteOffset, g.byteOffset + g.byteLength) as ArrayBuffer);
-    const head = JSON.parse(new TextDecoder().decode(r)) as RotationTable;
-    const tail = JSON.parse(new TextDecoder().decode(x)) as RotationTable;
-    return { lines, table: appendRotations(head, tail) };
+  private fetchCoastlines(m: RiftsModel): Promise<{ lines: ReturnType<typeof parseGeometry>; table: RotationTable }> {
+    return fetchModelCoastlines(this.deps.archiveBase, m);
   }
 
   // --- time --------------------------------------------------------------------
@@ -764,6 +755,24 @@ export class RiftsInstance {
     this.rifts.draw();
     this.points.draw();
   }
+}
+
+/** One plate model's continents: the archive's own coastline geometry and
+ *  0-540 Ma rotations, with the 540-1000 Ma rotations prep_riftsclimate.py
+ *  added for the same plates appended. Also read by the WP10 porphyry viewer,
+ *  which draws the same Merdith 2021 continents. */
+export async function fetchModelCoastlines(
+  base: string, m: Pick<RiftsModel, 'coastlines'>,
+): Promise<{ lines: ReturnType<typeof parseGeometry>; table: RotationTable }> {
+  const [g, r, x] = await Promise.all([
+    fetchVolumeBytes(`${base}/${m.coastlines.geometry}`),
+    fetchVolumeBytes(`${base}/${m.coastlines.rotations}`),
+    fetchVolumeBytes(`${base}/${m.coastlines.rotations_extension}`),
+  ]);
+  const lines = parseGeometry(g.buffer.slice(g.byteOffset, g.byteOffset + g.byteLength) as ArrayBuffer);
+  const head = JSON.parse(new TextDecoder().decode(r)) as RotationTable;
+  const tail = JSON.parse(new TextDecoder().decode(x)) as RotationTable;
+  return { lines, table: appendRotations(head, tail) };
 }
 
 /** Append a later rotation table to an earlier one for the same plates, both
