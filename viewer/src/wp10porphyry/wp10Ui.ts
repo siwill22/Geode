@@ -40,7 +40,7 @@ export class Wp10UI {
   private rightInset = 0;
 
   constructor(private state: Wp10ViewState, private cb: Wp10UICallbacks, rungs: Rung[], walks: WalkSetting[],
-    ageMax: number) {
+    ageMax: number, maxLines: number) {
     this.gui = new GUI({ title: 'Porphyry Cu: form, walk, survive' });
     const rungOpts: Record<string, string> = {};
     for (const r of rungs) rungOpts[r.label] = r.id;
@@ -79,7 +79,7 @@ export class Wp10UI {
     charts.close();
     charts.add(state, 'charts').name('Show charts').onChange(() => this.cb.onCharts());
     const opt = () => this.cb.onChartOptions();
-    charts.add(state, 'lines', 10, 1000, 10).name('Lines drawn').onFinishChange(opt);
+    charts.add(state, 'lines', 10, maxLines, 10).name('Lines drawn').onFinishChange(opt);
     charts.add(state, 'onlyFound').name('Only those found today').onChange(opt);
     charts.add(state, 'lineColour', { 'Fate today': 'fate', 'Factor tilting the walk (rung 2 on)': 'factor' })
       .name('Colour lines by').onChange(opt);

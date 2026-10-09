@@ -1,4 +1,19 @@
-import type { BoxesFile, WalkerSample } from './types';
+import type { BoxesFile, PackedWalkerSample, WalkerSample } from './types';
+
+/** Unpack a stored sample's depth paths into km (exactly RiftsClimate's 2-decimal values). */
+export function decodeSample(p: PackedWalkerSample): WalkerSample {
+  const depth_km = p.steps.map((str, i) => {
+    const out = new Array<number>(str.length + 1);
+    let d = p.depth0_dam[i];
+    out[0] = d / 100;
+    for (let k = 0; k < str.length; k++) {
+      d += p.step_dam[str.charCodeAt(k) - 35];
+      out[k + 1] = d / 100;
+    }
+    return out;
+  });
+  return { place: p.place, age_ma: p.age_ma, fate: p.fate, depth_km, factor: p.factor };
+}
 
 /** Fate codes, in WalkersFile.fates order (prep_riftsclimate_wp10.py FATES). */
 export const FOUND = 0;

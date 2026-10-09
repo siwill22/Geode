@@ -26,6 +26,7 @@ archive/riftsclimate/wp10/ only:
                     where the place has no box
   walkers.json.gz   the sample of simulated porphyries per rung and walk: place, age, fate
                     today, and the depth of the top of the body every 1 Myr from formation
+                    (first depth in 10 m units, then one character per step for the change)
   finds.json.gz     the real porphyries (their analysis values) and the predicted number of
                     porphyries found today at each place, against the real count
   boundaries.json.gz  Merdith 2021's plate boundaries at every box snapshot (RiftsClimate's
@@ -51,6 +52,9 @@ PLATE_MODEL = "merdith2021"          # the id in archive/riftsclimate/index.json
 FATES = ["found today", "still buried", "eroded"]
 SEP = " | "                          # key separator, as in RiftsClimate's walkers.json
 AGE_MAX = 541                        # the simulation's oldest age (RiftsClimate MAX_MA)
+# Bumped whenever the packed files change shape; the page refuses (with a plain message) an
+# archive of another format rather than failing somewhere inside. 2: depth paths packed.
+FORMAT = 2
 
 
 def write_gz_json(path, obj):
@@ -108,7 +112,7 @@ def main():
 
     walk_names = list(walkers["walks"])
     # 'formation rate, rung <rung>' is the rate under the first walk setting (Kesler &
-    # Wilkinson 2009); a rung fitted with the walk included (1c, 1d, 1e) also has
+    # Wilkinson 2009); a rung fitted with the walk included (1d, 1e) also has
     # 'formation rate, rung <rung> | <walk>' for the other walk. All are relative to the
     # highest box (max 1).
     rate_cols = [c for c in boxes.columns if c.startswith("formation rate, rung ") and SEP not in c]
@@ -179,8 +183,20 @@ def main():
             "place": [pidx[int(s["place"])] for s in sample],
             "age_ma": [round(float(s["age_ma"]), 2) for s in sample],
             "fate": [FATES.index(s["fate"]) for s in sample],
-            "depth_km": [[round(float(v), 2) for v in s["depth_km"]] for s in sample],
         }
+        # Depth paths, compactly (5000 per setting): the first depth in 10 m units, then one
+        # character per 1 Myr step for the change, in 10 m units, looked up in this
+        # setting's small table of the distinct changes ("step_dam"). It reproduces
+        # RiftsClimate's 2-decimal km values exactly (10 m = 0.01 km).
+        dam = [np.rint(np.asarray(sm["depth_km"], float) * 100).astype(int) for sm in sample]
+        steps = sorted({int(d) for p in dam for d in np.diff(p)})
+        if len(steps) > 90:
+            raise SystemExit(f"{key}: {len(steps)} distinct depth steps; too many to code as characters")
+        code = {d: chr(35 + i) for i, d in enumerate(steps)}       # '#' onwards: no quotes or backslash
+        assert "\\" not in code.values() and '"' not in code.values()
+        ent["depth0_dam"] = [int(p[0]) for p in dam]
+        ent["step_dam"] = steps
+        ent["steps"] = ["".join(code[int(d)] for d in np.diff(p)) for p in dam]
         # Later rungs tilt the walk by a factor at each moment (climate, collision, ...).
         # RiftsClimate may then write, per deposit, the index of the factor acting at each
         # 1 Myr step (into `factors`); the chart colours each segment by it. Rungs 0-1
@@ -317,11 +333,12 @@ def main():
     params = walkers.get("formation_rate_parameters", {})
     index = {
         "title": "RiftsClimate WP10: porphyry Cu, form, walk, survive",
+        "format": FORMAT,
         "plate_model": PLATE_MODEL,
         "age_max": AGE_MAX,
         "walks": [{"id": w, "label": w, **walkers["walks"][w]} for w in walk_names],
         "rungs": [{"id": r, "label": r,
-                   # [b] for 1c, five band rates for 1d, [b1, b2] for 1e, null otherwise
+                   # five band rates for 1d, [b1, b2] for 1e, null otherwise
                    "parameters": {w: params.get(f"{w}{SEP}{r}") for w in walk_names}} for r in rung_names],
         "formation_depth_km": walkers["formation_depth_km"][0],
         "formation_depth_sd_km": walkers["formation_depth_km"][1],

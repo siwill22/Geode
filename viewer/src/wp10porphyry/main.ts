@@ -25,6 +25,11 @@ import type { BoundariesFile, BoxesFile, FindsFile, WalkersFile, Wp10Index } fro
 const ARCHIVE = import.meta.env.VITE_ARCHIVE_BASE ?? `${import.meta.env.BASE_URL}archive`;
 const BACKGROUND = 0x0b0d10;
 const START_PROJECTION: ProjectionMode = 'robinson';
+/** The archive format this page reads (prep_riftsclimate_wp10.py FORMAT). */
+const WP10_FORMAT = 2;
+
+/** An error whose message is meant for the reader: shown without a stack trace. */
+class ReadableError extends Error {}
 
 let camera: Camera = createProjectionCamera('globe', innerWidth / innerHeight);
 const renderer = new WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
@@ -103,6 +108,11 @@ async function boot(): Promise<void> {
     fetchMaybeGzippedJSON(`${ARCHIVE}/riftsclimate/wp10/index.json`) as Promise<Wp10Index>,
     fetchMaybeGzippedJSON(`${ARCHIVE}/riftsclimate/index.json`) as Promise<RiftsIndex>,
   ]);
+  if (index.format !== WP10_FORMAT) {
+    throw new ReadableError(`The WP10 archive (archive/riftsclimate/wp10/) is format ${index.format ?? 1}; this page `
+      + `reads format ${WP10_FORMAT}. Rebuild it:\n  env -u PYTHONPATH conda run -n riftsclimate python `
+      + 'prep/prep_riftsclimate_wp10.py\nthen reload.');
+  }
   const model = rifts.models.find((m) => m.id === index.plate_model);
   if (!model) throw new Error(`plate model ${index.plate_model} is not in riftsclimate/index.json`);
   const [colormaps, boxes, walkers, finds, points, boundaries] = await Promise.all([
@@ -139,7 +149,8 @@ boot().catch((err: unknown) => {
   console.error(err);
   const box = document.createElement('div');
   box.id = 'error';
-  box.textContent = String(err instanceof Error ? err.stack ?? err.message : err);
+  box.textContent = String(err instanceof ReadableError ? err.message
+    : err instanceof Error ? err.stack ?? err.message : err);
   document.body.appendChild(box);
 });
 

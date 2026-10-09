@@ -223,19 +223,32 @@ export class ChartsPanel {
     return [e.clientX - r.left, e.clientY - r.top];
   }
 
-  /** Which simulated porphyries the depth chart draws: the first `lines` of the sample
-   *  (it is already in random order), or the first `lines` of those found today. */
+  /**
+   * Which simulated porphyries the depth chart draws (the sample is in random order, so
+   * "the first n" is a random subset):
+   *  - found today only: all of them;
+   *  - otherwise, `lines` in all: every one found today (they are what the chart is about,
+   *    and rare) plus the first of the others to make up the number; if `lines` is below
+   *    the number found today, simply the first `lines` of the whole sample.
+   * Eroded first, then still buried, then found today on top.
+   */
   private chooseLines(): number[] {
     const w = this.data!.walkers;
-    const out: number[] = [];
-    for (let i = 0; i < w.n && out.length < this.opts.lines; i++) {
-      if (this.opts.onlyFound && w.s.fate[i] !== FOUND) continue;
-      out.push(i);
+    const n = this.opts.lines;
+    const found: number[] = [];
+    for (let i = 0; i < w.n; i++) if (w.s.fate[i] === FOUND) found.push(i);
+    let out: number[];
+    if (this.opts.onlyFound) {
+      out = found;
+    } else if (n < found.length) {
+      out = [];
+      for (let i = 0; i < w.n && out.length < n; i++) out.push(i);
+    } else {
+      out = [...found];
+      for (let i = 0; i < w.n && out.length < n; i++) if (w.s.fate[i] !== FOUND) out.push(i);
     }
-    // Eroded first, then still buried, then found today on top.
     const order = [2, 1, 0];
-    out.sort((a, b) => order.indexOf(w.s.fate[a]) - order.indexOf(w.s.fate[b]));
-    return out;
+    return out.sort((a, b) => order.indexOf(w.s.fate[a]) - order.indexOf(w.s.fate[b]));
   }
 
   private path(i: number): Float32Array {
@@ -281,6 +294,11 @@ export class ChartsPanel {
     this.xAxis(ctx, this.depthCanvas, H);
 
     const factorMode = this.opts.lineColour === 'factor' && !!w.s.factor;
+    // Fainter as more lines pile up, so thousands still show where most paths run.
+    let nFound = 0;
+    for (const i of this.drawn) if (w.s.fate[i] === FOUND) nFound++;
+    const otherAlpha = Math.max(0.06, 0.4 * Math.min(1, Math.sqrt(300 / Math.max(1, this.drawn.length - nFound))));
+    const foundAlpha = Math.max(0.35, 0.9 * Math.min(1, Math.sqrt(100 / Math.max(1, nFound))));
     ctx.lineWidth = 0.8;
     ctx.lineJoin = 'round';
     for (const i of this.drawn) {
@@ -300,7 +318,7 @@ export class ChartsPanel {
         }
       } else {
         ctx.strokeStyle = FATE_COLOUR[w.s.fate[i]];
-        ctx.globalAlpha = w.s.fate[i] === FOUND ? 0.9 : 0.4;
+        ctx.globalAlpha = w.s.fate[i] === FOUND ? foundAlpha : otherAlpha;
         ctx.beginPath();
         ctx.moveTo(p[0], p[1]);
         for (let k = 2; k < p.length; k += 2) ctx.lineTo(p[k], p[k + 1]);
@@ -406,8 +424,10 @@ export class ChartsPanel {
       ? d.factors.map((f) => swatch(f.colour, f.label))
       : [0, 1, 2].map((f) => swatch(FATE_COLOUR[f], `${FATE_LABEL[f]}: ${shownN[f]} drawn of ${n[f]}`));
     const note = el('div', 'chart-note');
-    note.textContent = `${this.drawn.length} of ${w.n} in the sample drawn`
-      + `${this.opts.onlyFound ? ' (found today only)' : ''}. Each forms at about `
+    const rule = this.opts.onlyFound ? ' (found today only)'
+      : this.drawn.length >= n[FOUND] ? `: all ${n[FOUND]} found today, on top, and a random subset of the others`
+        : ': a random subset';
+    note.textContent = `${this.drawn.length} of ${w.n} in the sample drawn${rule}. Each forms at about `
       + `${d.formationDepthKm} km and moves up, stays or moves down one step every 1 Myr. Click a line to `
       + 'find that porphyry on the map.'
       + (this.opts.lineColour === 'factor' && !w.s.factor
@@ -476,15 +496,25 @@ export class ChartsPanel {
     plate(ctx, label, right ? x - w - 7 : x + 3, H - MARGIN.bottom - 9, '#e6ebf0');
   }
 
+  /** The line nearest (x, y) within HIT_PX. Each line advances 1 Myr per vertex, so only
+   *  the few segments around the pointer's age are tested: fast with 5000 lines. */
   private nearest(x: number, y: number): number | null {
+    const w = this.data!.walkers;
+    const age = this.ageAtX(x, this.depthCanvas);
     let best: number | null = null;
     let bestD = HIT_PX * HIT_PX;
     const candidates = this.selected !== null && !this.paths.has(this.selected)
       ? [...this.drawn, this.selected] : this.drawn;
+    // A few Myr either side of the pointer, as screen pixels per Myr can be under one.
+    const reach = Math.max(2, Math.ceil(HIT_PX / Math.max(0.05, this.x(0, this.depthCanvas) - this.x(1, this.depthCanvas))));
     for (const i of candidates) {
       const p = this.paths.get(i) ?? this.path(i);
-      for (let k = 0; k + 3 < p.length; k += 2) {
-        const d = segDist2(x, y, p[k], p[k + 1], p[k + 2], p[k + 3]);
+      const nPts = p.length / 2;
+      const skip = w.s.depth_km[i].length - nPts;
+      const j = Math.floor(w.s.age_ma[i] - age) - skip;
+      if (j < -reach || j > nPts + reach) continue;
+      for (let k = Math.max(0, j - reach); k <= Math.min(nPts - 2, j + reach); k++) {
+        const d = segDist2(x, y, p[2 * k], p[2 * k + 1], p[2 * k + 2], p[2 * k + 3]);
         // Ties go to the later-drawn (found today drawn last, on top).
         if (d <= bestD) { bestD = d; best = i; }
       }

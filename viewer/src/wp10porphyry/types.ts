@@ -21,8 +21,8 @@ export interface WalkSetting {
 export interface Rung {
   id: string;
   label: string;
-  /** Per walk setting, the fitted formation parameters of a fitted rung: [b] for 1c
-   *  (rate ~ (distance + 10 km)^b), five band rates for 1d (0-250, 250-500, 500-1000,
+  /** Per walk setting, the fitted formation parameters of a fitted rung: five band
+   *  rates for 1d (0-250, 250-500, 500-1000,
    *  1000-2000, over 2000 km), [b1, b2] for 1e (exp(b1 x + b2 x^2), x = log(distance +
    *  10 km)); null for rungs with nothing fitted. */
   parameters: Record<string, number[] | null>;
@@ -30,6 +30,8 @@ export interface Rung {
 
 export interface Wp10Index {
   title: string;
+  /** Shape of the packed files (prep_riftsclimate_wp10.py FORMAT); see WP10_FORMAT. */
+  format?: number;
   /** The plate model's id in archive/riftsclimate/index.json: coastlines and the
    *  real porphyries' plates are read from there. */
   plate_model: string;
@@ -79,7 +81,7 @@ export interface BoxesFile {
    *  to the highest box: max 1). */
   formation_rate: Record<string, Array<number | null>>;
   /** "<walk> | <rung>": the rate under that walk, for rungs fitted with the walk included
-   *  (1c, 1d, 1e). Use this where it exists. */
+   *  (1d, 1e). Use this where it exists. */
   formation_rate_by_walk: Record<string, Array<number | null>>;
 }
 
@@ -99,12 +101,25 @@ export interface WalkerSample {
   factor?: number[][];
 }
 
+/** A sample as stored: the depth paths packed (prep_riftsclimate_wp10.py). Each path is
+ *  its first depth in 10 m units, then one character per 1 Myr step; character c means a
+ *  change of step_dam[c - '#'] (10 m units). Decoded into WalkerSample on use. */
+export interface PackedWalkerSample {
+  place: number[];
+  age_ma: number[];
+  fate: number[];
+  depth0_dam: number[];
+  step_dam: number[];
+  steps: string[];
+  factor?: number[][];
+}
+
 export interface WalkFactor { id: string; label: string; colour: string }
 
 export interface WalkersFile {
   fates: string[];
   factors: WalkFactor[];
-  samples: Record<string, WalkerSample>;
+  samples: Record<string, PackedWalkerSample>;
 }
 
 export interface FindsFile {

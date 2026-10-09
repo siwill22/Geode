@@ -20,7 +20,7 @@ import type { RiftsIndex } from '../riftsclimate/types';
 
 import { ChartsPanel, fmtDepth } from './charts';
 import { BoundaryLines, CONV_MAX, LABEL_GROUPS, UNKNOWN_COLOUR } from './boundaryLines';
-import { BURIED, Boxes, ERODED, FATE_COLOUR, FATE_LABEL, FOUND, Walkers } from './data';
+import { BURIED, Boxes, ERODED, FATE_COLOUR, FATE_LABEL, FOUND, Walkers, decodeSample } from './data';
 import { Wp10UI, type LegendBlock } from './wp10Ui';
 import type { BoundariesFile, BoxesFile, FindsFile, WalkersFile, Wp10Index, Wp10ViewState } from './types';
 
@@ -101,6 +101,7 @@ export class Wp10Instance {
 
   private readonly boxes: Boxes;
   private walkers!: Walkers;
+  private readonly walkerCache = new Map<string, Walkers>();
   /** Per drawn point: place index (boxes, finds) or walker index (sims). */
   private formationIdx: number[] = [];
   private findsIdx: number[] = [];
@@ -136,7 +137,7 @@ export class Wp10Instance {
       coastlines: true,
       graticule: true,
       charts: true,
-      lines: 300,
+      lines: 1000,
       onlyFound: false,
       lineColour: 'fate',
       chartSpan: ix.age_max,
@@ -168,7 +169,9 @@ export class Wp10Instance {
       onLayers: () => this.applyLayers(),
       onCharts: () => { this.charts.setVisible(this.view.charts); this.deps.onLayout(); },
       onChartOptions: () => this.charts.setOptions(this.chartOptions()),
-    }, ix.rungs, ix.walks, ix.age_max);
+    }, ix.rungs, ix.walks, ix.age_max,
+    // "Lines drawn" reaches the whole sample.
+    Math.max(...Object.values(deps.walkers.samples).map((x) => x.age_ma.length)));
 
     this.charts = new ChartsPanel({
       onPickWalker: (i, age) => {
@@ -190,7 +193,7 @@ export class Wp10Instance {
   get key(): string { return `${this.view.walk}${SEP}${this.view.rung}`; }
 
   /** The formation rate per box for this rung, under this walk where the rung was fitted
-   *  with the walk included (1c, 1d, 1e). */
+   *  with the walk included (1d, 1e). */
   private get rateColumn(): Array<number | null> {
     return this.deps.boxes.formation_rate_by_walk[this.key] ?? this.deps.boxes.formation_rate[this.view.rung];
   }
@@ -233,9 +236,12 @@ export class Wp10Instance {
   // --- rung and walk -----------------------------------------------------------------
 
   private applySetting(): void {
-    const sample = this.deps.walkers.samples[this.key];
-    if (!sample) throw new Error(`no simulated porphyries for ${this.key}`);
-    this.walkers = new Walkers(sample);
+    const packed = this.deps.walkers.samples[this.key];
+    if (!packed) throw new Error(`no simulated porphyries for ${this.key}`);
+    // Unpacked once per setting and kept: switching back is instant.
+    let w = this.walkerCache.get(this.key);
+    if (!w) { w = new Walkers(decodeSample(packed)); this.walkerCache.set(this.key, w); }
+    this.walkers = w;
     if (this.selection?.kind === 'sim') this.select(null);
 
     // Colour-scale tops, over every box of this rung (and walk).
@@ -398,7 +404,7 @@ export class Wp10Instance {
       const r = (p.rate as number | null) ?? 0;
       const c = (p.chance as number | null) ?? 0;
       if (r <= 0) return { symbol: 'square', fill: NO_FORMATION, size: 1.6 };
-      // Log scales: rung 1c's rate falls about tenfold per tenfold distance, and the
+      // Log scales: the fitted rungs' rates span orders of magnitude with distance, and the
       // found chance falls steeply with age. Rungs 0-1a-1b are on/off, so this is 1 there.
       const t = this.view.formationColour === 'rate'
         ? 1 + Math.log10(Math.max(1e-12, r / this.rateMax)) / DECADES
@@ -426,10 +432,13 @@ export class Wp10Instance {
     });
     const rd = this.deps.colormaps.RdBu.colors;
     const ext = this.deps.index.extent_km;
+    // Smaller dots once thousands are on the map (5000-porphyry samples), so piles at a
+    // place stay readable rather than merging into blobs.
+    const size = pts.length > 1500 ? 2.3 : 3.2;
     this.load(this.simLayer, pts, (p) => {
-      if (this.view.simColour === 'fate') return { symbol: 'circle', fill: FATE_COLOUR[p.fate as number], size: 3.2 };
-      return { symbol: 'circle', fill: ramp(rd, depthT(p.depth as number, ext)), size: 3.2 };
-    }, 3.2);
+      if (this.view.simColour === 'fate') return { symbol: 'circle', fill: FATE_COLOUR[p.fate as number], size };
+      return { symbol: 'circle', fill: ramp(rd, depthT(p.depth as number, ext)), size };
+    }, size);
   }
 
   private rebuildFinds(): void {
@@ -568,18 +577,18 @@ export class Wp10Instance {
     const par = rung?.parameters[this.view.walk];
     if (par) {
       const id = this.view.rung.split(':')[0];
-      if (id === '1c' && par.length === 1) {
-        lines.push(`Fitted for this walk: rate ~ (distance to a subduction zone + 10 km)^b, b = ${par[0].toFixed(2)}.`);
-      } else if (id === '1e' && par.length === 2) {
+      if (id === '1e' && par.length === 2) {
         // Where the fitted hump is highest: x = -b1 / (2 b2), distance = e^x - 10 km.
         const peak = Math.exp(-par[0] / (2 * par[1])) - 10;
         lines.push(`Fitted for this walk: rate ~ exp(b1 x + b2 x²), x = log(distance + 10 km); b1 = ${par[0].toFixed(2)}, `
           + `b2 = ${par[1].toFixed(2)}: highest at about ${Math.round(peak)} km.`);
-      } else {
+      } else if (id === '1d') {
         const bands = ix.shares[this.key]?.bands ?? par.map((_, i) => `band ${i + 1}`);
         const top = Math.max(...par);
         lines.push(`Fitted for this walk, rate per distance band relative to the highest: `
           + par.map((v, i) => `${bands[i] ?? `band ${i + 1}`} ${fmtN(v / top)}`).join(', ') + '.');
+      } else {
+        lines.push(`Fitted for this walk: ${par.map((v) => fmtN(v)).join(', ')}.`);
       }
     }
     lines.push(`Values from RiftsClimate ${b.riftsclimate_commit ?? '?'} (${b.script}, ${b.script_state}), `

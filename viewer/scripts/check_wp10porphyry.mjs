@@ -211,10 +211,7 @@ await page.evaluate(() => { window.__wp10.view.formationColour = 'rate_found'; w
 await page.waitForTimeout(500);
 await shot('rung1a-050Ma-forming-and-found');
 
-await setControl('Where they form (rung)', '1c', 'select');
-await shot('rung1c-050Ma-forming-and-found');
 await page.evaluate(() => { window.__wp10.view.formationColour = 'rate'; window.__wp10.applyLayers(); });
-await shot('rung1c-050Ma-rate');
 // The fitted distance rungs: bands (1d) and a hump (1e), under both walk settings.
 for (const rung of ['1d', '1e']) {
   await setControl('Where they form (rung)', rung, 'select');
@@ -227,6 +224,33 @@ await shot('rung1e-5Myr-010Ma-rate');
 await setControl('Where they form (rung)', '1d', 'select');
 await shot('rung1d-5Myr-010Ma-rate');
 await setControl('Walk setting', 'Kesler', 'select');
+
+// The depth chart with 300 and 5000 lines, and found today only; how long a redraw takes.
+await setControl('Where they form (rung)', '1a', 'select');
+await setAge(60);
+for (const [lines, only] of [[300, false], [5000, false], [300, true]]) {
+  const t = await page.evaluate(([lines, only]) => {
+    const w = window.__wp10;
+    w.view.lines = lines; w.view.onlyFound = only;
+    const t0 = performance.now();
+    w.charts.setOptions(w.chartOptions());
+    const t1 = performance.now();
+    w.ui.refreshDisplay();
+    const ch = w.charts;
+    const f = ch.drawn.filter((i) => ch.data.walkers.s.fate[i] === 0).length;
+    // A hover over the middle of the chart: how long finding the nearest line takes.
+    const t2 = performance.now();
+    for (let k = 0; k < 20; k++) ch.nearest(200 + k, 120);
+    const t3 = performance.now();
+    return { redraw: t1 - t0, hover: (t3 - t2) / 20, drawn: ch.drawn.length, found: f, n: ch.data.walkers.n };
+  }, [lines, only]);
+  console.log(`chart, ${lines} lines${only ? ', found today only' : ''}: ${t.drawn} drawn (${t.found} found today) of ${t.n}; `
+    + `redraw ${t.redraw.toFixed(0)} ms, nearest-line lookup ${t.hover.toFixed(1)} ms`);
+  await page.waitForTimeout(300);
+  await shot(`chart-${lines}-lines${only ? '-found-only' : ''}`);
+}
+await page.evaluate(() => { const w = window.__wp10; w.view.lines = 1000; w.view.onlyFound = false;
+  w.charts.setOptions(w.chartOptions()); w.ui.refreshDisplay(); });
 
 // Plate boundaries at 14, 40, 140 and 310 Ma, coloured by type and by closing/opening rate,
 // with a sense check: labelled subduction zones should mostly close, ridges mostly open.
