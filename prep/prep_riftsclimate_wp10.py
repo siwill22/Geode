@@ -28,6 +28,9 @@ archive/riftsclimate/wp10/ only:
                     today, and the depth of the top of the body every 1 Myr from formation
   finds.json.gz     the real porphyries (their analysis values) and the predicted number of
                     porphyries found today at each place, against the real count
+  boundaries.json.gz  Merdith 2021's plate boundaries at every box snapshot (RiftsClimate's
+                    prep/wp10_boundaries.py): label and convergence rate along each; the
+                    subduction teeth come from the archive's own Boundary Frames
 
 Run with the RiftsClimate environment, like prep_riftsclimate.py:
     env -u PYTHONPATH conda run -n riftsclimate python prep/prep_riftsclimate_wp10.py
@@ -228,6 +231,64 @@ def main():
           f"{PLATE_MODEL} points, {sum(on_plate_at_age)} on a plate at their own age); "
           f"{len(f_obj['predicted_found'])} predicted-find maps, {size / 1e6:.2f} MB")
 
+    # --- plate boundaries -----------------------------------------------------------------
+    # RiftsClimate's prep/wp10_boundaries.py: Merdith 2021's resolved boundaries at every box
+    # snapshot, ~1 degree, each with its label and a convergence rate per point (+ closing).
+    # Packed per snapshot as [label index, lon[], lat[], convergence[]] per boundary.
+    bnd_path = src / "boundaries.json.gz"
+    bnd_file = None
+    teeth = None
+    if bnd_path.exists():
+        with gzip.open(bnd_path, "rt") as fh:
+            bnd = json.load(fh)
+        labels = sorted({f["label"] for fs in bnd["snapshots_ma"].values() for f in fs})
+        lidx = {l: i for i, l in enumerate(labels)}
+        frames = {}
+        npts = 0
+        for age, fs in bnd["snapshots_ma"].items():
+            out_fs = []
+            for f in fs:
+                ll = np.asarray(f["lonlat"], float)
+                if len(ll) < 2:
+                    continue
+                conv = [None if c is None else round(float(c), 2) for c in f["convergence_cm_yr"]]
+                out_fs.append([lidx[f["label"]], rounded(ll[:, 0], 2), rounded(ll[:, 1], 2), conv])
+                npts += len(ll)
+            frames[str(int(round(float(age))))] = out_fs
+        b_obj = {"model": bnd.get("model"), "convergent_cm_yr": bnd.get("convergent_cm_yr"),
+                 "labels": labels, "snapshots": frames}
+        size = write_gz_json(out / "boundaries.json.gz", b_obj)
+        bnd_file = "riftsclimate/wp10/boundaries.json.gz"
+        print(f"boundaries: {len(frames)} snapshots, {npts} points, {len(labels)} labels, {size / 1e6:.2f} MB")
+
+        # Subduction teeth: RiftsClimate's file has no polarity, so the page draws the
+        # teeth from the archive's own Merdith 2021 Boundary Frames (gpml polarity, 1 Myr
+        # steps), at the same whole-Myr age. Check they are the same boundaries: per
+        # snapshot, the number of features labelled SubductionZone in each.
+        man_path = args.archive / "reconstructions" / PLATE_MODEL / "manifest.json"
+        if man_path.exists():
+            man = json.loads(man_path.read_text())
+            rel = f"reconstructions/{PLATE_MODEL}/{man['boundaries']}"
+            idx = json.loads((args.archive / rel).read_text())
+            have = {int(fr["time"]): fr for fr in idx["frames"]}
+            same = differ = missing = 0
+            for age, fs in frames.items():
+                fr = have.get(int(age))
+                if fr is None:
+                    missing += 1
+                    continue
+                n_rc = sum(1 for f in fs if labels[f[0]] == "SubductionZone")
+                if n_rc == fr["subduction"]:
+                    same += 1
+                else:
+                    differ += 1
+            teeth = {"frames": rel, "age_max": max(have), "snapshots_same_subduction_count": same,
+                     "snapshots_differ": differ, "snapshots_without_frame": missing}
+            print(f"teeth from {rel}: subduction-zone count agrees at {same} snapshots, differs at {differ}, "
+                  f"no archive frame at {missing}")
+    else:
+        print(f"no {bnd_path}: no plate boundaries")
+
     # --- index ----------------------------------------------------------------------------
     # How far from a subduction zone porphyries formed: share of ground (weighted by the
     # chance of being found), predicted share of finds and real share, per distance band.
@@ -274,7 +335,8 @@ def main():
                    "porphyries_on_plate_at_own_age": int(sum(on_plate_at_age)),
                    "walkers_with_box_at_formation": covered, "walkers": total},
         "files": {"boxes": "riftsclimate/wp10/boxes.json.gz", "walkers": "riftsclimate/wp10/walkers.json.gz",
-                  "finds": "riftsclimate/wp10/finds.json.gz"},
+                  "finds": "riftsclimate/wp10/finds.json.gz", "boundaries": bnd_file},
+        "teeth": teeth,
         "built_from": provenance(args.riftsclimate),
     }
     (out / "index.json").write_text(json.dumps(index, indent=1))

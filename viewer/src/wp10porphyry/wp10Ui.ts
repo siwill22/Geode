@@ -66,6 +66,10 @@ export class Wp10UI {
     map.add(state, 'finds').name('Predicted finds per place (0 Ma)').onChange(layers);
     map.add(state, 'findsColour', { 'Predicted number found': 'predicted', 'Real minus predicted': 'difference' })
       .name('  coloured by').onChange(layers);
+    map.add(state, 'boundaries').name('Plate boundaries').onChange(layers);
+    map.add(state, 'boundaryColour', { 'Type (as labelled)': 'label', 'Closing or opening rate': 'convergence' })
+      .name('  coloured by').onChange(layers);
+    map.add(state, 'convergentOnly').name('  only where closing').onChange(layers);
     map.add(state, 'coastlines').name('Continents').onChange(layers);
     map.add(state, 'graticule').name('Latitude/longitude lines').onChange(layers);
 

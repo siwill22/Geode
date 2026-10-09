@@ -12,7 +12,7 @@ import type { PointsPayload } from '../core/pointOverlay';
 import { fetchMaybeGzippedJSON } from '../../vendor/petrify/js/gzipFetch.js';
 import type { RiftsIndex } from '../riftsclimate/types';
 import { Wp10Instance } from './wp10Instance';
-import type { BoxesFile, FindsFile, WalkersFile, Wp10Index } from './types';
+import type { BoundariesFile, BoxesFile, FindsFile, WalkersFile, Wp10Index } from './types';
 
 /**
  * The RiftsClimate WP10 porphyry Cu viewer: where porphyries form through time (per
@@ -105,16 +105,19 @@ async function boot(): Promise<void> {
   ]);
   const model = rifts.models.find((m) => m.id === index.plate_model);
   if (!model) throw new Error(`plate model ${index.plate_model} is not in riftsclimate/index.json`);
-  const [colormaps, boxes, walkers, finds, points] = await Promise.all([
+  const [colormaps, boxes, walkers, finds, points, boundaries] = await Promise.all([
     loadColormaps(ARCHIVE, archive.colormaps),
     fetchMaybeGzippedJSON(`${ARCHIVE}/${index.files.boxes}`) as Promise<BoxesFile>,
     fetchMaybeGzippedJSON(`${ARCHIVE}/${index.files.walkers}`) as Promise<WalkersFile>,
     fetchMaybeGzippedJSON(`${ARCHIVE}/${index.files.finds}`) as Promise<FindsFile>,
     fetchMaybeGzippedJSON(`${ARCHIVE}/${model.points}`) as Promise<PointsPayload>,
+    index.files.boundaries
+      ? fetchMaybeGzippedJSON(`${ARCHIVE}/${index.files.boundaries}`) as Promise<BoundariesFile>
+      : Promise.resolve(null),
   ]);
 
   instance = new Wp10Instance(camera, {
-    archiveBase: ARCHIVE, colormaps, index, rifts, boxes, walkers, finds, points, rebuildCamera,
+    archiveBase: ARCHIVE, colormaps, index, rifts, boxes, walkers, finds, points, boundaries, rebuildCamera,
     onLayout: layout,
   }, needsRender);
   instance.setCameraAspect(camera);

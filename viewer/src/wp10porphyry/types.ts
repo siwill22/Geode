@@ -49,7 +49,11 @@ export interface Wp10Index {
    *  (weighted by the chance of being found), predicted share of finds, real share. */
   shares: Record<string, SharesByBand>;
   counts: Record<string, number>;
-  files: { boxes: string; walkers: string; finds: string };
+  files: { boxes: string; walkers: string; finds: string; boundaries: string | null };
+  /** The archive's own Merdith 2021 Boundary Frames, read for the subduction teeth only
+   *  (RiftsClimate's boundaries carry no polarity); checked by the prep script to have the
+   *  same subduction zones at every snapshot. */
+  teeth: { frames: string; age_max: number; snapshots_same_subduction_count: number; snapshots_differ: number } | null;
   built_from: Record<string, string | null>;
 }
 
@@ -119,10 +123,20 @@ export interface FindsFile {
   predicted_found: Record<string, { place: number[]; predicted: number[]; real: number[] }>;
 }
 
+/** RiftsClimate's plate boundaries per box snapshot (whole Myr): per boundary, label
+ *  index, lon[], lat[], convergence cm/yr per point (+ = closing, null = unknown). */
+export interface BoundariesFile {
+  model: string;
+  convergent_cm_yr: number;
+  labels: string[];
+  snapshots: Record<string, Array<[number, number[], number[], Array<number | null>]>>;
+}
+
 export type FormationColour = 'rate' | 'rate_found';
 export type SimColour = 'depth' | 'fate';
 export type FindsColour = 'predicted' | 'difference';
 export type LineColour = 'fate' | 'factor';
+export type BoundaryColour = 'label' | 'convergence';
 
 export interface Wp10ViewState {
   rung: string;
@@ -136,6 +150,10 @@ export interface Wp10ViewState {
   real: boolean;
   finds: boolean;
   findsColour: FindsColour;
+  boundaries: boolean;
+  boundaryColour: BoundaryColour;
+  /** Only where the two plates close at >= the convergent rate (any label). */
+  convergentOnly: boolean;
   coastlines: boolean;
   graticule: boolean;
   charts: boolean;

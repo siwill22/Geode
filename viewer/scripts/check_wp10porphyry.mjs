@@ -228,6 +228,60 @@ await setControl('Where they form (rung)', '1d', 'select');
 await shot('rung1d-5Myr-010Ma-rate');
 await setControl('Walk setting', 'Kesler', 'select');
 
+// Plate boundaries at 14, 40, 140 and 310 Ma, coloured by type and by closing/opening rate,
+// with a sense check: labelled subduction zones should mostly close, ridges mostly open.
+await page.evaluate(() => { const w = window.__wp10; w.view.formationColour = 'rate'; w.view.simulated = false;
+  w.view.real = true; w.applyLayers(); });
+for (const age of [14, 40, 140, 310]) {
+  await setAge(age);
+  const stats = await page.evaluate(() => {
+    const w = window.__wp10;
+    const bl = w.boundaryLines;
+    const out = {};
+    for (let f = 0; f < bl.features.length; f++) {
+      const lab = bl.labelOf(f);
+      const o = (out[lab] ??= { closing: 0, opening: 0, unknown: 0 });
+      for (const c of bl.feature(f)[3]) { if (c == null) o.unknown++; else if (c > 0) o.closing++; else o.opening++; }
+    }
+    return { snap: w.boundarySnap, teeth: w.teeth.visible, teethFrame: w.teeth.frameTime, out };
+  });
+  const fmt = (lab) => { const o = stats.out[lab]; if (!o) return `${lab}: none`;
+    const n = o.closing + o.opening; return `${lab}: ${Math.round(100 * o.closing / Math.max(1, n))}% of ${n} points closing (${o.unknown} unknown)`; };
+  console.log(`boundaries at ${age} Ma: snapshot ${stats.snap} Ma, teeth ${stats.teeth ? `frame ${stats.teethFrame} Ma` : 'off'}; `
+    + ['SubductionZone', 'MidOceanRidge', 'OrogenicBelt', 'Transform'].map(fmt).join('; '));
+  await page.evaluate(() => { window.__wp10.view.boundaryColour = 'label'; window.__wp10.applyLayers(); });
+  await page.waitForTimeout(600);
+  await shot(`boundaries-type-${String(age).padStart(3, '0')}Ma`);
+  await page.evaluate(() => { window.__wp10.view.boundaryColour = 'convergence'; window.__wp10.applyLayers(); });
+  await page.waitForTimeout(400);
+  await shot(`boundaries-rate-${String(age).padStart(3, '0')}Ma`);
+}
+// Click a boundary: the popup names its type, its rate there and the snapshot.
+await setAge(40);
+const onLine = await page.evaluate(() => {
+  const bl = window.__wp10.boundaryLines;
+  const mapW = window.__wp10.mapRect.width;
+  for (const d of bl.drawn) {
+    if (bl.labelOf(d.feature) !== 'SubductionZone') continue;
+    for (const p of d.pts) if (p && p[0] > 320 && p[0] < mapW - 260 && p[1] > 250 && p[1] < 650) return { x: p[0], y: p[1] };
+  }
+  return null;
+});
+if (onLine) {
+  await page.evaluate(() => { const w = window.__wp10; w.view.formation = false; w.view.real = false; w.applyLayers(); });
+  await page.mouse.click(onLine.x, onLine.y);
+  await page.waitForTimeout(600);
+  const sel = await page.evaluate(() => window.__wp10.selection);
+  console.log('boundary click:', JSON.stringify(sel));
+  await shot('boundaries-rate-040Ma-click');
+}
+await page.evaluate(() => { const w = window.__wp10; w.view.convergentOnly = true; w.view.boundaryColour = 'label';
+  w.view.formation = true; w.applyLayers(); });
+await page.waitForTimeout(500);
+await shot('boundaries-type-040Ma-closing-only');
+await page.evaluate(() => { const w = window.__wp10; w.view.convergentOnly = false; w.view.simulated = true;
+  w.view.real = true; w.select(null); w.applyLayers(); });
+
 // The other walk setting, rung 1b, with the charts' age axis from 150 Ma.
 await page.evaluate(() => { window.__wp10.view.formationColour = 'rate'; window.__wp10.applyLayers(); });
 await setControl('Walk setting', 'our 5 Myr fit', 'select');

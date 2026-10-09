@@ -1,9 +1,11 @@
 import {
   FrontSide, Mesh, MeshBasicMaterial, Scene,
-  type Camera, type Material, type WebGLRenderer,
+  type Camera, type Material, type PerspectiveCamera, type WebGLRenderer,
 } from 'three';
 
 import { PointOverlay, type PointStyleHook, type PointsPayload } from '../core/pointOverlay';
+import { BoundaryOverlay } from '../core/boundaries';
+import type { ResolvedTheme } from '../core/theme';
 import { Coastlines, LAND_R_UNDER_SURFACE } from '../core/coastlines';
 import { createMaskTexture } from '../core/mask';
 import { Graticule } from '../core/graticule';
@@ -17,9 +19,10 @@ import { fetchModelCoastlines } from '../riftsclimate/riftsclimateInstance';
 import type { RiftsIndex } from '../riftsclimate/types';
 
 import { ChartsPanel, fmtDepth } from './charts';
+import { BoundaryLines, CONV_MAX, LABEL_GROUPS, UNKNOWN_COLOUR } from './boundaryLines';
 import { BURIED, Boxes, ERODED, FATE_COLOUR, FATE_LABEL, FOUND, Walkers } from './data';
 import { Wp10UI, type LegendBlock } from './wp10Ui';
-import type { BoxesFile, FindsFile, WalkersFile, Wp10Index, Wp10ViewState } from './types';
+import type { BoundariesFile, BoxesFile, FindsFile, WalkersFile, Wp10Index, Wp10ViewState } from './types';
 
 const LAND_FILL_COLOR = 0x5f5a52;
 const BACKDROP_R = LAND_R_UNDER_SURFACE * (1 - 0.0006);
@@ -38,7 +41,7 @@ const RATE_HI = 0.8;
 const NO_FORMATION = 'rgba(150, 156, 164, 0.35)';
 const REAL_FILL = '#ffffff';
 
-type Kind = 'box' | 'sim' | 'real' | 'place';
+type Kind = 'box' | 'sim' | 'real' | 'place' | 'boundary';
 interface Selection { kind: Kind; id: number | string }
 
 export interface Wp10Deps {
@@ -52,6 +55,7 @@ export interface Wp10Deps {
   /** The deposit viewer's points for this plate model (every class); read, filtered to
    *  the porphyries the WP10 analysis used. */
   points: PointsPayload;
+  boundaries: BoundariesFile | null;
   rebuildCamera(mode: ProjectionMode): Camera;
   /** The charts panel opened, closed or changed width: the map must be resized. */
   onLayout(): void;
@@ -85,6 +89,12 @@ export class Wp10Instance {
 
   // Drawing order: boxes, finds, simulated, real (each canvas above the last).
   private readonly formationLayer: PointOverlay;
+  /** Plate boundaries over the formation squares, under the deposits: the archive's
+   *  subduction teeth, then RiftsClimate's coloured lines. */
+  private readonly teeth: BoundaryOverlay;
+  private readonly boundaryLines: BoundaryLines;
+  /** The snapshot whose boundaries are on screen (whole Myr), or null. */
+  private boundarySnap: number | null = null;
   private readonly findsLayer: PointOverlay;
   private readonly simLayer: PointOverlay;
   private readonly realLayer: PointOverlay;
@@ -120,6 +130,9 @@ export class Wp10Instance {
       real: true,
       finds: true,
       findsColour: 'predicted',
+      boundaries: !!deps.boundaries,
+      boundaryColour: 'label',
+      convergentOnly: false,
       coastlines: true,
       graticule: true,
       charts: true,
@@ -134,6 +147,9 @@ export class Wp10Instance {
     this.scene.add(this.backdrop, this.graticule.lines);
 
     this.formationLayer = new PointOverlay(camera);
+    this.teeth = new BoundaryOverlay(camera as PerspectiveCamera);
+    this.boundaryLines = new BoundaryLines(camera, deps.boundaries?.convergent_cm_yr ?? 0.5,
+      (sgn) => diverge(deps.colormaps.RdBu.colors, sgn));
     this.findsLayer = new PointOverlay(camera);
     this.simLayer = new PointOverlay(camera);
     this.realLayer = new PointOverlay(camera);
@@ -195,6 +211,16 @@ export class Wp10Instance {
     this.coastlines.setProjection(this.view.projection);
     this.coastlines.setOrientation(this.qOrient);
     this.scene.add(this.coastlines.lines, this.coastlines.land);
+    if (this.deps.index.teeth) {
+      // Subduction zones only: every other type is drawn by BoundaryLines, so its stroke here
+      // is transparent (BoundaryOverlay.load()'s documented way to show one type).
+      const clear = { stroke: 'rgba(0,0,0,0)', width: 1, label: '' };
+      await this.teeth.load(`${this.deps.archiveBase}/${this.deps.index.teeth.frames}`, {
+        subduction: { stroke: LABEL_GROUPS[0].colour, width: 1.2, label: 'Subduction zone' },
+        ridge: clear, transform: clear, other: clear,
+      });
+      this.styleTeeth();
+    }
     this.ui.setStatus('');
     this.applySetting();
   }
@@ -264,8 +290,42 @@ export class Wp10Instance {
     this.realLayer.setTime(age);
     this.rebuildFormation();
     this.rebuildSims();
+    this.rebuildBoundaries();
     this.charts.setAge(age);
     this.afterChange();
+  }
+
+  // --- plate boundaries ------------------------------------------------------------------
+
+  /** The boundaries of the snapshot whose box covers this age -- the same snapshot the
+   *  formation squares and simulated porphyries are placed at, so lines and squares agree. */
+  private rebuildBoundaries(): void {
+    const bf = this.deps.boundaries;
+    if (!bf) return;
+    const s = this.boxes.snapshotAt(this.view.age);
+    const snap = s < 0 ? null : Math.round(this.deps.boxes.snapshots.snapshot_ma[s]);
+    if (snap !== this.boundarySnap) {
+      this.boundarySnap = snap;
+      this.boundaryLines.setFeatures(snap === null ? [] : bf.snapshots[String(snap)] ?? [], bf.labels);
+      if (this.selection?.kind === 'boundary') this.select(null);
+      const t = this.deps.index.teeth;
+      if (t && snap !== null && snap <= t.age_max) void this.teeth.setAge(snap, () => this.onNeedsRender());
+    }
+    this.boundaryLines.restyle(this.view.boundaryColour, this.view.convergentOnly);
+    this.styleTeeth();
+  }
+
+  /** Teeth in the subduction colour when coloured by type, pale when coloured by rate;
+   *  hidden for "only where closing" (they mark every labelled subduction zone). */
+  private styleTeeth(): void {
+    const t = this.deps.index.teeth;
+    this.teeth.visible = !!t && this.view.boundaries && !this.view.convergentOnly
+      && this.boundarySnap !== null && this.boundarySnap <= t.age_max;
+    const stroke = this.view.boundaryColour === 'label' ? LABEL_GROUPS[0].colour : 'rgba(230, 235, 240, 0.85)';
+    this.teeth.applyTheme({
+      boundaryStyle: { subduction: { stroke, width: 1.2, label: 'Subduction zone' } },
+      boundaryDecoration: { triangleGap: 16, triangleSize: 6 },
+    } as unknown as ResolvedTheme);
   }
 
   private afterChange(): void {
@@ -282,6 +342,7 @@ export class Wp10Instance {
     this.rebuildFormation();
     this.rebuildSims();
     this.rebuildFinds();
+    this.rebuildBoundaries();
     this.afterChange();
   }
 
@@ -294,6 +355,8 @@ export class Wp10Instance {
     this.findsLayer.visible = this.findsShown;
     this.simLayer.visible = this.view.simulated;
     this.realLayer.visible = this.view.real;
+    this.boundaryLines.visible = this.view.boundaries && !!this.deps.boundaries;
+    this.styleTeeth();
   }
 
   // --- the point sets --------------------------------------------------------------------
@@ -488,6 +551,25 @@ export class Wp10Instance {
         rows: [{ label: 'porphyry Cu (Hoggard et al. 2020)', fill: REAL_FILL, count: `${n} / ${pts.length}` }],
       });
     }
+    const bf = this.deps.boundaries;
+    if (v.boundaries && bf && this.boundarySnap !== null) {
+      const thr = bf.convergent_cm_yr;
+      const where = `at the ${this.boundarySnap} Ma snapshot (as the squares)`;
+      const only = v.convergentOnly ? ` Only where the plates close at ${thr} cm/yr or more, any type.` : '';
+      const teeth = this.teeth.visible ? ' Teeth on the overriding plate (Geode\'s Merdith 2021 boundary frames).' : '';
+      blocks.push(v.boundaryColour === 'label'
+        ? {
+          title: `Plate boundaries ${where}`,
+          rows: LABEL_GROUPS.map((g) => ({ label: g.label, fill: g.colour })),
+          note: `Type as labelled in Merdith 2021.${only}${teeth}`,
+        }
+        : {
+          title: `Plate boundaries ${where}: closing or opening`,
+          rows: [{ label: 'unknown (a plate on one side only), dashed', fill: UNKNOWN_COLOUR }],
+          ramp: { css: convergenceCss(this.deps.colormaps.RdBu.colors), lo: `${CONV_MAX} cm/yr opening`, mid: '0', hi: `${CONV_MAX} closing` },
+          note: `The plates on either side, moving towards (warm) or apart (cool), whatever the label.${only}${teeth}`,
+        });
+    }
     this.ui.setLegend(blocks);
   }
 
@@ -541,8 +623,19 @@ export class Wp10Instance {
     return this.realPayload.points[index].deposit_id as string;
   }
 
+  /** Boundaries are picked after the deposits and before the formation squares. */
+  private pickBoundary(x: number, y: number): Selection | null {
+    const b = this.boundaryLines.pick(x, y);
+    return b && this.boundarySnap !== null
+      ? { kind: 'boundary', id: `${this.boundarySnap}|${b.feature}|${b.vertex}` } : null;
+  }
+
   clickAt(x: number, y: number): void {
     for (const { kind, layer, fan } of this.pickable()) {
+      if (kind === 'box') {
+        const sel = this.pickBoundary(x, y);
+        if (sel) { this.ui.hideTooltip(); this.select(sel); this.afterChange(); return; }
+      }
       const picked = layer.pick(x, y);
       if (!picked) continue;
       const open = layer.spiderfied;
@@ -558,13 +651,23 @@ export class Wp10Instance {
       this.afterChange();
       return;
     }
+    const sel = this.pickBoundary(x, y);
+    if (sel) { this.select(sel); this.afterChange(); return; }
     for (const o of this.pickable()) o.layer.unspiderfy();
     this.select(null);
     this.afterChange();
   }
 
   hoverAt(x: number, y: number): void {
+    const tipBoundary = (sel: Selection) => {
+      const lines = this.describe(sel).slice(0, 2).map((l) => (typeof l === 'string' ? l : l.text));
+      this.ui.showTooltip(x, y, [this.titleOf(sel), ...lines]);
+    };
     for (const { kind, layer } of this.pickable()) {
+      if (kind === 'box') {
+        const sel = this.pickBoundary(x, y);
+        if (sel) { tipBoundary(sel); return; }
+      }
       const picked = layer.pick(x, y);
       if (!picked) continue;
       const id = this.idOf(kind, picked.index);
@@ -575,6 +678,8 @@ export class Wp10Instance {
       this.ui.showTooltip(x, y, [this.titleOf({ kind, id }), ...lines]);
       return;
     }
+    const sel = this.pickBoundary(x, y);
+    if (sel) { tipBoundary(sel); return; }
     this.ui.hideTooltip();
   }
 
@@ -611,6 +716,12 @@ export class Wp10Instance {
 
   private titleOf(s: Selection): string {
     const places = this.deps.boxes.places;
+    if (s.kind === 'boundary') {
+      const [, f] = String(s.id).split('|').map(Number);
+      // 'MidOceanRidge' -> 'Mid ocean ridge'; Merdith 2021's own label stays in the popup.
+      const words = this.boundaryLines.labelOf(f).replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();
+      return `Plate boundary: ${words}`;
+    }
     if (s.kind === 'sim') return `Simulated porphyry ${(s.id as number) + 1}`;
     if (s.kind === 'box') return `Place ${places.id[s.id as number]} (${places.region[s.id as number]}) at ${Math.round(this.view.age)} Ma`;
     if (s.kind === 'place') return `Place ${places.id[s.id as number]} (${places.region[s.id as number]}) today`;
@@ -669,6 +780,22 @@ export class Wp10Instance {
         `Present-day position ${fmtLonLat(places.lon[p], places.lat[p])}`,
       ];
     }
+    if (s.kind === 'boundary') {
+      const [snap, f, k] = String(s.id).split('|').map(Number);
+      const c = this.boundaryLines.feature(f)[3][k];
+      const thr = this.deps.boundaries?.convergent_cm_yr ?? 0.5;
+      return [
+        {
+          text: c == null ? 'Closing or opening: unknown (a plate on one side only)'
+            : c > 0 ? `The two plates close at ${c.toFixed(1)} cm/yr here`
+              : c < 0 ? `The two plates open at ${(-c).toFixed(1)} cm/yr here` : 'Neither closing nor opening here',
+          color: '#e6ebf0',
+          swatch: c == null ? UNKNOWN_COLOUR : convergenceColour(this.deps.colormaps.RdBu.colors, c),
+        },
+        `Snapshot ${snap} Ma; labelled ${this.boundaryLines.labelOf(f)} in Merdith 2021`,
+        c != null && c >= thr ? `Counts as convergent (closing at ${thr} cm/yr or more)` : `Not convergent at ${thr} cm/yr`,
+      ];
+    }
     if (s.kind === 'place') {
       const p = s.id as number;
       const pf = this.deps.finds.predicted_found[this.key];
@@ -703,6 +830,8 @@ export class Wp10Instance {
     this.view.projection = mode;
     const camera = this.deps.rebuildCamera(mode);
     this.camera = camera;
+    this.teeth.setCamera(camera, mode);
+    this.boundaryLines.setCamera(camera, mode);
     const oldGeom = this.backdrop.geometry;
     const oldMat = this.backdrop.material as Material;
     this.backdrop.geometry = createSurfaceGeometry(mode, BACKDROP_R);
@@ -742,6 +871,8 @@ export class Wp10Instance {
     this.coastlines?.setOrientation(this.qOrient);
     this.graticule.setOrientation(this.qOrient);
     for (const o of this.overlays) o.setReferenceRotation(q);
+    this.teeth.setReferenceRotation(q);
+    this.boundaryLines.setOrientation(q);
     const lon = this.centreLongitude;
     this.ui.setMapHint(flat ? `Map centred on ${Math.abs(lon).toFixed(0)}°${lon < 0 ? 'W' : 'E'} · drag sideways to turn it` : '');
   }
@@ -749,12 +880,16 @@ export class Wp10Instance {
   setCameraAspect(camera: Camera): void {
     this.camera = camera;
     for (const o of this.overlays) o.setCamera(camera, this.view.projection);
+    this.teeth.setCamera(camera, this.view.projection);
+    this.boundaryLines.setCamera(camera, this.view.projection);
   }
 
   /** The map's rectangle: the window left of the charts panel. */
   resize(rect: Rect): void {
     this.rect = rect;
     for (const o of this.overlays) o.setRect(rect);
+    this.teeth.setRect(rect);
+    this.boundaryLines.setRect(rect);
     this.ui.setRightInset(innerWidth - rect.width);
     this.charts.redraw();
   }
@@ -768,6 +903,8 @@ export class Wp10Instance {
   render(renderer: WebGLRenderer): void {
     renderer.render(this.scene, this.camera);
     for (const o of this.overlays) o.draw();
+    this.teeth.draw();
+    this.boundaryLines.draw();
   }
 }
 
@@ -797,6 +934,19 @@ function diverge(colors: [number, number, number][], s: number): string {
   const f = clamp01(Math.abs(s));
   const c = g.map((v, k) => Math.round(v + (end[k] - v) * f));
   return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+/** Convergence (cm/yr, + = closing) to colour: closing warm (red), opening cool (blue),
+ *  saturating at CONV_MAX either way. */
+function convergenceColour(colors: [number, number, number][], cmYr: number): string {
+  return diverge(colors, -clampSym(cmYr / CONV_MAX));
+}
+
+/** Legend bar for convergence: opening (left) to closing (right). */
+function convergenceCss(colors: [number, number, number][]): string {
+  const stops = [];
+  for (let i = 0; i <= 8; i++) stops.push(`${diverge(colors, 1 - i / 4)} ${(i / 8) * 100}%`);
+  return `linear-gradient(to right, ${stops.join(', ')})`;
 }
 
 function divergeCss(colors: [number, number, number][]): string {
