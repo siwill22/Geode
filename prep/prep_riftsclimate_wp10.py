@@ -29,6 +29,8 @@ archive/riftsclimate/wp10/ only:
                     (first depth in 10 m units, then one character per step for the change)
   finds.json.gz     the real porphyries (their analysis values) and the predicted number of
                     porphyries found today at each place, against the real count
+  place_states.bin.gz  per place and snapshot: porphyries formed there so far and the shares
+                    eroded / within reach / buried / found today (packed binary; see below)
   boundaries.json.gz  Merdith 2021's plate boundaries at every box snapshot (RiftsClimate's
                     prep/wp10_boundaries.py): label and convergence rate along each; the
                     subduction teeth come from the archive's own Boundary Frames
@@ -54,7 +56,7 @@ SEP = " | "                          # key separator, as in RiftsClimate's walke
 AGE_MAX = 541                        # the simulation's oldest age (RiftsClimate MAX_MA)
 # Bumped whenever the packed files change shape; the page refuses (with a plain message) an
 # archive of another format rather than failing somewhere inside. 2: depth paths packed.
-FORMAT = 2
+FORMAT = 3                           # 3: place states
 
 
 def write_gz_json(path, obj):
@@ -305,6 +307,65 @@ def main():
     else:
         print(f"no {bnd_path}: no plate boundaries")
 
+    # --- what has happened at each place ---------------------------------------------------
+    # RiftsClimate's prep/wp10_place_states.py: per rung and walk, snapshot and place, the
+    # expected number of porphyries formed there so far and the shares eroded / within reach
+    # / still buried at that age, and found today. 1.8 M rows, packed into one binary file:
+    #   uint16 place step  (place index minus the previous row's, first of a block absolute)
+    #   uint16 formed      (hundredths)
+    #   uint8  eroded, within reach   (x 255; buried = 1 - eroded - within reach)
+    #   uint8  found today (x 255 / found_scale)
+    # each as one array over all rows (rows sorted by setting, snapshot, place), in that
+    # order, little-endian. index.json says which rows belong to which setting and snapshot.
+    states = None
+    sp_path = src / "place_states.csv.gz"
+    if sp_path.exists():
+        ps = pd.read_csv(sp_path)
+        ps["p"] = ps["place"].map(pidx)
+        if ps["p"].isna().any():
+            raise SystemExit("place_states has places not in places.csv")
+        ps["s"] = ps["snapshot_ma"].map(sidx)
+        if ps["s"].isna().any():
+            raise SystemExit("place_states has snapshots not in boxes")
+        ps["key"] = ps["walk"] + SEP + ps["rung"]
+        order = {k: i for i, k in enumerate(dict.fromkeys(ps["key"]))}
+        ps["k"] = ps["key"].map(order)
+        ps = ps.sort_values(["k", "s", "p"]).reset_index(drop=True)
+        p = ps["p"].to_numpy(int)
+        step = np.diff(p, prepend=0)
+        first = np.r_[True, (ps["k"].to_numpy()[1:] != ps["k"].to_numpy()[:-1])
+                      | (ps["s"].to_numpy()[1:] != ps["s"].to_numpy()[:-1])]
+        step[first] = p[first]
+        formed = np.rint(ps["formed"].to_numpy() * 100)
+        found_scale = float(np.ceil(ps["found_today"].max() * 20) / 20)
+        if formed.max() > 65535 or step.min() < 0:
+            raise SystemExit("place_states does not fit the packing")
+        u8 = lambda x: np.clip(np.rint(np.asarray(x) * 255), 0, 255).astype("<u1")
+        blob = b"".join([step.astype("<u2").tobytes(), formed.astype("<u2").tobytes(),
+                         u8(ps["eroded"]).tobytes(), u8(ps["within_reach"]).tobytes(),
+                         u8(ps["found_today"] / found_scale).tobytes()])
+        with gzip.open(out / "place_states.bin.gz", "wb", compresslevel=9) as fh:
+            fh.write(blob)
+        blocks = {}
+        starts = np.flatnonzero(first)
+        ends = np.r_[starts[1:], len(ps)]
+        for a0, a1 in zip(starts, ends):
+            blocks.setdefault(ps["key"].iat[a0], {})[str(int(ps["s"].iat[a0]))] = [int(a0), int(a1 - a0)]
+        trend = {}
+        tr = pd.read_csv(src / "state_trend.csv")
+        for (wk, rung), g in tr.groupby(["walk", "rung"], sort=False):
+            g = g.sort_values("snapshot_ma")
+            trend[f"{wk}{SEP}{rung}"] = {c2: rounded(g[c1], 4 if c1 != "formed so far" else 1) for c1, c2 in [
+                ("snapshot_ma", "snapshot_ma"), ("formed so far", "formed"), ("eroded", "eroded"),
+                ("within_reach", "within_reach"), ("buried", "buried"), ("found_today", "found_today")]}
+        states = {"file": "riftsclimate/wp10/place_states.bin.gz", "rows": int(len(ps)),
+                  "found_scale": found_scale, "blocks": blocks, "trend": trend,
+                  "formed_p99": {k: round(float(g["formed"].quantile(0.99)), 2) for k, g in ps.groupby("key")}}
+        print(f"place states: {len(ps)} rows, {(out / 'place_states.bin.gz').stat().st_size / 1e6:.2f} MB "
+              f"(found today stored on 0-{found_scale})")
+    else:
+        print(f"no {sp_path}: no place states")
+
     # --- index ----------------------------------------------------------------------------
     # How far from a subduction zone porphyries formed: share of ground (weighted by the
     # chance of being found), predicted share of finds and real share, per distance band.
@@ -354,6 +415,7 @@ def main():
         "files": {"boxes": "riftsclimate/wp10/boxes.json.gz", "walkers": "riftsclimate/wp10/walkers.json.gz",
                   "finds": "riftsclimate/wp10/finds.json.gz", "boundaries": bnd_file},
         "teeth": teeth,
+        "place_states": states,
         "built_from": provenance(args.riftsclimate),
     }
     (out / "index.json").write_text(json.dumps(index, indent=1))

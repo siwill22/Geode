@@ -109,22 +109,24 @@
       .legend { width: 262px; gap: 5px; }
       .legend-block { padding: 6px 8px; }
       .legend-note { margin-top: 3px; }
+      .legend-canvas { display: block; margin: 2px 0 0; }
       .lil-gui.root { z-index: 30; }
 
       /* The charts panel, docked at the right edge; the map fills the window left of it. */
       .charts-panel {
         position: fixed; right: 0; top: 0; bottom: 0; width: min(470px, 36vw); z-index: 20;
         display: flex; flex-direction: column; gap: 4px; box-sizing: border-box;
-        padding: 10px 12px; overflow: hidden;
+        padding: 10px 12px; overflow-y: auto; gap: 10px;
         background: #0f1216; border-left: 1px solid #262c33;
       }
-      .chart-block { display: flex; flex-direction: column; min-height: 0; }
-      .chart-block-depth { flex: 3.4 1 0; }
-      .chart-block-ages { flex: 1.8 1 0; }
-      .chart-block-shares { flex: 1.6 1 0; }
-      .chart-canvas-shares { cursor: default; min-height: 90px; }
+      /* Four charts: fixed heights, and the panel scrolls if the window is short. */
+      .chart-block { display: flex; flex-direction: column; flex: none; }
+      .chart-block-depth .chart-canvas { height: 230px; }
+      .chart-block-trend .chart-canvas { height: 130px; }
+      .chart-block-ages .chart-canvas { height: 120px; }
+      .chart-block-shares .chart-canvas { height: 110px; }
       .chart-title { color: #e0e6ec; font-size: 12px; font-weight: 600; margin-bottom: 4px; }
-      .chart-canvas { flex: 1 1 auto; min-height: 120px; width: 100%; display: block; cursor: crosshair; }
+      .chart-canvas { width: 100%; display: block; cursor: crosshair; }
       .chart-key { flex: none; display: flex; flex-wrap: wrap; gap: 2px 12px; margin-top: 4px; font-size: 11px; color: #b9c3cc; }
       .chart-key-row { display: flex; align-items: center; gap: 5px; }
       .chart-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }

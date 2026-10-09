@@ -1,5 +1,5 @@
 import { ERODED, FATE_COLOUR, FATE_LABEL, FOUND, type Walkers } from './data';
-import type { LineColour, SharesByBand, WalkFactor } from './types';
+import type { LineColour, SharesByBand, StateTrend, WalkFactor } from './types';
 
 /** What the two charts draw: one rung and walk setting. */
 export interface ChartsData {
@@ -12,6 +12,8 @@ export interface ChartsData {
   curve: { predicted: Array<number | null>; observed: Array<number | null> } | null;
   /** Shares by distance to a subduction zone when formed, or null. */
   shares: SharesByBand | null;
+  /** Shares in each state of all porphyries formed so far, through time, or null. */
+  trend: StateTrend | null;
   title: string;
 }
 
@@ -36,6 +38,8 @@ const CURSOR = 'rgba(230, 235, 240, 0.75)';
 const BAR = 'rgba(150, 160, 172, 0.55)';
 const PREDICTED = '#e0a100';
 const HIT_PX = 6;
+/** The place-state colours (as the map's mix): eroded, within reach, still buried. */
+export const STATE_COLOURS = { eroded: 'rgb(232,80,91)', within: 'rgb(242,183,5)', buried: 'rgb(61,127,224)' };
 /** Distance-band chart: share of ground, predicted share of finds, real share. Checked with
  *  the dataviz palette validator on the dark surface (colour-blind and normal-vision
  *  separation pass); predicted is the age chart's predicted colour, real its grey. */
@@ -70,6 +74,9 @@ export class ChartsPanel {
   private readonly depthKey: HTMLDivElement;
   private readonly agesKey: HTMLDivElement;
   private readonly sharesCanvas: HTMLCanvasElement;
+  private readonly trendCanvas: HTMLCanvasElement;
+  private readonly trendBase = document.createElement('canvas');
+  private readonly trendKey: HTMLDivElement;
   private readonly sharesKey: HTMLDivElement;
   /** Bars as drawn, for hover: [x0, y0, x1, y1, band, series]. */
   private bars: Array<[number, number, number, number, number, number]> = [];
@@ -93,6 +100,13 @@ export class ChartsPanel {
     this.depthKey = el('div', 'chart-key');
     a.append(this.depthTitle, this.depthCanvas, this.depthKey);
 
+    const tb = el('div', 'chart-block chart-block-trend');
+    const tt = el('div', 'chart-title');
+    tt.textContent = 'What has happened to all porphyries formed so far';
+    this.trendCanvas = el('canvas', 'chart-canvas');
+    this.trendKey = el('div', 'chart-key');
+    tb.append(tt, this.trendCanvas, this.trendKey);
+
     const b = el('div', 'chart-block chart-block-ages');
     const bt = el('div', 'chart-title');
     bt.textContent = 'Ages of porphyries found today';
@@ -109,7 +123,7 @@ export class ChartsPanel {
 
     this.tip = el('div', 'popup');
     this.tip.style.display = 'none';
-    this.root.append(a, b, c);
+    this.root.append(a, tb, b, c);
     document.body.append(this.root, this.tip);
 
     this.depthCanvas.addEventListener('pointermove', (e) => this.hover(e));
@@ -127,6 +141,10 @@ export class ChartsPanel {
     });
     this.sharesCanvas.addEventListener('pointermove', (e) => this.hoverShares(e));
     this.sharesCanvas.addEventListener('pointerleave', () => { this.tip.style.display = 'none'; });
+    this.trendCanvas.addEventListener('click', (e) => {
+      const [x] = this.local(this.trendCanvas, e);
+      this.cb.onPickAge(Math.round(this.ageAtX(x, this.trendCanvas)));
+    });
     this.agesCanvas.addEventListener('click', (e) => {
       const [x] = this.local(this.agesCanvas, e);
       this.cb.onPickAge(Math.round(this.ageAtX(x, this.agesCanvas)));
@@ -157,6 +175,7 @@ export class ChartsPanel {
     this.age = age;
     this.paintDepth();
     this.paintAges();
+    this.paintTrend();
   }
 
   setSelected(i: number | null): void {
@@ -172,12 +191,16 @@ export class ChartsPanel {
     this.updateDepthText();
     this.updateAgesText();
     this.updateSharesText();
+    this.updateTrendText();
     this.fit(this.depthCanvas, this.depthBase);
+    this.fit(this.trendCanvas, this.trendBase);
     this.fit(this.agesCanvas, this.agesBase);
     this.fit(this.sharesCanvas, null);
     this.drawDepthBase();
     this.drawAgesBase();
     this.drawShares();
+    this.drawTrend();
+    this.paintTrend();
     this.paintDepth();
     this.paintAges();
   }
@@ -546,6 +569,89 @@ export class ChartsPanel {
     const tw = this.tip.offsetWidth;
     this.tip.style.left = `${e.clientX + 14 + tw > innerWidth - 4 ? e.clientX - 14 - tw : e.clientX + 14}px`;
     this.tip.style.top = `${e.clientY + 14}px`;
+  }
+
+  // --- (b) what has happened to all porphyries formed so far ----------------------------
+
+  private drawTrend(): void {
+    const c = this.trendBase;
+    const ctx = c.getContext('2d')!;
+    const { w: W, h: H } = this.size(this.trendCanvas);
+    ctx.clearRect(0, 0, W, H);
+    const tr = this.data!.trend;
+    const T = MARGIN.top;
+    const B = H - MARGIN.bottom;
+    const y = (v: number) => B - v * (B - T);
+    ctx.font = '10px ui-sans-serif, system-ui, sans-serif';
+    ctx.strokeStyle = AXIS;
+    ctx.fillStyle = INK;
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    for (const v of [0, 0.25, 0.5, 0.75, 1]) ctx.fillText(`${v * 100}%`, MARGIN.left - 5, y(v));
+    this.xAxis(ctx, this.trendCanvas, H);
+    if (!tr) return;
+    // Points within the age axis, oldest first.
+    const idx = tr.snapshot_ma.map((_, i) => i).filter((i) => tr.snapshot_ma[i] <= this.opts.span)
+      .sort((a, b) => tr.snapshot_ma[b] - tr.snapshot_ma[a]);
+    if (idx.length < 2) return;
+    const xs = idx.map((i) => this.x(tr.snapshot_ma[i], this.trendCanvas));
+    // Stacked from the bottom: eroded, within reach, still buried (they add to 100%).
+    const layers: Array<[keyof StateTrend, string]> = [
+      ['eroded', STATE_COLOURS.eroded], ['within_reach', STATE_COLOURS.within], ['buried', STATE_COLOURS.buried]];
+    const base = idx.map(() => 0);
+    for (const [k, colour] of layers) {
+      const top = idx.map((i, j) => base[j] + (tr[k][i] ?? 0));
+      ctx.beginPath();
+      xs.forEach((x, j) => (j ? ctx.lineTo(x, y(top[j])) : ctx.moveTo(x, y(top[j]))));
+      for (let j = xs.length - 1; j >= 0; j--) ctx.lineTo(xs[j], y(base[j]));
+      ctx.closePath();
+      ctx.fillStyle = colour;
+      ctx.globalAlpha = 0.85;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      top.forEach((v, j) => { base[j] = v; });
+    }
+    // Found today: a line over the stack, cased so it reads on every colour.
+    for (const [stroke, width] of [['rgba(5,8,12,0.85)', 3.4], ['#ffffff', 1.6]] as Array<[string, number]>) {
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      idx.forEach((i, j) => (j ? ctx.lineTo(xs[j], y(tr.found_today[i])) : ctx.moveTo(xs[j], y(tr.found_today[i]))));
+      ctx.stroke();
+    }
+  }
+
+  private updateTrendText(): void {
+    const tr = this.data!.trend;
+    if (!tr) {
+      const none = el('div', 'chart-note');
+      none.textContent = 'No place states for this rung and walk.';
+      this.trendKey.replaceChildren(none);
+      return;
+    }
+    const rows = ([['eroded', STATE_COLOURS.eroded, 'chart-swatch'], ['within reach', STATE_COLOURS.within, 'chart-swatch'],
+      ['still buried', STATE_COLOURS.buried, 'chart-swatch'], ['found today', '#ffffff', 'chart-swatch chart-swatch-line']] as const)
+      .map(([label, colour, cls]) => {
+        const r = el('div', 'chart-key-row');
+        const sw = el('span', cls);
+        sw.style.background = colour;
+        r.append(sw, document.createTextNode(label));
+        return r;
+      });
+    const note = el('div', 'chart-note');
+    note.textContent = 'At each age, of all porphyries formed by then (all places, expected numbers): the shares '
+      + 'eroded, within reach and still buried then, and found today. Click to move the map to that age.';
+    this.trendKey.replaceChildren(...rows, note);
+  }
+
+  private paintTrend(): void {
+    if (!this.visible || !this.data) return;
+    const c = this.trendCanvas;
+    const ctx = c.getContext('2d')!;
+    const { w: W, h: H } = this.size(c);
+    ctx.clearRect(0, 0, W, H);
+    ctx.drawImage(this.trendBase, 0, 0, W, H);
+    this.cursor(ctx, c, H);
   }
 
   // --- (c) distance to a subduction zone when formed ----------------------------------

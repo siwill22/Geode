@@ -50,6 +50,16 @@ export interface Wp10Index {
   /** How far from a subduction zone porphyries formed, per distance band: share of ground
    *  (weighted by the chance of being found), predicted share of finds, real share. */
   shares: Record<string, SharesByBand>;
+  /** What has happened at each place (RiftsClimate's prep/wp10_place_states.py), packed in
+   *  `file` (see PlaceStates in data.ts); `blocks[key][snapshot index] = [first row, rows]`. */
+  place_states: {
+    file: string;
+    rows: number;
+    found_scale: number;
+    blocks: Record<string, Record<string, [number, number]>>;
+    trend: Record<string, StateTrend>;
+    formed_p99: Record<string, number>;
+  } | null;
   counts: Record<string, number>;
   files: { boxes: string; walkers: string; finds: string; boundaries: string | null };
   /** The archive's own Merdith 2021 Boundary Frames, read for the subduction teeth only
@@ -57,6 +67,16 @@ export interface Wp10Index {
    *  same subduction zones at every snapshot. */
   teeth: { frames: string; age_max: number; snapshots_same_subduction_count: number; snapshots_differ: number } | null;
   built_from: Record<string, string | null>;
+}
+
+/** Of all porphyries formed so far (all places), the shares in each state at each snapshot. */
+export interface StateTrend {
+  snapshot_ma: number[];
+  formed: number[];
+  eroded: number[];
+  within_reach: number[];
+  buried: number[];
+  found_today: number[];
 }
 
 export interface SharesByBand {
@@ -152,6 +172,7 @@ export type SimColour = 'depth' | 'fate';
 export type FindsColour = 'predicted' | 'difference';
 export type LineColour = 'fate' | 'factor';
 export type BoundaryColour = 'label' | 'convergence';
+export type StateColour = 'mix' | 'eroded' | 'within_reach' | 'buried' | 'found_today';
 
 export interface Wp10ViewState {
   rung: string;
@@ -160,6 +181,9 @@ export interface Wp10ViewState {
   projection: ProjectionMode;
   formation: boolean;
   formationColour: FormationColour;
+  /** What has happened at each place to the porphyries formed there so far. */
+  states: boolean;
+  stateColour: StateColour;
   simulated: boolean;
   simColour: SimColour;
   real: boolean;

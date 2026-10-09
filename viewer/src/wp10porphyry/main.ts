@@ -7,11 +7,12 @@ import {
 } from '../core/projection';
 import { wireMapOrientationDrag } from '../core/mapOrientationDrag';
 import { wireProjectionToggle } from '../core/projectionToggle';
-import { loadArchive, loadColormaps } from '../core/volume';
+import { fetchVolumeBytes, loadArchive, loadColormaps } from '../core/volume';
 import type { PointsPayload } from '../core/pointOverlay';
 import { fetchMaybeGzippedJSON } from '../../vendor/petrify/js/gzipFetch.js';
 import type { RiftsIndex } from '../riftsclimate/types';
 import { Wp10Instance } from './wp10Instance';
+import { PlaceStates } from './data';
 import type { BoundariesFile, BoxesFile, FindsFile, WalkersFile, Wp10Index } from './types';
 
 /**
@@ -26,7 +27,7 @@ const ARCHIVE = import.meta.env.VITE_ARCHIVE_BASE ?? `${import.meta.env.BASE_URL
 const BACKGROUND = 0x0b0d10;
 const START_PROJECTION: ProjectionMode = 'robinson';
 /** The archive format this page reads (prep_riftsclimate_wp10.py FORMAT). */
-const WP10_FORMAT = 2;
+const WP10_FORMAT = 3;
 
 /** An error whose message is meant for the reader: shown without a stack trace. */
 class ReadableError extends Error {}
@@ -108,14 +109,19 @@ async function boot(): Promise<void> {
     fetchMaybeGzippedJSON(`${ARCHIVE}/riftsclimate/wp10/index.json`) as Promise<Wp10Index>,
     fetchMaybeGzippedJSON(`${ARCHIVE}/riftsclimate/index.json`) as Promise<RiftsIndex>,
   ]);
-  if (index.format !== WP10_FORMAT) {
-    throw new ReadableError(`The WP10 archive (archive/riftsclimate/wp10/) is format ${index.format ?? 1}; this page `
+  const fmt = index.format ?? 1;
+  if (fmt < WP10_FORMAT) {
+    throw new ReadableError(`The WP10 archive (archive/riftsclimate/wp10/) is format ${fmt}; this page `
       + `reads format ${WP10_FORMAT}. Rebuild it:\n  env -u PYTHONPATH conda run -n riftsclimate python `
       + 'prep/prep_riftsclimate_wp10.py\nthen reload.');
   }
+  if (fmt > WP10_FORMAT) {
+    throw new ReadableError(`The WP10 archive is format ${fmt}, newer than this page (format ${WP10_FORMAT}). `
+      + 'Reload the page (or update the Geode viewer code) to read it.');
+  }
   const model = rifts.models.find((m) => m.id === index.plate_model);
   if (!model) throw new Error(`plate model ${index.plate_model} is not in riftsclimate/index.json`);
-  const [colormaps, boxes, walkers, finds, points, boundaries] = await Promise.all([
+  const [colormaps, boxes, walkers, finds, points, boundaries, stateBytes] = await Promise.all([
     loadColormaps(ARCHIVE, archive.colormaps),
     fetchMaybeGzippedJSON(`${ARCHIVE}/${index.files.boxes}`) as Promise<BoxesFile>,
     fetchMaybeGzippedJSON(`${ARCHIVE}/${index.files.walkers}`) as Promise<WalkersFile>,
@@ -124,10 +130,13 @@ async function boot(): Promise<void> {
     index.files.boundaries
       ? fetchMaybeGzippedJSON(`${ARCHIVE}/${index.files.boundaries}`) as Promise<BoundariesFile>
       : Promise.resolve(null),
+    index.place_states ? fetchVolumeBytes(`${ARCHIVE}/${index.place_states.file}`) : Promise.resolve(null),
   ]);
+  const placeStates = stateBytes && index.place_states
+    ? new PlaceStates(stateBytes, index.place_states.rows, index.place_states.found_scale) : null;
 
   instance = new Wp10Instance(camera, {
-    archiveBase: ARCHIVE, colormaps, index, rifts, boxes, walkers, finds, points, boundaries, rebuildCamera,
+    archiveBase: ARCHIVE, colormaps, index, rifts, boxes, walkers, finds, points, boundaries, placeStates, rebuildCamera,
     onLayout: layout,
   }, needsRender);
   instance.setCameraAspect(camera);

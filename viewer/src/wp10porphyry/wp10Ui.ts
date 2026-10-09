@@ -15,6 +15,8 @@ export interface LegendBlock {
   title: string;
   rows?: LegendRow[];
   ramp?: { css: string; lo: string; hi: string; mid?: string };
+  /** A drawn key (e.g. the mix triangle), placed after the rows. */
+  canvas?: HTMLCanvasElement;
   note?: string;
 }
 
@@ -54,12 +56,20 @@ export class Wp10UI {
 
     const map = this.gui.addFolder('Map layers');
     const layers = () => this.cb.onLayers();
+    map.add(state, 'states').name('What has happened at each place').onChange(layers);
+    map.add(state, 'stateColour', {
+      'Mix: eroded / within reach / buried': 'mix',
+      'Share eroded': 'eroded',
+      'Share within reach': 'within_reach',
+      'Share still buried': 'buried',
+      'Share found today': 'found_today',
+    }).name('  coloured by').onChange(layers);
     map.add(state, 'formation').name('Where porphyries form').onChange(layers);
     map.add(state, 'formationColour', {
       'Formation rate': 'rate',
       'Forming now and found today': 'rate_found',
     }).name('  coloured by').onChange(layers);
-    map.add(state, 'simulated').name('Simulated porphyries').onChange(layers);
+    map.add(state, 'simulated').name('Sample of simulated porphyries').onChange(layers);
     map.add(state, 'simColour', { 'Depth at this age': 'depth', 'Fate today': 'fate' })
       .name('  coloured by').onChange(layers);
     map.add(state, 'real').name('Real porphyries').onChange(layers);
@@ -196,6 +206,10 @@ export class Wp10UI {
           row.appendChild(n);
         }
         box.appendChild(row);
+      }
+      if (b.canvas) {
+        b.canvas.classList.add('legend-canvas');
+        box.appendChild(b.canvas);
       }
       if (b.ramp) {
         const bar = el('div', 'legend-ramp');

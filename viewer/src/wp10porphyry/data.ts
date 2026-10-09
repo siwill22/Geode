@@ -98,3 +98,44 @@ export class Walkers {
     return d[d.length - 1];
   }
 }
+
+/**
+ * What has happened at each place (prep_riftsclimate_wp10.py packs it): for one rung and
+ * walk and one snapshot, the places with porphyries formed there so far, how many, and
+ * the shares eroded / within reach / still buried at that age and found today.
+ */
+export class PlaceStates {
+  private readonly step: Uint16Array;
+  private readonly formed: Uint16Array;
+  private readonly eroded: Uint8Array;
+  private readonly within: Uint8Array;
+  private readonly found: Uint8Array;
+
+  constructor(bytes: Uint8Array, readonly rows: number, private readonly foundScale: number) {
+    if (bytes.byteLength !== rows * 7) {
+      throw new Error(`place states: ${bytes.byteLength} bytes for ${rows} rows (expected ${rows * 7})`);
+    }
+    // Copy into a fresh, aligned buffer so the 16-bit views start on even bytes.
+    const buf = bytes.slice().buffer;
+    this.step = new Uint16Array(buf, 0, rows);
+    this.formed = new Uint16Array(buf, 2 * rows, rows);
+    this.eroded = new Uint8Array(buf, 4 * rows, rows);
+    this.within = new Uint8Array(buf, 5 * rows, rows);
+    this.found = new Uint8Array(buf, 6 * rows, rows);
+  }
+
+  /** The rows of one block, decoded. */
+  block(start: number, count: number): Array<{ place: number; formed: number; eroded: number;
+    within: number; buried: number; found: number }> {
+    const out = [];
+    let p = 0;
+    for (let r = start; r < start + count; r++) {
+      p = r === start ? this.step[r] : p + this.step[r];
+      const e = this.eroded[r] / 255;
+      const w = this.within[r] / 255;
+      out.push({ place: p, formed: this.formed[r] / 100, eroded: e, within: w,
+        buried: Math.max(0, 1 - e - w), found: (this.found[r] / 255) * this.foundScale });
+    }
+    return out;
+  }
+}

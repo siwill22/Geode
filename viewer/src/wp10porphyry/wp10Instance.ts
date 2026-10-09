@@ -20,7 +20,7 @@ import type { RiftsIndex } from '../riftsclimate/types';
 
 import { ChartsPanel, fmtDepth } from './charts';
 import { BoundaryLines, CONV_MAX, LABEL_GROUPS, UNKNOWN_COLOUR } from './boundaryLines';
-import { BURIED, Boxes, ERODED, FATE_COLOUR, FATE_LABEL, FOUND, Walkers, decodeSample } from './data';
+import { BURIED, Boxes, ERODED, FATE_COLOUR, FATE_LABEL, FOUND, Walkers, decodeSample, type PlaceStates } from './data';
 import { Wp10UI, type LegendBlock } from './wp10Ui';
 import type { BoundariesFile, BoxesFile, FindsFile, WalkersFile, Wp10Index, Wp10ViewState } from './types';
 
@@ -33,6 +33,12 @@ const DEEP_KM = 6;
 /** "Forming now and found today" spans this many factors of ten below its maximum. */
 const DECADES = 3;
 const COAST_MIN_AGE = 0.001;
+/** Place-state squares: size range (petrify symbol size). */
+const STATE_MIN = 1.0;
+const STATE_MAX = 4.0;
+const WITHIN_MAX = 0.2;
+const FOUND_LO = 0.005;
+const FOUND_HI = 0.2;
 /** The selection ring: larger than petrify's default, to be found on a busy map. */
 const RING = { highlightRadius: 6, highlightWidth: 2.2, highlight: 'rgba(255, 255, 255, 1)' };
 /** The part of plasma the formation squares use. */
@@ -41,7 +47,7 @@ const RATE_HI = 0.8;
 const NO_FORMATION = 'rgba(150, 156, 164, 0.35)';
 const REAL_FILL = '#ffffff';
 
-type Kind = 'box' | 'sim' | 'real' | 'place' | 'boundary';
+type Kind = 'box' | 'sim' | 'real' | 'place' | 'boundary' | 'state';
 interface Selection { kind: Kind; id: number | string }
 
 export interface Wp10Deps {
@@ -56,6 +62,7 @@ export interface Wp10Deps {
    *  the porphyries the WP10 analysis used. */
   points: PointsPayload;
   boundaries: BoundariesFile | null;
+  placeStates: PlaceStates | null;
   rebuildCamera(mode: ProjectionMode): Camera;
   /** The charts panel opened, closed or changed width: the map must be resized. */
   onLayout(): void;
@@ -89,6 +96,10 @@ export class Wp10Instance {
 
   // Drawing order: boxes, finds, simulated, real (each canvas above the last).
   private readonly formationLayer: PointOverlay;
+  /** What has happened at each place, over the formation squares. */
+  private readonly stateLayer: PointOverlay;
+  private stateIdx: number[] = [];
+  private stateRows: ReturnType<PlaceStates['block']> = [];
   /** Plate boundaries over the formation squares, under the deposits: the archive's
    *  subduction teeth, then RiftsClimate's coloured lines. */
   private readonly teeth: BoundaryOverlay;
@@ -124,12 +135,16 @@ export class Wp10Instance {
       walk: ix.walks[0].id,
       age: 0,
       projection: 'globe',
-      formation: true,
+      // The place states are the main map; the formation squares sit on the same places, so
+      // they start off (switch them on to see where porphyries form at this age).
+      states: !!deps.placeStates,
+      stateColour: 'mix',
+      formation: !deps.placeStates,
       formationColour: 'rate',
-      simulated: true,
+      simulated: false,
       simColour: 'depth',
       real: true,
-      finds: true,
+      finds: false,
       findsColour: 'predicted',
       boundaries: !!deps.boundaries,
       boundaryColour: 'label',
@@ -148,6 +163,7 @@ export class Wp10Instance {
     this.scene.add(this.backdrop, this.graticule.lines);
 
     this.formationLayer = new PointOverlay(camera);
+    this.stateLayer = new PointOverlay(camera);
     this.teeth = new BoundaryOverlay(camera as PerspectiveCamera);
     this.boundaryLines = new BoundaryLines(camera, deps.boundaries?.convergent_cm_yr ?? 0.5,
       (sgn) => diverge(deps.colormaps.RdBu.colors, sgn));
@@ -277,6 +293,7 @@ export class Wp10Instance {
       binMyr: ix.bin_myr,
       curve: ix.curves[this.key] ?? null,
       shares: ix.shares?.[this.key] ?? null,
+      trend: ix.place_states?.trend[this.key] ?? null,
       title: `rung ${this.view.rung}; ${this.view.walk}`,
     });
     this.rebuildFinds();
@@ -295,6 +312,7 @@ export class Wp10Instance {
     this.coastlines?.setAge(Math.max(age, COAST_MIN_AGE));
     this.realLayer.setTime(age);
     this.rebuildFormation();
+    this.rebuildStates();
     this.rebuildSims();
     this.rebuildBoundaries();
     this.charts.setAge(age);
@@ -346,6 +364,7 @@ export class Wp10Instance {
     if (this.coastlines) this.coastlines.lines.visible = this.coastlines.land.visible = this.view.coastlines;
     this.graticule.lines.visible = this.view.graticule;
     this.rebuildFormation();
+    this.rebuildStates();
     this.rebuildSims();
     this.rebuildFinds();
     this.rebuildBoundaries();
@@ -358,6 +377,7 @@ export class Wp10Instance {
 
   private applyVisibility(): void {
     this.formationLayer.visible = this.view.formation && !this.findsShown;
+    this.stateLayer.visible = this.view.states && !!this.deps.placeStates && !this.findsShown;
     this.findsLayer.visible = this.findsShown;
     this.simLayer.visible = this.view.simulated;
     this.realLayer.visible = this.view.real;
@@ -413,6 +433,64 @@ export class Wp10Instance {
       // porphyries on top stay readable over a continent full of forming places.
       return { symbol: 'square', fill: ramp(cm, RATE_LO + (RATE_HI - RATE_LO) * clamp01(t), 0.75), size: 2.4 };
     }, 2.4);
+  }
+
+  /** What has happened at each place: a square per place with porphyries formed there so
+   *  far, at its position in this snapshot's box; area ~ number formed (square-root size
+   *  scale, fixed per rung and walk so growth through time shows), colour by the shares. */
+  private rebuildStates(): void {
+    const ps = this.deps.placeStates;
+    const meta = this.deps.index.place_states;
+    this.stateIdx = [];
+    this.stateRows = [];
+    const pts: Array<Record<string, unknown>> = [];
+    const s = this.boxes.snapshotAt(this.view.age);
+    const blk = ps && meta ? meta.blocks[this.key]?.[String(s)] : undefined;
+    if (ps && blk) {
+      // Smallest first, so the places with most formed are drawn on top.
+      const rows = ps.block(blk[0], blk[1]).sort((a, b) => a.formed - b.formed);
+      for (const r of rows) {
+        const pos = this.boxes.position(r.place, s);
+        if (!pos) continue;
+        pts.push({ lon: pos[0], lat: pos[1], ...r });
+        this.stateIdx.push(r.place);
+        this.stateRows.push(r);
+      }
+    }
+    this.updateShareRanks();
+    const top = meta?.formed_p99[this.key] ?? 1;
+    const vir = this.deps.colormaps.viridis.colors;
+    this.load(this.stateLayer, pts, (p) => {
+      const size = STATE_MIN + (STATE_MAX - STATE_MIN) * Math.sqrt(Math.min(1, (p.formed as number) / top));
+      return { symbol: 'square', fill: this.stateFill(p as unknown as StateRow, vir), size };
+    }, STATE_MAX);
+  }
+
+  /** The places on the map now, per share: the mix colour is scaled to their median (grey)
+   *  and 98th percentile (full colour), so it shows where a place departs from the others at
+   *  this age even where the shares differ by a few percent. The change through time is the
+   *  trend chart's job; true values are in the popup and the single-share colourings. */
+  private shareRanks: ShareRanks = emptyRanks();
+
+  private updateShareRanks(): void {
+    const sorted = (vals: number[]) => Float64Array.from(vals).sort();
+    this.shareRanks = {
+      e: sorted(this.stateRows.map((r) => r.eroded)),
+      w: sorted(this.stateRows.map((r) => r.within)),
+      b: sorted(this.stateRows.map((r) => r.buried)),
+    };
+  }
+
+  private stateFill(r: StateRow, vir: [number, number, number][]): string {
+    switch (this.view.stateColour) {
+      case 'eroded': return ramp(vir, r.eroded);
+      case 'buried': return ramp(vir, r.buried);
+      // Never above about 0.2 (most of the walk is spent buried or gone): stretched.
+      case 'within_reach': return ramp(vir, r.within / WITHIN_MAX);
+      // Mostly 0.01-0.1, a few higher: log scale.
+      case 'found_today': return ramp(vir, Math.log10(Math.max(FOUND_LO, r.found) / FOUND_LO) / Math.log10(FOUND_HI / FOUND_LO));
+      default: return mixColour(r.eroded, r.within, r.buried, this.shareRanks);
+    }
   }
 
   private rebuildSims(): void {
@@ -485,6 +563,35 @@ export class Wp10Instance {
     const ix = this.deps.index;
     const ext = ix.extent_km;
 
+    if (this.stateLayer.visible) {
+      const top = ix.place_states?.formed_p99[this.key] ?? 1;
+      const size = `Square area: porphyries formed there so far (square-root size; full size ${fmtN(top)} or more).`;
+      const total = this.stateRows.reduce((a, r) => a + r.formed, 0);
+      const title = `What has happened by ${age} to porphyries formed at each place so far`;
+      const vir = this.deps.colormaps.viridis.colors;
+      if (v.stateColour === 'mix') {
+        blocks.push({
+          title,
+          canvas: mixTriangle(this.stateRows, this.shareRanks),
+          note: `Red: more eroded than at other places now; blue: more still buried; yellow: more within reach `
+            + `(the surface cutting the orebody); grey: typical (at or below the places' median for each). Full `
+            + `colour at the places' 98th percentile (ranges now: ${rangeText(this.shareRanks)}). In the triangle each dot is `
+            + `a place, at its true shares, in its map colour. `
+            + `${size} ${fmtN(total)} formed so far in all.`,
+        });
+      } else {
+        const scales: Record<string, [string, string, string]> = {
+          eroded: ['Share eroded by now', '0', '100%'],
+          buried: ['Share still buried now', '0', '100%'],
+          within_reach: ['Share within reach now', '0', `${WITHIN_MAX * 100}% (stretched)`],
+          found_today: ['Share that will be found today', `${FOUND_LO * 100}% or less`, `${FOUND_HI * 100}% (log scale)`],
+        };
+        const [name, lo, hi] = scales[v.stateColour];
+        blocks.push({ title: `${name}, of porphyries formed at each place so far (${age})`,
+          ramp: { css: rampCss(vir), lo, hi }, note: size });
+      }
+    }
+
     if (this.findsShown) {
       const pf = this.deps.finds.predicted_found[this.key];
       const totP = pf ? pf.predicted.reduce((a, b) => a + b, 0) : 0;
@@ -501,7 +608,8 @@ export class Wp10Instance {
           ramp: { css: divergeCss(this.deps.colormaps.RdBu.colors), lo: `${fmtN(-this.diffMax)} fewer`, mid: '0', hi: `${fmtN(this.diffMax)} more` },
           note: `Blue: more real porphyries than predicted; red: fewer; grey: as predicted. Saturates at ±${fmtN(this.diffMax)} (95% of places).`,
         });
-    } else if (v.formation) {
+    }
+    if (!this.findsShown && v.formation) {
       const n = this.formationIdx.length;
       const forming = (this.formationLayer.payload()?.points ?? []).filter((p) => ((p.rate as number) ?? 0) > 0).length;
       blocks.push(v.formationColour === 'rate' && !this.fitted
@@ -604,6 +712,7 @@ export class Wp10Instance {
     if (this.realLayer.visible) out.push({ kind: 'real', layer: this.realLayer, fan: true });
     if (this.simLayer.visible) out.push({ kind: 'sim', layer: this.simLayer, fan: true });
     if (this.findsLayer.visible) out.push({ kind: 'place', layer: this.findsLayer, fan: false });
+    if (this.stateLayer.visible) out.push({ kind: 'state', layer: this.stateLayer, fan: false });
     if (this.formationLayer.visible) out.push({ kind: 'box', layer: this.formationLayer, fan: false });
     return out;
   }
@@ -612,6 +721,7 @@ export class Wp10Instance {
     if (kind === 'sim') return this.simIdx[index];
     if (kind === 'box') return this.formationIdx[index];
     if (kind === 'place') return this.findsIdx[index];
+    if (kind === 'state') return this.stateIdx[index];
     return this.realPayload.points[index].deposit_id as string;
   }
 
@@ -624,7 +734,7 @@ export class Wp10Instance {
 
   clickAt(x: number, y: number): void {
     for (const { kind, layer, fan } of this.pickable()) {
-      if (kind === 'box') {
+      if (kind === 'state' || kind === 'box') {
         const sel = this.pickBoundary(x, y);
         if (sel) { this.ui.hideTooltip(); this.select(sel); this.afterChange(); return; }
       }
@@ -656,7 +766,7 @@ export class Wp10Instance {
       this.ui.showTooltip(x, y, [this.titleOf(sel), ...lines]);
     };
     for (const { kind, layer } of this.pickable()) {
-      if (kind === 'box') {
+      if (kind === 'state' || kind === 'box') {
         const sel = this.pickBoundary(x, y);
         if (sel) { tipBoundary(sel); return; }
       }
@@ -666,7 +776,7 @@ export class Wp10Instance {
       const lines = this.describe({ kind, id }).slice(0, 3)
         .map((l) => (typeof l === 'string' ? l : l.text));
       const pile = layer.clusterSizeAt(x, y);
-      if (pile >= 2 && kind !== 'box' && kind !== 'place') lines.push(`${pile} here: click to spread them out`);
+      if (pile >= 2 && (kind === 'sim' || kind === 'real')) lines.push(`${pile} here: click to spread them out`);
       this.ui.showTooltip(x, y, [this.titleOf({ kind, id }), ...lines]);
       return;
     }
@@ -692,6 +802,7 @@ export class Wp10Instance {
     this.simLayer.highlight(s?.kind === 'sim' ? find(this.simIdx, s.id) : null);
     this.formationLayer.highlight(s?.kind === 'box' ? find(this.formationIdx, s.id) : null);
     this.findsLayer.highlight(s?.kind === 'place' ? find(this.findsIdx, s.id) : null);
+    this.stateLayer.highlight(s?.kind === 'state' ? find(this.stateIdx, s.id) : null);
     this.realLayer.highlight(s?.kind === 'real'
       ? find(this.realPayload.points.map((p) => p.deposit_id as string), s.id) : null);
   }
@@ -717,6 +828,7 @@ export class Wp10Instance {
     if (s.kind === 'sim') return `Simulated porphyry ${(s.id as number) + 1}`;
     if (s.kind === 'box') return `Place ${places.id[s.id as number]} (${places.region[s.id as number]}) at ${Math.round(this.view.age)} Ma`;
     if (s.kind === 'place') return `Place ${places.id[s.id as number]} (${places.region[s.id as number]}) today`;
+    if (s.kind === 'state') return `Place ${places.id[s.id as number]} (${places.region[s.id as number]}) at ${Math.round(this.view.age)} Ma`;
     const row = this.realRow.get(s.id as string);
     const name = row !== undefined ? this.deps.finds.porphyries.name[row] : '';
     return name || (s.id as string);
@@ -772,6 +884,20 @@ export class Wp10Instance {
         `Present-day position ${fmtLonLat(places.lon[p], places.lat[p])}`,
       ];
     }
+    if (s.kind === 'state') {
+      const k = this.stateIdx.indexOf(s.id as number);
+      if (k < 0) return [{ text: `No porphyries formed here by ${Math.round(t)} Ma at this rung`, color: '#9aa2ab' }];
+      const r = this.stateRows[k];
+      const pc = (x: number) => `${(x * 100).toFixed(x < 0.1 ? 1 : 0)}%`;
+      return [
+        { text: `Formed here so far (expected, scaled to the real record): ${fmtN(r.formed)}`, color: '#e6ebf0' },
+        { text: `eroded by now: ${pc(r.eroded)}`, swatch: MIX_RGB_CSS.eroded },
+        { text: `within reach now (surface cutting the orebody): ${pc(r.within)}`, swatch: MIX_RGB_CSS.within },
+        { text: `still buried now: ${pc(r.buried)}`, swatch: MIX_RGB_CSS.buried },
+        `found today: ${pc(r.found)}`,
+        { text: `Rung ${v.rung}; ${v.walk}`, color: '#8a929b' },
+      ];
+    }
     if (s.kind === 'boundary') {
       const [snap, f, k] = String(s.id).split('|').map(Number);
       const c = this.boundaryLines.feature(f)[3][k];
@@ -815,7 +941,7 @@ export class Wp10Instance {
   // --- projection and frame --------------------------------------------------------------
 
   private get overlays(): PointOverlay[] {
-    return [this.formationLayer, this.findsLayer, this.simLayer, this.realLayer];
+    return [this.formationLayer, this.stateLayer, this.findsLayer, this.simLayer, this.realLayer];
   }
 
   setProjection(mode: ProjectionMode): void {
@@ -901,6 +1027,113 @@ export class Wp10Instance {
 }
 
 // --- colour helpers ------------------------------------------------------------------------
+
+type StateRow = ReturnType<PlaceStates['block']>[number];
+
+/** The mix's three colours: the depth chart's fate hues (eroded red, still buried blue,
+ *  found today / within reach amber), a little more saturated for small squares. Mixed in
+ *  linear light, so red + blue reads purple rather than muddy. */
+const MIX_RGB = { eroded: [232, 80, 91], within: [242, 183, 5], buried: [61, 127, 224] };
+/** The colour of a place typical of the places on the map now. */
+const MIX_GREY = [138, 144, 152];
+const MIX_RGB_CSS = {
+  eroded: `rgb(${MIX_RGB.eroded.join(',')})`, within: `rgb(${MIX_RGB.within.join(',')})`,
+  buried: `rgb(${MIX_RGB.buried.join(',')})`,
+};
+
+function toLinear(c: number): number { const x = c / 255; return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; }
+function toSrgb(x: number): number {
+  const v = x <= 0.0031308 ? 12.92 * x : 1.055 * x ** (1 / 2.4) - 0.055;
+  return Math.round(255 * Math.max(0, Math.min(1, v)));
+}
+
+/** Each share's values across the places on the map now, sorted (for the median and 98th
+ *  percentile the mix colour is scaled to). */
+type ShareRanks = { e: Float64Array; w: Float64Array; b: Float64Array };
+
+function emptyRanks(): ShareRanks {
+  return { e: new Float64Array(0), w: new Float64Array(0), b: new Float64Array(0) };
+}
+
+/** The map colour for a place's shares: grey where the place is typical of the places on
+ *  the map now (each share at or below the places' median), pushed towards red where more
+ *  has been eroded than that, blue where more is still buried, yellow where more is within
+ *  reach (two together mix: eroded and within reach gives orange); full colour at the
+ *  places' 98th percentile. Mixed in linear light. Raw shares would give one colour everywhere: within
+ *  reach is never above about 20%, and at one age places differ by a few tens of percent. */
+function mixColour(e: number, w: number, b: number, ranks: ShareRanks): string {
+  // How far above the places' median, as a fraction of the way to their 98th percentile.
+  const push = (v: number, sorted: Float64Array) => {
+    const n = sorted.length;
+    if (!n) return 0;
+    const med = sorted[Math.floor(0.5 * (n - 1))];
+    const top = sorted[Math.ceil(0.98 * (n - 1))];
+    return top > med ? Math.max(0, Math.min(1, (v - med) / (top - med))) : 0;
+  };
+  const pe = push(e, ranks.e);
+  const pw = push(w, ranks.w);
+  const pb = push(b, ranks.b);
+  const c = [0, 1, 2].map((k) => {
+    const g = toLinear(MIX_GREY[k]);
+    return toSrgb(g + pe * (toLinear(MIX_RGB.eroded[k]) - g) + pw * (toLinear(MIX_RGB.within[k]) - g)
+      + pb * (toLinear(MIX_RGB.buried[k]) - g));
+  });
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+function rangeText(r: ShareRanks): string {
+  const p = (v: Float64Array) => (v.length
+    ? `${Math.round(v[Math.floor(0.02 * (v.length - 1))] * 100)}-${Math.round(v[Math.ceil(0.98 * (v.length - 1))] * 100)}%` : '-');
+  return `eroded ${p(r.e)}, within reach ${p(r.w)}, buried ${p(r.b)}`;
+}
+
+/** The mix key: a triangle with all eroded, all within reach and all buried at its corners,
+ *  and each place on the map now as a dot at its true shares, in its map colour. */
+function mixTriangle(rows: StateRow[], ranks: ShareRanks): HTMLCanvasElement {
+  const W = 240;
+  const H = 128;
+  const dpr = Math.min(devicePixelRatio, 2);
+  const c = document.createElement('canvas');
+  c.width = W * dpr;
+  c.height = H * dpr;
+  c.style.width = `${W}px`;
+  c.style.height = `${H}px`;
+  const ctx = c.getContext('2d')!;
+  ctx.scale(dpr, dpr);
+  // Corners: eroded bottom left, buried bottom right, within reach top.
+  const A = [62, 108];
+  const B = [178, 108];
+  const C = [120, 12];
+  const at = (e: number, w: number, b: number): [number, number] => [
+    e * A[0] + b * B[0] + w * C[0], e * A[1] + b * B[1] + w * C[1]];
+  ctx.beginPath();
+  ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.lineTo(C[0], C[1]); ctx.closePath();
+  ctx.fillStyle = 'rgba(255,255,255,0.04)';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(200,210,220,0.45)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  // Corner patches in the three pure colours.
+  for (const [[x, y], col] of [[A, MIX_RGB_CSS.eroded], [B, MIX_RGB_CSS.buried], [C, MIX_RGB_CSS.within]] as Array<[number[], string]>) {
+    ctx.fillStyle = col;
+    ctx.fillRect(x - 3, y - 3, 6, 6);
+  }
+  // Each place now: where its true shares put it, in the colour it has on the map.
+  for (const r of rows) {
+    const [x, y] = at(r.eroded, r.within, r.buried);
+    ctx.fillStyle = mixColour(r.eroded, r.within, r.buried, ranks);
+    ctx.fillRect(x - 1, y - 1, 2.2, 2.2);
+  }
+  ctx.font = '10.5px ui-sans-serif, system-ui, sans-serif';
+  ctx.fillStyle = '#c3ccd5';
+  ctx.textAlign = 'right';
+  ctx.fillText('all eroded', A[0] - 4, A[1] + 3);
+  ctx.textAlign = 'left';
+  ctx.fillText('all buried', B[0] + 4, B[1] + 3);
+  ctx.textAlign = 'center';
+  ctx.fillText('all within reach', C[0], C[1] - 2);
+  return c;
+}
 
 function clamp01(t: number): number { return Math.max(0, Math.min(1, t)); }
 function clampSym(t: number): number { return Math.max(-1, Math.min(1, t)); }

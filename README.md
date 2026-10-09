@@ -562,6 +562,10 @@ Simulated porphyries and the formation squares are drawn where RiftsClimate puts
 place in the place-and-time box covering each age; real porphyries move with the plate the
 analysis gave them, exactly as in the deposit viewer (checked by `npm run check:wp10porphyry`:
 at its own age each sits within a few km of RiftsClimate's own reconstructed position).
+The map's main layer is what has happened at each place (RiftsClimate's
+`prep/wp10_place_states.py`): porphyries formed there so far and the shares eroded, within reach
+and still buried, worked out exactly from the walk; the individual simulated porphyries are in
+the depth chart (and an off-by-default map layer).
 Plate boundaries are RiftsClimate's (`prep/wp10_boundaries.py`: label and closing/opening rate
 at each box snapshot); their subduction teeth come from the archive's own Merdith 2021
 Boundary Frames, which the prep script checks carry the same subduction zones.

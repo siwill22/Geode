@@ -171,6 +171,36 @@ if (pick) {
   await shot('pick-line-in-chart');
 }
 
+// The place states coloured one share at a time (rung 1a, 100 Ma), and a click on a place.
+await page.evaluate(() => { const w = window.__wp10; w.view.formationColour = 'rate'; w.select(null); w.applyLayers(); });
+await page.mouse.move(5, 895);   // away from the chart, so no hover tip lingers
+for (const share of ['eroded', 'within_reach', 'buried', 'found_today']) {
+  await page.evaluate((sh) => { const w = window.__wp10; w.view.stateColour = sh; w.applyLayers(); }, share);
+  await page.waitForTimeout(400);
+  await shot(`rung1a-100Ma-share-${share}`);
+}
+await page.evaluate(() => { const w = window.__wp10; w.view.stateColour = 'mix'; w.applyLayers(); });
+await page.waitForTimeout(500);   // rebuilt layers have screen positions only after the next draw
+const place = await page.evaluate(() => {
+  const L = window.__wp10.stateLayer.layer;
+  for (let i = L.points.length - 1; i >= 0; i--) {
+    const s = L._screen[i];
+    if (s && s[0] > 320 && s[0] < window.__wp10.mapRect.width - 260 && s[1] > 250 && s[1] < 650) return { x: s[0], y: s[1] };
+  }
+  return null;
+});
+console.log('place target:', JSON.stringify(place));
+if (place) {
+  await page.evaluate(() => { const w = window.__wp10; w.view.real = false; w.view.boundaries = false; w.applyLayers(); });
+  await page.mouse.click(place.x, place.y);
+  await page.waitForTimeout(500);
+  console.log('place click:', JSON.stringify(await page.evaluate(() => window.__wp10.selection)));
+  await shot('rung1a-100Ma-place-click');
+  await page.evaluate(() => { const w = window.__wp10; w.view.real = true; w.view.boundaries = true; w.select(null); w.applyLayers(); });
+}
+
+// The individual sample on the map (off by default): click a lone one.
+await page.evaluate(() => { const w = window.__wp10; w.view.simulated = true; w.applyLayers(); });
 // Click a lone simulated porphyry on the map.
 const target = await page.evaluate(() => {
   const L = window.__wp10.simLayer.layer;
@@ -183,6 +213,7 @@ const target = await page.evaluate(() => {
   }
   return null;
 });
+console.log('simulated target:', JSON.stringify(target));
 if (target) {
   await page.mouse.click(target.x, target.y);
   await page.waitForTimeout(800);
@@ -194,20 +225,20 @@ if (target) {
 await page.evaluate(() => { window.__wp10.view.simColour = 'fate'; window.__wp10.applyLayers(); });
 await page.waitForTimeout(500);
 await shot('rung1a-100Ma-fate');
-await page.evaluate(() => { window.__wp10.view.simColour = 'depth'; window.__wp10.applyLayers(); });
+await page.evaluate(() => { const w = window.__wp10; w.view.simColour = 'depth'; w.view.simulated = false; w.applyLayers(); });
 
 await setControl('Only those found today', true, 'bool');
 await setAge(0);
 await shot('rung1a-000Ma-only-found-lines');
 await setControl('Only those found today', false, 'bool');
 
-await page.evaluate(() => { window.__wp10.view.findsColour = 'difference'; window.__wp10.applyLayers(); });
+await page.evaluate(() => { const w = window.__wp10; w.view.finds = true; w.view.findsColour = 'difference'; w.applyLayers(); });
 await page.waitForTimeout(500);
 await shot('rung1a-000Ma-finds-difference');
-await page.evaluate(() => { window.__wp10.view.findsColour = 'predicted'; window.__wp10.applyLayers(); });
+await page.evaluate(() => { const w = window.__wp10; w.view.finds = false; w.view.findsColour = 'predicted'; w.applyLayers(); });
 
 await setAge(50);
-await page.evaluate(() => { window.__wp10.view.formationColour = 'rate_found'; window.__wp10.applyLayers(); });
+await page.evaluate(() => { const w = window.__wp10; w.view.formation = true; w.view.states = false; w.view.formationColour = 'rate_found'; w.applyLayers(); });
 await page.waitForTimeout(500);
 await shot('rung1a-050Ma-forming-and-found');
 
@@ -255,7 +286,7 @@ await page.evaluate(() => { const w = window.__wp10; w.view.lines = 1000; w.view
 // Plate boundaries at 14, 40, 140 and 310 Ma, coloured by type and by closing/opening rate,
 // with a sense check: labelled subduction zones should mostly close, ridges mostly open.
 await page.evaluate(() => { const w = window.__wp10; w.view.formationColour = 'rate'; w.view.simulated = false;
-  w.view.real = true; w.applyLayers(); });
+  w.view.real = true; w.view.formation = true; w.view.states = false; w.applyLayers(); });
 for (const age of [14, 40, 140, 310]) {
   await setAge(age);
   const stats = await page.evaluate(() => {
@@ -303,8 +334,8 @@ await page.evaluate(() => { const w = window.__wp10; w.view.convergentOnly = tru
   w.view.formation = true; w.applyLayers(); });
 await page.waitForTimeout(500);
 await shot('boundaries-type-040Ma-closing-only');
-await page.evaluate(() => { const w = window.__wp10; w.view.convergentOnly = false; w.view.simulated = true;
-  w.view.real = true; w.select(null); w.applyLayers(); });
+await page.evaluate(() => { const w = window.__wp10; w.view.convergentOnly = false; w.view.simulated = false;
+  w.view.real = true; w.view.formation = false; w.view.states = true; w.select(null); w.applyLayers(); });
 
 // The other walk setting, rung 1b, with the charts' age axis from 150 Ma.
 await page.evaluate(() => { window.__wp10.view.formationColour = 'rate'; window.__wp10.applyLayers(); });
