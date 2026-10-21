@@ -70,6 +70,7 @@ npm run dev   # http://localhost:5173                        mantle viewer
               # http://localhost:5173/paleobio.html              paleobiology viewer
               # http://localhost:5173/riftsclimate.html          RiftsClimate deposit viewer
               # http://localhost:5173/wp10porphyry.html          RiftsClimate WP10 porphyry Cu viewer
+              # http://localhost:5173/molchan.html               RiftsClimate one-factor Molchan test, its inputs
               # http://localhost:5173/themelab.html               Theme Lab
               # http://localhost:5173/globe.html                generated: single-model-globe
               # http://localhost:5173/groupGlobe.html            generated: model-group-globe
@@ -570,6 +571,30 @@ Plate boundaries are RiftsClimate's (`prep/wp10_boundaries.py`: label and closin
 at each box snapshot); their subduction teeth come from the archive's own Merdith 2021
 Boundary Frames, which the prep script checks carry the same subduction zones.
 
+### The RiftsClimate Molchan viewer
+
+`molchan.html` shows the inputs of RiftsClimate's one-factor Molchan test (step 1 of the
+factor-combination ladder in its `docs/spec/factor-combinations.md`), in Merdith 2021,
+0-1000 Ma: the ground the test rates (each lattice place in the time slice covering the age,
+where it was then), coloured by one factor's value or by its share of ground rated higher;
+the SEDEX, MVT or Cu-sed deposits formed near that age, each on its plate; the margin lines
+(including the lines after their collision has ended) and continent polygons; and the Molchan diagram with every factor's skill. It needs the deposit
+viewer's section first (it reads its Merdith 2021 coastlines, margin lines and polygons from
+`archive/riftsclimate/`), then:
+
+```bash
+# 1. in the RiftsClimate repo: -> data/geode/molchan/ (stops if a skill differs from its pipeline)
+PYTHONPATH=prep conda run -n riftsclimate python prep/geode_molchan_export.py
+# 2. here: -> archive/riftsclimate/molchan/ (repacking only; nothing is computed)
+env -u PYTHONPATH conda run -n riftsclimate python prep/prep_riftsclimate_molchan.py \
+    --riftsclimate /path/to/RiftsClimate
+```
+
+Coastlines, margins and polygons are drawn at the time slice's own age, the age the box
+values were measured at, so lines and squares agree. Deposits are drawn at that age too,
+where RiftsClimate placed each at every time slice (its `positions.csv.gz`), so they move
+with the continents while they are on the map; where each formed is in its popup.
+
 ### Unresolved inputs
 
 These still need a path supplied, because no public source is recorded for them. Both are used
@@ -813,6 +838,7 @@ npm run check:oldmap           # Old Map viewer: kilometre-true wash/ring/glyph 
 npm run check:paleobio         # paleobiology viewer's headless render
 npm run check:riftsclimate     # RiftsClimate deposit viewer: layers per plate model, deposit panel
 npm run check:wp10porphyry     # RiftsClimate WP10 porphyry viewer: rungs x ages, chart <-> map picking
+npm run check:molchan          # RiftsClimate Molchan viewer: skills on screen vs RiftsClimate, merged slices, picking
 npm run check:themelab         # Theme Lab's headless render
 npm run check:themes           # theme colours land only on furniture, never the ramp
 npm run check:theme-roles      # every furniture role is set by every theme

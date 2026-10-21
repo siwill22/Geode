@@ -1135,10 +1135,10 @@ function mixTriangle(rows: StateRow[], ranks: ShareRanks): HTMLCanvasElement {
   return c;
 }
 
-function clamp01(t: number): number { return Math.max(0, Math.min(1, t)); }
+export function clamp01(t: number): number { return Math.max(0, Math.min(1, t)); }
 function clampSym(t: number): number { return Math.max(-1, Math.min(1, t)); }
 
-function ramp(colors: [number, number, number][], t: number, alpha = 1): string {
+export function ramp(colors: [number, number, number][], t: number, alpha = 1): string {
   const [r, g, b] = colors[Math.round(clamp01(t) * (colors.length - 1))];
   return alpha < 1 ? `rgba(${r},${g},${b},${alpha})` : `rgb(${r},${g},${b})`;
 }
@@ -1173,7 +1173,7 @@ function divergeCss(colors: [number, number, number][]): string {
   return `linear-gradient(to right, ${stops.join(', ')})`;
 }
 
-function rampCss(colors: [number, number, number][], from = 0, to = 1): string {
+export function rampCss(colors: [number, number, number][], from = 0, to = 1): string {
   const stops = [];
   for (let i = 0; i <= 8; i++) {
     const t = from + (to - from) * (i / 8);
@@ -1192,7 +1192,7 @@ function depthRampCss(colors: [number, number, number][], extentKm: number): str
   return `linear-gradient(to right, ${stops.join(', ')})`;
 }
 
-function fmtN(v: number): string {
+export function fmtN(v: number): string {
   if (!Number.isFinite(v)) return '-';
   const a = Math.abs(v);
   if (a === 0) return '0';
@@ -1201,7 +1201,7 @@ function fmtN(v: number): string {
   return v.toPrecision(2);
 }
 
-function fmtLonLat(lon: number, lat: number): string {
+export function fmtLonLat(lon: number, lat: number): string {
   if (!Number.isFinite(lon) || !Number.isFinite(lat)) return '-';
   return `${Math.abs(lat).toFixed(1)}°${lat < 0 ? 'S' : 'N'}, ${Math.abs(lon).toFixed(1)}°${lon < 0 ? 'W' : 'E'}`;
 }

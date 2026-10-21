@@ -80,6 +80,9 @@ PHASES = [
     ("syn_rift", "Syn-rift margins", "#ff8c42"),
     ("post_rift", "Post-rift margins", "#4fc3f7"),
     ("collision", "Collision margins", "#e84a8a"),
+    # the same lines from the end of their collision to today (RiftsClimate's "margin line
+    # after collision", wp9_line_timing.after_collision)
+    ("after_collision", "Margin lines after collision", "#b39ddb"),
 ]
 NO_DATA = 255
 # Most deforming cells barely deform (pooled median |divergence| ~4e-17 1/s, against the

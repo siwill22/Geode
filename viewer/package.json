@@ -17,6 +17,7 @@
     "check:paleobio": "node scripts/check_paleobio.mjs shots-paleobio",
     "check:riftsclimate": "node scripts/check_riftsclimate.mjs shots-riftsclimate",
     "check:wp10porphyry": "node scripts/check_wp10porphyry.mjs shots-wp10porphyry",
+    "check:molchan": "node scripts/check_molchan.mjs shots-molchan",
     "check:boundaries": "cd .. && PYTHONPATH=\"$PYTHONPATH:$PWD/viewer/vendor/petrify/python\" ${GEODE_PYTHON:-python} prep/check_boundaries.py",
     "check:projections": "node scripts/check_projections.mjs shots-projections",
     "check:flat-direction": "node scripts/check_flat_direction.mjs",

@@ -1,4 +1,4 @@
-import type { BoxesFile, PackedWalkerSample, WalkerSample } from './types';
+import type { PackedWalkerSample, WalkerSample } from './types';
 
 /** Unpack a stored sample's depth paths into km (exactly RiftsClimate's 2-decimal values). */
 export function decodeSample(p: PackedWalkerSample): WalkerSample {
@@ -25,6 +25,16 @@ export const ERODED = 2;
 export const FATE_COLOUR = ['#e0a100', '#4a8fe0', '#c8615a'];
 export const FATE_LABEL = ['found today', 'still buried', 'eroded'];
 
+/** What Boxes reads: any viewer's place-and-time boxes, place-major (the WP10 and Molchan
+ *  viewers' box files both have this shape). */
+export interface PlaceTimeBoxes {
+  places: { id: number[] };
+  /** from_ma is the young end of each snapshot's interval, to_ma the old end. */
+  snapshots: { snapshot_ma: number[]; from_ma: number[]; to_ma: number[] };
+  m_lon: Array<number | null>;
+  m_lat: Array<number | null>;
+}
+
 /**
  * The place-and-time boxes, read as a lookup: which snapshot covers an age, and a
  * box's values. Nothing is computed here beyond finding the right entry.
@@ -33,7 +43,7 @@ export class Boxes {
   readonly nPlaces: number;
   readonly nSnapshots: number;
 
-  constructor(readonly file: BoxesFile) {
+  constructor(readonly file: PlaceTimeBoxes) {
     this.nPlaces = file.places.id.length;
     this.nSnapshots = file.snapshots.snapshot_ma.length;
   }

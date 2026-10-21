@@ -1,0 +1,189 @@
+/**
+ * Drive molchan.html in a real browser and shoot the states that matter: SEDEX with the
+ * passive margin at 400 Ma (by share, by value; at 395 Ma as the test sees it), a deposit
+ * picked in the Molchan diagram and found on the map, MVT with collision, Cu-sed with the
+ * evaporite hump at 255 Ma (the Kupferschiefer's age), and the globe. The
+ * legend text is printed beside each shot so the counts can be read against the picture.
+ *
+ * Also checks, without a picture:
+ *  - for every deposit type and factor, the skill the diagram shows equals RiftsClimate's
+ *    (index.json), and the dots (each deposit's share) give the same skill;
+ *  - "as the test sees it", the older slice of a pair shows the younger slice's boxes;
+ *  - a deposit picked in the diagram is drawn on the map, highlighted, where RiftsClimate
+ *    placed it at the time slice's age (slice_lon, slice_lat);
+ *  - a deposit moves with its plate: in two time slices it is drawn at RiftsClimate's position
+ *    for each, and the two differ.
+ *
+ * Needs the dev server up:  npx vite --port 5183 &  node scripts/check_molchan.mjs [outdir] [url]
+ */
+import { chromium } from 'playwright';
+import { mkdirSync } from 'node:fs';
+
+const OUT = process.argv[2] || 'shots-molchan';
+const URL = process.argv[3] || 'http://localhost:5183/molchan.html';
+mkdirSync(OUT, { recursive: true });
+
+const browser = await chromium.launch({ channel: 'chromium' });
+const page = await browser.newPage({ viewport: { width: 1500, height: 900 }, deviceScaleFactor: 1 });
+const errors = [];
+page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+page.on('response', (r) => { if (r.status() >= 400) errors.push(`${r.status()} ${r.url()}`); });
+
+await page.goto(URL, { waitUntil: 'networkidle' });
+await page.waitForSelector('body[data-ready="1"], #error', { timeout: 90000 });
+await page.waitForTimeout(1500);
+const errBox = await page.$('#error');
+if (errBox) {
+  console.log('PAGE ERROR BOX:\n' + (await errBox.innerText()));
+  await browser.close();
+  process.exit(1);
+}
+
+let failures = 0;
+const fail = (msg) => { failures++; console.log(`FAIL ${msg}`); };
+
+async function setControl(label, value, kind) {
+  const err = await page.evaluate(([label, v, kind]) => {
+    const rows = [...document.querySelectorAll('.lil-controller')];
+    const row = rows.find((r) => r.querySelector('.lil-name')?.textContent?.trim() === label);
+    if (!row) return `no controller "${label}"`;
+    if (kind === 'select') {
+      const sel = row.querySelector('select');
+      const opt = [...sel.options].find((o) => o.textContent.trim().startsWith(v));
+      if (!opt) return `"${label}" has no option "${v}"`;
+      sel.value = opt.value;
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+    } else if (kind === 'bool') {
+      const box = row.querySelector('input[type=checkbox]');
+      if (box.checked !== v) box.click();
+    }
+    return null;
+  }, [label, value, kind]);
+  if (err) throw new Error(err);
+  await page.waitForTimeout(500);
+}
+
+async function setAge(age) {
+  await page.evaluate((a) => window.__molchan.applyAge(a), age);
+  await page.waitForTimeout(500);
+}
+
+async function shoot(name) {
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: `${OUT}/${name}.png` });
+  const legend = await page.$eval('.legend', (e) => e.innerText.replace(/\n+/g, ' | '));
+  const skill = await page.$eval('.molchan-skill', (e) => e.innerText);
+  console.log(`${name}.png  [${skill}]  ${legend}`);
+}
+
+// --- skills: diagram vs RiftsClimate, every type and factor -----------------------------
+const plan = await page.evaluate(() => {
+  const ix = window.__molchan.deps.index;
+  return ix.types.map((t) => ({ type: t.label, factors: ix.factors.filter((f) => f.types.includes(t.id)).map((f) => f.id),
+    skills: ix.curves[t.id] }));
+});
+for (const t of plan) {
+  await setControl('Deposit type', t.type, 'select');
+  for (const f of t.factors) {
+    await setControl('Factor', f, 'select');
+    const shown = await page.$eval('.molchan-skill', (e) => e.innerText);
+    const want = t.skills[f].skill;
+    const m = shown.match(/Skill ([+−])(\d\.\d+)/);
+    const got = m ? (m[1] === '−' ? -1 : 1) * Number(m[2]) : NaN;
+    if (!(Math.abs(got - want) < 6e-4) || /does not match/.test(shown)) fail(`${t.type} / ${f}: diagram "${shown}", RiftsClimate ${want}`);
+  }
+}
+console.log(`skills checked: ${plan.reduce((a, t) => a + t.factors.length, 0)} type x factor pairs`);
+
+// --- SEDEX, passive margin, 400 Ma ------------------------------------------------------
+await setControl('Deposit type', 'SEDEX', 'select');
+await setControl('Factor', 'passive margin', 'select');
+await setAge(400);
+await shoot('01-sedex-passive-400-share');
+// "As the test sees it": at 395 Ma (slice 393-397.5 Ma, the older of its pair, weight 0 in the
+// test) every place must show the box of the younger slice it is merged into, 388-393 Ma.
+const boxKeys = () => page.evaluate(() => window.__molchan.boxLayer.payload().points
+  .map((p) => `${p.lon},${p.lat},${p.share}`).sort().join(';'));
+await setAge(390);
+const younger = await boxKeys();
+await setControl('as the test sees it (slices in pairs)', true, 'bool');
+await setAge(395);
+if ((await boxKeys()) !== younger) fail('at 395 Ma "as the test sees it" does not show the 388-393 Ma boxes');
+else console.log('395 Ma as the test sees it = the 388-393 Ma boxes: ok');
+await shoot('02-sedex-passive-395-as-the-test-sees-it');
+await setControl('as the test sees it (slices in pairs)', false, 'bool');
+await setAge(400);
+await setControl('coloured by', 'Value', 'select');
+await shoot('03-sedex-passive-400-value');
+await setControl('coloured by', 'Share', 'select');
+
+// --- a deposit picked in the diagram ----------------------------------------------------
+const picked = await page.evaluate(() => {
+  const m = window.__molchan;
+  const d = m.deps.deposits;
+  // The deposit with the highest share (worst-rated ground), to see where it misses.
+  let best = -1;
+  for (let i = 0; i < d.deposit_id.length; i++) {
+    const s = d.shares['passive margin'][i];
+    if (d.type[i] === 'PbZn-CD' && s != null && (best < 0 || s > d.shares['passive margin'][best])) best = i;
+  }
+  m.panel.cb.onPickDeposit(best);
+  const k = m.depIdx.indexOf(best);
+  const pt = k >= 0 ? m.depLayer.payload().points[k] : null;
+  const S = m.deps.boxes.snapshots.snapshot_ma.length;
+  return { i: best, name: d.name[best], age: d.age_ma[best], share: d.shares['passive margin'][best],
+    onMap: k >= 0, lon: pt?.lon, lat: pt?.lat, want_lon: d.slice_lon[best * S + m.slice] ?? d.m_lon[best],
+    want_lat: d.slice_lat[best * S + m.slice] ?? d.m_lat[best], viewAge: m.view.age };
+});
+if (!picked.onMap) fail(`picked deposit ${picked.name} is not on the map at ${picked.viewAge} Ma`);
+if (picked.lon !== picked.want_lon || picked.lat !== picked.want_lat) fail(`picked deposit drawn at ${picked.lon},${picked.lat}, not ${picked.want_lon},${picked.want_lat}`);
+console.log(`picked ${picked.name} (${picked.age} Ma, share ${picked.share}): map at ${picked.viewAge} Ma`);
+await shoot('04-sedex-picked-worst-deposit');
+
+// --- deposits move with their plates ------------------------------------------------------
+const where = async (age, i) => { await setAge(age); return page.evaluate((i) => {
+  const m = window.__molchan; const d = m.deps.deposits; const S = m.deps.boxes.snapshots.snapshot_ma.length;
+  const k = m.depIdx.indexOf(i); const pt = k >= 0 ? m.depLayer.payload().points[k] : null;
+  return { slice: m.slice, lon: pt?.lon, lat: pt?.lat, want_lon: d.slice_lon[i * S + m.slice], want_lat: d.slice_lat[i * S + m.slice] };
+}, i); };
+{
+  await page.evaluate(() => window.__molchan.select(null));
+  const i = await page.evaluate(() => { const d = window.__molchan.deps.deposits;
+    return d.deposit_id.findIndex((_, j) => d.type[j] === 'PbZn-CD' && Math.abs(d.age_ma[j] - 400) <= 5); });
+  const age = await page.evaluate((i) => window.__molchan.deps.deposits.age_ma[i], i);
+  const a = await where(Math.round(age) - 15, i);
+  const b = await where(Math.round(age) + 15, i);
+  for (const [n, p] of [['young', a], ['old', b]]) {
+    if (p.lon == null || p.lon !== p.want_lon || p.lat !== p.want_lat) fail(`deposit ${i} (${n}) drawn at ${p.lon},${p.lat}, not ${p.want_lon},${p.want_lat}`);
+  }
+  if (a.slice === b.slice || (a.lon === b.lon && a.lat === b.lat)) fail(`deposit ${i} did not move between slices ${a.slice} and ${b.slice}`);
+  console.log(`deposit ${i} (${age} Ma): ${a.lon},${a.lat} at ${Math.round(age) - 15} Ma -> ${b.lon},${b.lat} at ${Math.round(age) + 15} Ma: moves with its plate`);
+}
+
+// --- MVT, collision; the globe ----------------------------------------------------------
+await page.evaluate(() => window.__molchan.select(null));
+await setControl('Deposit type', 'MVT', 'select');
+await setControl('Factor', 'collision', 'select');
+await setControl('Collision margins', true, 'bool');
+await setAge(300);
+await shoot('05-mvt-collision-300');
+await setControl('Collision margins', false, 'bool');
+await setControl('Deposit type', 'Cu-sed', 'select');
+await setControl('Factor', 'evaporite', 'select');
+await setAge(255);
+await shoot('07-cused-evaporite-255');
+await setControl('Factor', 'margin line after', 'select');
+await setControl('Margin lines after collision', true, 'bool');
+await shoot('08-cused-after-collision-255');
+await setControl('Margin lines after collision', false, 'bool');
+await setControl('Deposit type', 'SEDEX', 'select');
+await setControl('Factor', 'passive margin', 'select');
+await page.evaluate(() => { window.__molchan.setProjection('globe'); dispatchEvent(new Event('resize')); });
+await setAge(150);
+await shoot('06-sedex-passive-150-globe');
+
+if (errors.length) { failures += errors.length; console.log('ERRORS:\n' + errors.join('\n')); }
+console.log(failures ? `${failures} problem(s)` : 'all checks passed');
+await browser.close();
+process.exit(failures ? 1 : 0);
