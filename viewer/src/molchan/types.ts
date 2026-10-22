@@ -38,6 +38,81 @@ export interface MolchanIndex {
   counts: { places: number; snapshots: number; boxes: number; boxes_in_test: number; deposits: Record<string, number> };
   files: { boxes: string; deposits: string };
   built_from: Record<string, string | null>;
+  /** Step 3 of the ladder (combinations, equal weights, percentiles), per deposit type. */
+  combos: Record<string, ComboEntry>;
+  /** The region each place lies in today (as RiftsClimate's region_of), by place index. */
+  place_region: string[];
+}
+
+/** One combination map: its held-out map (each region set aside rated by the map made
+ *  without it; shares within that region's continental area). */
+export interface ComboMap {
+  id: string;
+  /** 'best': the best-of-all choice (each region's own pick); 'top': among the 20 best by
+   *  regional skill; 'published': a published idea or earlier pair; 'one factor'. */
+  kind: 'best' | 'top' | 'published' | 'one factor';
+  label: string;
+  /** Null for the best-of-all choice, whose regions use different combinations. */
+  combination: string | null;
+  /** Regional skill (the best-of-all choice: the fully held-out skill). */
+  skill: number;
+  skill_by_region: Record<string, number>;
+  deposits_by_region: Record<string, number>;
+  /** Per region set aside: the combination behind its map and what was chosen for it
+   *  without seeing it (directions, preferred distances). */
+  regions: Record<string, { combination: string; chosen: string[] }>;
+  file: string;
+}
+
+export interface ComboGain {
+  group: string;
+  factor: string;
+  /** Average change in regional skill when the factor is added to a combination. */
+  gain: number;
+  worlds: number;
+  median: number | null;
+  highest: number | null;
+  at_or_above: number | null;
+  world_gains: Array<number | null>;
+}
+
+export interface ComboWorlds {
+  /** The best-of-all choice's fully held-out skill, real and in each no-effect fake world. */
+  real: number;
+  real_nc: number;
+  worlds: Array<number | null>;
+  worlds_nc: Array<number | null>;
+}
+
+export interface ComboEntry {
+  step: string;
+  /** The regions set aside (enough deposits). */
+  regions: string[];
+  maps: ComboMap[];
+  /** File with every combination ranked (ComboRankedFile). */
+  ranked: string;
+  count: number;
+  /** 'regional' and, where run, 'global'. */
+  gains: Record<string, ComboGain[]>;
+  worlds: Record<string, ComboWorlds>;
+}
+
+/** One map's values: boxes place-major as MolchanBoxesFile, in thousandths of a share (null
+ *  where the place has no box or its region is not set aside); deposits in the deposits
+ *  file's order. */
+export interface ComboMapFile {
+  id: string;
+  boxes: Array<number | null>;
+  deposits: Array<number | null>;
+}
+
+export interface ComboRankedFile {
+  combination: string[];
+  skill: Array<number | null>;
+  by_region: Record<string, Array<number | null>>;
+  with_collision: boolean[];
+  n_factors: number[];
+  map: Array<string | null>;
 }
 
 /** Every place and time slice, place-major: value[place * nSnapshots + snapshot], null where
@@ -86,9 +161,15 @@ export type ColourBy = 'share' | 'value';
 /** Which deposits are on the map: those formed in this time slice, or within N Myr of the age. */
 export type DepositWindow = 'slice' | '10' | '25' | '50';
 
+export type ShowMode = 'factor' | 'combination';
+
 export interface MolchanViewState {
   type: string;
+  /** One factor (step 1) or a combination's held-out map (step 3). */
+  show: ShowMode;
   factor: string;
+  /** The combination map on screen (ComboMap.id). */
+  combo: string;
   age: number;
   projection: ProjectionMode;
   boxes: boolean;

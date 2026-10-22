@@ -5,7 +5,13 @@
  * evaporite hump at 255 Ma (the Kupferschiefer's age), and the globe. The
  * legend text is printed beside each shot so the counts can be read against the picture.
  *
+ * Then the combinations (step 3): the best-of-all choice's held-out map for Cu-sed, the panel
+ * blocks below the diagram (fake worlds, factor gains, the ranked list) and a map picked from
+ * the list.
+ *
  * Also checks, without a picture:
+ *  - for every combination map of every type, the skill the diagram shows equals RiftsClimate's
+ *    and the dots reproduce it;
  *  - for every deposit type and factor, the skill the diagram shows equals RiftsClimate's
  *    (index.json), and the dots (each deposit's share) give the same skill;
  *  - "as the test sees it", the older slice of a pair shows the younger slice's boxes;
@@ -182,6 +188,52 @@ await setControl('Factor', 'passive margin', 'select');
 await page.evaluate(() => { window.__molchan.setProjection('globe'); dispatchEvent(new Event('resize')); });
 await setAge(150);
 await shoot('06-sedex-passive-150-globe');
+
+// --- combinations (step 3): every map's skill, then the best-of-all choice and the panel ----
+await page.evaluate(() => { window.__molchan.setProjection('robinson'); dispatchEvent(new Event('resize')); });
+const combos = await page.evaluate(() => {
+  const ix = window.__molchan.deps.index;
+  return Object.entries(ix.combos).map(([type, e]) => ({ type, maps: e.maps.map((m) => ({ id: m.id, skill: m.skill, label: m.label })) }));
+});
+let nMaps = 0;
+for (const t of combos) {
+  for (const m of t.maps) {
+    const shown = await page.evaluate(async ([type, id]) => {
+      const inst = window.__molchan;
+      inst.view.type = type; inst.view.show = 'combination'; inst.view.combo = id;
+      await inst.applySetting();
+      const el = document.querySelector('.molchan-skill');
+      return { text: el.innerText, bad: el.classList.contains('molchan-skill-bad') };
+    }, [t.type, m.id]);
+    const mm = shown.text.match(/Skill ([+−])(\d\.\d+)/);
+    const got = mm ? (mm[1] === '−' ? -1 : 1) * Number(mm[2]) : NaN;
+    if (shown.bad || !(Math.abs(got - m.skill) < 6e-4)) fail(`${t.type} / ${m.label}: diagram "${shown.text}", RiftsClimate ${m.skill}`);
+    nMaps++;
+  }
+}
+console.log(`combination maps checked: ${nMaps}`);
+await page.evaluate(() => { const i = window.__molchan; i.view.show = 'factor'; i.view.type = 'PbZn-CD'; });
+await setControl('Deposit type', 'Cu-sed', 'select');
+await setControl('Show', 'Combination', 'select');
+await setControl('Combination', 'Best-of-all', 'select');
+await setAge(255);
+await shoot('09-cused-best-of-all-255');
+// The panel blocks below the diagram, and a ranked row picked from the list.
+await page.waitForFunction(() => document.querySelectorAll('.combo-row').length > 0, null, { timeout: 30000 });
+await page.evaluate(() => { document.querySelector('.charts-panel').scrollTop = 560; });
+await shoot('10-cused-panel-worlds-gains');
+await page.evaluate(() => { document.querySelector('.charts-panel').scrollTop = 99999; });
+await shoot('11-cused-panel-ranked');
+const picked2 = await page.evaluate(async () => {
+  const row = document.querySelector('.combo-row-map');
+  row.click();
+  await new Promise((r) => setTimeout(r, 1500));
+  return { combo: window.__molchan.view.combo, name: row.querySelector('.combo-name').textContent,
+    label: window.__molchan.deps.index.combos['Cu-sed'].maps.find((m) => m.id === window.__molchan.view.combo)?.combination };
+});
+if (picked2.name !== picked2.label) fail(`ranked row "${picked2.name}" showed map ${picked2.combo} (${picked2.label})`);
+await page.evaluate(() => { document.querySelector('.charts-panel').scrollTop = 0; });
+await shoot('12-cused-best-1-255');
 
 if (errors.length) { failures += errors.length; console.log('ERRORS:\n' + errors.join('\n')); }
 console.log(failures ? `${failures} problem(s)` : 'all checks passed');

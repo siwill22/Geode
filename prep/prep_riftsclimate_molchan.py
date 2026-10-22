@@ -16,6 +16,15 @@ prep_riftsclimate.py). New content goes under archive/riftsclimate/molchan/ only
                   the place was (Merdith 2021), its weight, its weight in the test (time slices
                   merged in pairs), each factor's value and each factor's share of the test's
                   ground rated higher; place-major, null where the place has no box
+  combos/<type>/<map>.json.gz
+                  one combination's held-out map (step 3 of the ladder, RiftsClimate's
+                  prep/geode_combo_export.py): every place x time slice's share of its region's
+                  continental area rated higher, by the map made without that region, in
+                  thousandths (place-major, as boxes; the older slice of a merged pair carries the
+                  younger one's value, as the test sees it), and each deposit's share
+  combos/<type>/ranked.json.gz
+                  every combination of the type with its regional skill, each region's, and the
+                  map that draws it, if any
   deposits.json.gz  the SEDEX, MVT and Cu-sed deposits the test uses: name, type, age, where they formed
                   (Merdith 2021) and are today, region, each factor's value and share, and
                   where each was at every time slice's own age (RiftsClimate's positions.csv.gz;
@@ -37,7 +46,7 @@ import pandas as pd
 
 RIFTSCLIMATE = Path("/Users/simon/GIT/RiftsClimate")
 PLATE_MODEL = "merdith2021"          # the id in archive/riftsclimate/index.json
-FORMAT = 2                 # 2: deposits carry their position at every time slice
+FORMAT = 3                 # 2: deposits carry their position at every time slice; 3: combinations
 TYPES = {"PbZn-CD": "SEDEX (clastic-dominated Pb-Zn)", "PbZn-MVT": "MVT (Mississippi Valley-type Pb-Zn)",
          "Cu-sed": "Cu-sed (sediment-hosted stratiform Cu)"}
 # Each column's unit, and how many decimals to keep.
@@ -94,6 +103,91 @@ def provenance(rc):
             (rc / "data/geode/molchan/boxes.csv.gz").stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
         "packed": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
     }
+
+
+def pack_combos(src, out, boxes, pidx, sidx, P, S, deposits):
+    """The combinations' held-out maps, ranked lists, factor gains and fake worlds, as
+    RiftsClimate's prep/geode_combo_export.py wrote them. Returns the index entry per type and
+    each place's region."""
+    # Each box's value comes from the box the test keeps for its pair: itself if it carries
+    # weight in the test, else the next younger slice of the same place.
+    b = boxes.sort_values(["place", "snapshot_ma"]).reset_index(drop=True)
+    flat = b["place"].map(pidx).to_numpy() * S + b["snapshot_ma"].map(sidx).to_numpy()
+    in_test = (b["weight_in_test"] > 0).to_numpy()
+    prev = np.r_[-1, flat[:-1]]
+    same_place = np.r_[False, b["place"].to_numpy()[1:] == b["place"].to_numpy()[:-1]]
+    if not (in_test | same_place).all():
+        raise SystemExit("a box out of the test has no younger slice of its place to take its value from")
+    from_flat = np.where(in_test, flat, prev)
+    dep_order = {d: i for i, d in enumerate(deposits["deposit_id"])}
+
+    entries, place_region = {}, None
+    for t in TYPES:
+        d = src / t
+        if not (d / "maps.json").exists():
+            print(f"combos {t}: none written (run prep/geode_combo_export.py in RiftsClimate)")
+            continue
+        maps = json.loads((d / "maps.json").read_text())["maps"]
+        cells = pd.read_csv(d / "cells.csv.gz")
+        cflat = cells["place"].map(pidx).to_numpy() * S + cells["snapshot_ma"].map(sidx).to_numpy()
+        if set(cflat) != set(flat[in_test]):
+            raise SystemExit(f"combos {t}: the cells are not the boxes in the test")
+        pos = pd.Series(np.arange(len(cells)), index=cflat)
+        take = pos.reindex(from_flat).to_numpy()
+        if place_region is None:
+            reg = cells.groupby("place")["region"].first()
+            place_region = [reg.get(p, "") if isinstance(reg.get(p, ""), str) else "" for p in sorted(pidx, key=pidx.get)]
+        dc = pd.read_csv(d / "deposits.csv")
+        drow = dc["deposit_id"].map(dep_order).to_numpy()
+        if np.isnan(drow.astype(float)).any():
+            raise SystemExit(f"combos {t}: a deposit is not in the viewer's deposits")
+        size = 0
+        for m in maps:
+            grid = np.full(P * S, np.nan)
+            grid[flat] = cells[m["id"]].to_numpy(float)[take]
+            dep = np.full(len(deposits), np.nan)
+            dep[drow] = dc[m["id"]].to_numpy(float)
+            # the skill must come back from the deposits' shares as written
+            got = 0.5 - np.nanmean(dep)
+            if abs(got - m["skill"]) > 1e-3:
+                raise SystemExit(f"combos {t} {m['id']}: deposits give {got:.4f}, RiftsClimate {m['skill']:.4f}")
+            m["file"] = f"riftsclimate/molchan/combos/{t}/{m['id']}.json.gz"
+            size += write_gz_json(out / "combos" / t / f"{m['id']}.json.gz",
+                                  {"id": m["id"], "boxes": rounded(grid * 1000, 0), "deposits": rounded(dep, 4)})
+        r = pd.read_csv(d / "ranked.csv")
+        regions = [c.split("|")[1] for c in r.columns if c.startswith("region|")]
+        ranked = {"combination": r["combination"].tolist(), "skill": rounded(r["region_skill"], 4),
+                  "by_region": {g: rounded(r[f"region|{g}|skill"], 4) for g in regions},
+                  "with_collision": r["with_collision"].astype(bool).tolist(),
+                  "n_factors": r["n_factors"].astype(int).tolist(),
+                  "map": [m if isinstance(m, str) else None for m in r["map"]]}
+        size += write_gz_json(out / "combos" / t / "ranked.json.gz", ranked)
+        gains = pd.read_csv(d / "gains.csv")
+        gw = pd.read_csv(d / "gain_worlds.csv") if (d / "gain_worlds.csv").exists() else pd.DataFrame(
+            columns=["skill", "factor", "gain"])
+        wd = pd.read_csv(d / "worlds.csv")
+        entries[t] = {
+            "step": "3: equal weights, percentiles",
+            "regions": regions,
+            "maps": maps,
+            "ranked": f"riftsclimate/molchan/combos/{t}/ranked.json.gz",
+            "count": len(r),
+            "gains": {k: [{"group": x.group, "factor": x.factor, "gain": round(float(x.gain), 4),
+                           "worlds": int(x.worlds) if np.isfinite(x.worlds) else 0,
+                           "median": None if not np.isfinite(x.chance_median) else round(float(x.chance_median), 4),
+                           "highest": None if not np.isfinite(x.chance_highest) else round(float(x.chance_highest), 4),
+                           "at_or_above": None if not np.isfinite(x.worlds_at_or_above) else int(x.worlds_at_or_above),
+                           "world_gains": rounded(gw[(gw.skill == k) & (gw.factor == x.factor)]["gain"], 4)}
+                          for x in g.itertuples()]
+                      for k, g in gains.groupby("skill")},
+            "worlds": {k: {"real": round(float(g[g.world == "real"]["value"].iloc[0]), 4),
+                           "real_nc": round(float(g[g.world == "real"]["value_nc"].iloc[0]), 4),
+                           "worlds": rounded(g[g.world != "real"]["value"], 4),
+                           "worlds_nc": rounded(g[g.world != "real"]["value_nc"], 4)}
+                       for k, g in wd.groupby("skill")},
+        }
+        print(f"combos {t}: {len(maps)} maps, {len(r)} combinations ranked, {size / 1e6:.1f} MB")
+    return entries, place_region
 
 
 def main():
@@ -176,6 +270,8 @@ def main():
     size = write_gz_json(out / "deposits.json.gz", dep_obj)
     print(f"deposits: {len(deposits)} ({deposits.deposit_class.value_counts().to_dict()}), {size / 1e3:.0f} kB")
 
+    combos, place_region = pack_combos(src / "combos", out, boxes, pidx, sidx, P, S, deposits)
+
     # --- index ------------------------------------------------------------------------------
     index = {
         "title": "RiftsClimate: the one-factor Molchan test, its inputs",
@@ -192,6 +288,9 @@ def main():
                    "deposits": deposits.deposit_class.value_counts().to_dict()},
         "files": {"boxes": "riftsclimate/molchan/boxes.json.gz", "deposits": "riftsclimate/molchan/deposits.json.gz"},
         "built_from": provenance(args.riftsclimate),
+        # step 3 of the ladder (combinations), per type; the region each place lies in today
+        "combos": combos,
+        "place_region": place_region,
     }
     (out / "index.json").write_text(json.dumps(index, indent=1))
     print(f"wrote {out}/index.json")

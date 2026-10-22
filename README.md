@@ -595,6 +595,20 @@ values were measured at, so lines and squares agree. Deposits are drawn at that 
 where RiftsClimate placed each at every time slice (its `positions.csv.gz`), so they move
 with the continents while they are on the map; where each formed is in its popup.
 
+"Show: Combination (step 3)" draws the combination results (RiftsClimate's step 3, equal
+weights): a combination's held-out map (each region set aside coloured by the map made without
+it), its Molchan diagram and skill in each region; the best-of-all choice, where each region
+uses the combination picked for it; how much each factor adds, with the fake worlds' range; the
+best-of-all choice against the fake worlds; and every combination ranked, with a filter. Maps
+exist for the best-of-all choice, the 20 best, the published ideas and every single factor, and
+are fetched when picked. They need, before step 2 above, in the RiftsClimate repo:
+
+```bash
+for c in PbZn-CD PbZn-MVT Cu-sed; do
+  COMBO_CLASS=$c PYTHONPATH=prep conda run -n riftsclimate python prep/geode_combo_export.py
+done
+```
+
 ### Unresolved inputs
 
 These still need a path supplied, because no public source is recorded for them. Both are used

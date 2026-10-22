@@ -20,9 +20,14 @@ import { Boxes } from '../wp10porphyry/data';
 import { clamp01, fmtLonLat, fmtN, ramp, rampCss } from '../wp10porphyry/wp10Instance';
 import type { LegendBlock } from '../wp10porphyry/wp10Ui';
 
+import { fetchMaybeGzippedJSON } from '../../vendor/petrify/js/gzipFetch.js';
+import { ComboPanel } from './combos';
 import { MolchanPanel, type DiagramPoint } from './diagram';
 import { MolchanUI } from './molchanUi';
-import type { MolchanBoxesFile, MolchanDepositsFile, MolchanFactor, MolchanIndex, MolchanViewState } from './types';
+import type {
+  ComboEntry, ComboMap, ComboMapFile, ComboRankedFile, MolchanBoxesFile, MolchanDepositsFile, MolchanFactor,
+  MolchanIndex, MolchanViewState,
+} from './types';
 
 const LAND_FILL_COLOR = 0x5f5a52;
 const BACKDROP_R = LAND_R_UNDER_SURFACE * (1 - 0.0006);
@@ -52,6 +57,8 @@ const COLUMN: Record<string, { label: string; top: number }> = {
 };
 
 type Kind = 'box' | 'deposit';
+/** A combination map as drawn: shares (0 = best rated), null where there is none. */
+interface ComboShares { id: string; boxes: Array<number | null>; deposits: Array<number | null> }
 interface Selection { kind: Kind; id: number }
 
 export interface MolchanDeps {
@@ -96,6 +103,11 @@ export class MolchanInstance {
   private readonly depLayer: PointOverlay;
 
   private readonly boxes: Boxes;
+  private readonly comboPanel: ComboPanel;
+  /** The combination map on screen, once fetched; files fetched so far (by path). */
+  private comboData: ComboShares | null = null;
+  private readonly comboFiles = new Map<string, Promise<ComboShares>>();
+  private readonly rankedFiles = new Map<string, Promise<ComboRankedFile>>();
   private boxIdx: number[] = [];
   private depIdx: number[] = [];
   /** The time slice on screen (index into the box snapshots), or -1. */
@@ -108,7 +120,9 @@ export class MolchanInstance {
     this.boxes = new Boxes(deps.boxes);
     this.view = {
       type: ix.types[0].id,
+      show: 'factor',
       factor: ix.factors[0].id,
+      combo: ix.combos?.[ix.types[0].id]?.maps[0]?.id ?? '',
       age: 400,
       projection: 'globe',
       boxes: true,
@@ -154,7 +168,63 @@ export class MolchanInstance {
         this.applySetting();
       },
     });
+    this.comboPanel = new ComboPanel({
+      onPickMap: (id) => {
+        this.view.show = 'combination';
+        this.view.combo = id;
+        this.ui.refreshDisplay();
+        this.ui.enableControls();
+        this.applySetting();
+      },
+      loadRanked: (type) => {
+        const path = this.deps.index.combos[type].ranked;
+        if (!this.rankedFiles.has(path)) {
+          this.rankedFiles.set(path, fetchMaybeGzippedJSON(`${this.deps.archiveBase}/${path}`) as Promise<ComboRankedFile>);
+        }
+        return this.rankedFiles.get(path)!;
+      },
+    });
+    this.panel.appendBlocks(this.comboPanel.blocks);
   }
+
+  // --- combinations (step 3) ---------------------------------------------------------------
+
+  private get comboMode(): boolean { return this.view.show === 'combination' && !!this.comboEntry; }
+
+  private get comboEntry(): ComboEntry | undefined { return this.deps.index.combos?.[this.view.type]; }
+
+  private get comboMap(): ComboMap | undefined {
+    return this.comboEntry?.maps.find((m) => m.id === this.view.combo);
+  }
+
+  /** Fetch the map on screen (once per file); shares are stored in thousandths. */
+  private async loadCombo(): Promise<void> {
+    const m = this.comboMap;
+    if (!m) { this.comboData = null; return; }
+    if (this.comboData?.id === `${this.view.type}/${m.id}`) return;
+    if (!this.comboFiles.has(m.file)) {
+      const id = `${this.view.type}/${m.id}`;
+      this.comboFiles.set(m.file, (fetchMaybeGzippedJSON(`${this.deps.archiveBase}/${m.file}`) as Promise<ComboMapFile>)
+        .then((f) => ({ id, boxes: f.boxes.map((v) => (v == null ? null : v / 1000)), deposits: f.deposits })));
+    }
+    this.ui.setStatus('loading the map ...');
+    const data = await this.comboFiles.get(m.file)!;
+    this.ui.setStatus('');
+    // Another map may have been picked while this one loaded.
+    if (this.comboMap?.file === m.file) this.comboData = data;
+  }
+
+  /** Each box's share of ground rated higher by what is on screen (a factor or a combination). */
+  private get boxShares(): Array<number | null> {
+    return this.comboMode ? this.comboData?.boxes ?? [] : this.deps.boxes.shares[this.factor.id];
+  }
+
+  private get depShares(): Array<number | null> {
+    return this.comboMode ? this.comboData?.deposits ?? [] : this.deps.deposits.shares[this.factor.id];
+  }
+
+  /** A combination has no single value to show, only shares. */
+  private get colourBy(): 'share' | 'value' { return this.comboMode ? 'share' : this.view.colourBy; }
 
   private get factor(): MolchanFactor {
     return this.deps.index.factors.find((f) => f.id === this.view.factor)!;
@@ -199,8 +269,12 @@ export class MolchanInstance {
 
   // --- type and factor -------------------------------------------------------------------
 
-  private applySetting(): void {
+  private async applySetting(): Promise<void> {
     if (this.selection?.kind === 'deposit' && this.deps.deposits.type[this.selection.id] !== this.view.type) this.select(null);
+    if (this.comboMode) {
+      if (!this.comboMap) this.view.combo = this.comboEntry!.maps[0]?.id ?? '';
+      await this.loadCombo();
+    }
     this.rebuildBoxes();
     this.rebuildDeposits();
     this.setCaption();
@@ -253,7 +327,7 @@ export class MolchanInstance {
    *  at 0 and dark at the column's `top` (held beyond it), so that for the distances and the
    *  palaeolatitude bright is again the end the factor rates higher. */
   private colourOf(share: number | null, value: number | null): string {
-    if (this.view.colourBy === 'share') {
+    if (this.colourBy === 'share') {
       return share == null ? NO_VALUE : ramp(this.deps.colormaps.viridis.colors, 1 - share);
     }
     if (value == null) return NO_VALUE;
@@ -293,8 +367,8 @@ export class MolchanInstance {
    *  first, so the best-rated ground is drawn on top. */
   private rebuildBoxes(): void {
     const b = this.boxes;
-    const shares = this.deps.boxes.shares[this.factor.id];
-    const values = this.deps.boxes.values[this.factor.column];
+    const shares = this.boxShares;
+    const values = this.comboMode ? [] : this.deps.boxes.values[this.factor.column];
     const rows: Array<{ p: number; s: number }> = [];
     for (let p = 0; p < b.nPlaces; p++) {
       const s = this.boxSlice(p);
@@ -304,7 +378,7 @@ export class MolchanInstance {
     this.boxIdx = rows.map((r) => r.p);
     const pts = rows.map(({ p, s }) => {
       const [lon, lat] = b.position(p, s)!;
-      return { lon, lat, share: b.at(shares, p, s), value: b.at(values, p, s), slice: s };
+      return { lon, lat, share: b.at(shares, p, s) ?? null, value: b.at(values, p, s) ?? null, slice: s };
     });
     this.load(this.boxLayer, pts, (p) => ({
       symbol: 'square', size: BOX_SIZE,
@@ -339,13 +413,13 @@ export class MolchanInstance {
   /** The deposits of this type formed near this age, each where it was at the time slice's age. */
   private rebuildDeposits(): void {
     const d = this.deps.deposits;
-    const shares = d.shares[this.factor.id];
-    const values = d.values[this.factor.column];
+    const shares = this.depShares;
+    const values = this.comboMode ? [] : d.values[this.factor.column];
     this.depIdx = [];
     for (let i = 0; i < d.deposit_id.length; i++) if (this.depositShown(i)) this.depIdx.push(i);
     const pts = this.depIdx.map((i) => {
       const [lon, lat] = this.depositPosition(i)!;
-      return { lon, lat, share: shares[i], value: values[i] };
+      return { lon, lat, share: shares[i] ?? null, value: values[i] ?? null };
     });
     this.load(this.depLayer, pts, (p) => ({
       symbol: 'diamond', size: DEP_SIZE,
@@ -369,7 +443,20 @@ export class MolchanInstance {
         : merged ? `as the test sees them: this slice is merged into the younger one of its pair, so these are `
           + `that slice's boxes (${merged} of ${pts.length})` : 'as the test sees them: this slice is the younger one of '
           + 'its pair, and its boxes carry the weight of both';
-      if (v.colourBy === 'share') {
+      const cm = this.comboMap;
+      if (this.comboMode && cm) {
+        const e = this.comboEntry!;
+        const none = pts.filter((p) => p.share == null).length;
+        blocks.push({
+          title: `Held-out map, ${sliceText}: ${cm.combination ?? 'best-of-all choice'}`,
+          ramp: { css: rampCss(this.deps.colormaps.viridis.colors, 1, 0), lo: '0 (best rated)', hi: '1 (worst rated)' },
+          rows: none ? [{ label: 'region not set aside (too few deposits)', fill: NO_VALUE, count: String(none) }] : [],
+          note: `Each region set aside (${e.regions.join(', ')}) is coloured by the map made without it: a square's `
+            + 'share of that region\'s continental area (every place and time slice, weighted by area x duration) '
+            + `rated higher, the same rated counting half. ${pts.length} places shown, ${counted}.`
+            + (cm.kind === 'best' ? ' Each region uses the combination picked for it on the other regions.' : ''),
+        });
+      } else if (v.colourBy === 'share') {
         blocks.push({
           title: `Ground, ${sliceText}: share rated higher by "${f.id}"`,
           ramp: { css: rampCss(this.deps.colormaps.viridis.colors, 1, 0), lo: '0 (best rated)', hi: '1 (worst rated)' },
@@ -415,6 +502,18 @@ export class MolchanInstance {
 
   private setCaption(): void {
     const b = this.deps.index.built_from;
+    const cm = this.comboMap;
+    if (this.comboMode && cm) {
+      this.ui.setCaption([
+        `${this.typeShort}, ${cm.kind === 'best' ? 'the best-of-all choice' : `"${cm.combination}"`}: step 3 of the `
+          + `ladder (equal weights, percentiles). ${cm.kind === 'best' ? 'Fully held-out skill' : 'Regional skill'} `
+          + `${cm.skill.toFixed(3)}. Merdith 2021 plate model. Click anything for its values.`,
+        'Squares: the ground, where each place was in the time slice covering this age, coloured by its held-out '
+          + 'map. Diamonds: deposits, where each was at that time slice\'s age, moving with its plate.',
+        `Values from RiftsClimate ${b.riftsclimate_commit ?? '?'} (prep/geode_combo_export.py).`,
+      ]);
+      return;
+    }
     const skill = this.deps.index.curves[this.view.type]?.[this.factor.id]?.skill;
     this.ui.setCaption([
       `${this.typeShort}, "${this.factor.id}": ${this.factor.rating}. Skill ${skill == null ? '-' : skill.toFixed(3)}. `
@@ -426,6 +525,10 @@ export class MolchanInstance {
   }
 
   private refreshDiagram(): void {
+    const e = this.comboEntry;
+    this.comboPanel.setVisible(this.comboMode);
+    if (this.comboMode && e) this.comboPanel.setData(this.view.type, e, this.view.combo);
+    if (this.comboMode) { this.refreshComboDiagram(); return; }
     const d = this.deps.deposits;
     const shares = d.shares[this.factor.id];
     const values = d.values[this.factor.column];
@@ -447,6 +550,45 @@ export class MolchanInstance {
       selected: this.selection?.kind === 'deposit' ? this.selection.id : null,
       factors: this.deps.index.factors.filter((f) => f.types.includes(this.view.type))
         .map((f) => ({ id: f.id, skill: curves[f.id]?.skill ?? NaN, current: f.id === this.factor.id })),
+    });
+  }
+
+  /** The Molchan diagram of a combination's held-out map, and its skill in each region. */
+  private refreshComboDiagram(): void {
+    const d = this.deps.deposits;
+    const cm = this.comboMap!;
+    const shares = this.depShares;
+    const shown = new Set(this.depIdx);
+    const points: DiagramPoint[] = [];
+    for (let i = 0; i < d.deposit_id.length; i++) {
+      const s = shares[i];
+      if (d.type[i] !== this.view.type || s == null) continue;
+      points.push({ dep: i, share: s, name: d.name[i], age: d.age_ma[i], shown: shown.has(i) && this.view.deposits,
+        fill: this.colourOf(s, null) });
+    }
+    points.sort((a, c) => a.share - c.share);
+    const best = cm.kind === 'best';
+    this.panel.setData({
+      title: `Molchan diagram: ${this.typeShort}, ${best ? 'the best-of-all choice' : `"${cm.combination}"`}`,
+      rating: '',
+      skill: cm.skill,
+      points: this.comboData ? points : [],
+      selected: this.selection?.kind === 'deposit' ? this.selection.id : null,
+      factors: Object.entries(cm.skill_by_region).map(([r, sk]) => ({
+        id: r, skill: sk, current: false, pickable: false,
+        label: `${r} (${cm.deposits_by_region[r]})${best ? `: ${cm.regions[r].combination}` : ''}`,
+        tip: `Made without ${r}: ${cm.regions[r].combination}\n${cm.regions[r].chosen.join('\n')}`,
+      })),
+      listTitle: best ? 'Each region set aside: the combination picked for it, and its skill there'
+        : 'Each region set aside: skill there',
+      listNote: 'In brackets, the region\'s deposits. Hover a row for what was chosen without that region '
+        + '(directions, preferred distances). The skill above pools the regions, each deposit counting once.',
+      note: 'Each deposit\'s share of its own region\'s continental area rated higher, by the map made without '
+        + 'that region (a held-out map). Up: the share of deposits that would be missed if only ground rated '
+        + 'higher than that were searched. Dashed: deposits placed at random. Skill is the shaded area, 0.5 minus '
+        + `the mean share${best ? ': here the fully held-out skill, nothing about a region having helped choose '
+          + 'or make its map' : ': the regional skill of the tables'}. Filled dots: deposits on the map now; click one `
+        + 'to go to it.',
     });
   }
 
@@ -548,6 +690,20 @@ export class MolchanInstance {
     });
   }
 
+  /** In combination mode: the share by the held-out map and the map it comes from. */
+  private comboLines(region: string, share: number | null): PopupLine[] {
+    const cm = this.comboMap;
+    if (!this.comboMode || !cm) return [];
+    const r = cm.regions[region];
+    if (!r) return [{ text: `${region || 'No region'}: not set aside (too few deposits), no held-out map`, color: '#9aa2ab' }];
+    return [
+      { text: `${share == null ? '-' : `${(share * 100).toFixed(1)}%`} of ${region}'s continental area rated higher`,
+        color: '#e6ebf0', swatch: this.colourOf(share, null) },
+      { text: `by the map made without ${region}: ${r.combination}`, color: '#b9c3cc' },
+      ...r.chosen.map((c) => ({ text: `  ${c}`, color: '#8a929b' })),
+    ];
+  }
+
   /** The popup's lines: values only, as RiftsClimate wrote them. */
   private describe(s: Selection): Array<string | PopupLine> {
     if (s.kind === 'deposit') {
@@ -555,6 +711,7 @@ export class MolchanInstance {
       const i = s.id;
       return [
         `${this.typeLabel}, ${d.age_ma[i]} Ma`,
+        ...this.comboLines(d.region[i], this.depShares[i] ?? null),
         ...this.factorLines((c) => d.values[c]?.[i] ?? null, (f) => d.shares[f]?.[i] ?? null),
         `Where it formed: ${fmtLonLat(d.m_lon[i] ?? NaN, d.m_lat[i] ?? NaN)} (Merdith 2021, at ${d.age_ma[i]} Ma)`,
         ...(() => {
@@ -575,6 +732,7 @@ export class MolchanInstance {
     const w = b.at(bf.weight, p, sn);
     const wt = b.at(bf.weight_in_test, p, sn) ?? 0;
     return [
+      ...this.comboLines(this.deps.index.place_region?.[p] ?? '', b.at(this.boxShares, p, sn) ?? null),
       ...this.factorLines((c) => b.at(bf.values[c] ?? [], p, sn), (f) => b.at(bf.shares[f] ?? [], p, sn)),
       `Time slice ${bf.snapshots.from_ma[sn]}-${bf.snapshots.to_ma[sn]} Ma, measured at ${bf.snapshots.snapshot_ma[sn]} Ma`,
       `Where it was: ${fmtLonLat(pos[0], pos[1])} (Merdith 2021)`,

@@ -20,6 +20,8 @@ export interface MolchanUICallbacks {
 export class MolchanUI {
   readonly gui: GUI;
   private factorCtl: Controller;
+  private comboCtl: Controller;
+  private colourCtl: Controller;
   private ageSlider: HTMLInputElement;
   private ageInput: HTMLInputElement;
   private ageSliderWrap: HTMLDivElement;
@@ -39,15 +41,20 @@ export class MolchanUI {
     for (const t of index.types) types[t.label] = t.id;
     this.gui.add(state, 'type', types).name('Deposit type').onChange(() => {
       this.setFactorOptions();
+      this.setComboOptions();
       this.cb.onSetting();
     });
+    this.gui.add(state, 'show', { 'One factor (step 1)': 'factor', 'Combination (step 3)': 'combination' })
+      .name('Show').onChange(() => { this.enableControls(); this.cb.onSetting(); });
     this.factorCtl = this.gui.add(state, 'factor', this.factorOptions()).name('Factor');
     this.factorCtl.onChange(() => this.cb.onSetting());
+    this.comboCtl = this.gui.add(state, 'combo', this.comboOptions()).name('Combination');
+    this.comboCtl.onChange(() => this.cb.onSetting());
 
     const layers = () => this.cb.onLayers();
     const map = this.gui.addFolder('Map layers');
     map.add(state, 'boxes').name('Ground (place x time slice)').onChange(layers);
-    map.add(state, 'colourBy', { 'Share of ground rated higher': 'share', 'Value of the factor': 'value' })
+    this.colourCtl = map.add(state, 'colourBy', { 'Share of ground rated higher': 'share', 'Value of the factor': 'value' })
       .name('  coloured by').onChange(layers);
     map.add(state, 'testOnly').name('  as the test sees it (slices in pairs)').onChange(layers);
     map.add(state, 'deposits').name('Deposits').onChange(layers);
@@ -98,8 +105,41 @@ export class MolchanUI {
     this.bottomBar.append(this.caption, this.ageGroup);
     document.body.append(this.status, this.legend, this.bottomBar, this.tooltip);
     this.setAge(state.age);
+    this.enableControls();
     this.layout();
     addEventListener('resize', () => this.layout());
+  }
+
+  /** The combination maps written for the chosen type: the best-of-all choice first. */
+  private comboOptions(): Record<string, string> {
+    const out: Record<string, string> = {};
+    const maps = this.index.combos?.[this.state.type]?.maps ?? [];
+    let top = 0;
+    for (const m of maps) {
+      const name = m.kind === 'best' ? 'Best-of-all choice (each region its own pick)'
+        : m.kind === 'top' ? `Best ${++top}: ${m.label}`
+          : m.kind === 'published' ? `Published: ${m.label}` : `One factor: ${m.label}`;
+      out[name] = m.id;
+    }
+    return out;
+  }
+
+  /** After the type changed: that type's maps, keeping the same kind of map where possible. */
+  setComboOptions(): void {
+    const opts = this.comboOptions();
+    if (!Object.values(opts).includes(this.state.combo)) this.state.combo = Object.values(opts)[0] ?? '';
+    this.comboCtl = this.comboCtl.options(opts).name('Combination');
+    this.comboCtl.onChange(() => this.cb.onSetting());
+    this.enableControls();
+  }
+
+  /** A factor is picked in one-factor mode, a map in combination mode (shares only). */
+  enableControls(): void {
+    const combo = this.state.show === 'combination';
+    this.factorCtl.show(!combo);
+    this.comboCtl.show(combo);
+    this.colourCtl.enable(!combo);
+    this.gui.title(combo ? 'Combinations (step 3): held-out maps' : 'One-factor Molchan test: its inputs');
   }
 
   /** The factors tested on the chosen deposit type (collision is MVT only). */
@@ -115,6 +155,7 @@ export class MolchanUI {
     // lil-gui's options() replaces the controller with a new one.
     this.factorCtl = this.factorCtl.options(opts).name('Factor');
     this.factorCtl.onChange(() => this.cb.onSetting());
+    this.enableControls();
   }
 
   mountProjectionToggle(button: HTMLElement): void {

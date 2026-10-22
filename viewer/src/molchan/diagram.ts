@@ -17,8 +17,14 @@ export interface DiagramData {
   skill: number;
   points: DiagramPoint[];
   selected: number | null;
-  /** Every factor tested on this type, with its skill, for switching factor here. */
-  factors: Array<{ id: string; skill: number; current: boolean }>;
+  /** Every factor tested on this type, with its skill, for switching factor here; for a
+   *  combination, each region set aside with its skill (label, tip; not pickable). */
+  factors: Array<{ id: string; skill: number; current: boolean; label?: string; tip?: string; pickable?: boolean }>;
+  /** The list's title and note, if not the factors'. */
+  listTitle?: string;
+  listNote?: string;
+  /** The diagram's note, if not the one-factor test's. */
+  note?: string;
 }
 
 export interface DiagramCallbacks {
@@ -49,6 +55,8 @@ export class MolchanPanel {
   private readonly skillEl: HTMLDivElement;
   private readonly noteEl: HTMLDivElement;
   private readonly factorsEl: HTMLDivElement;
+  private readonly listTitleEl: HTMLDivElement;
+  private readonly listNoteEl: HTMLDivElement;
   private readonly tip: HTMLDivElement;
   private data: DiagramData | null = null;
   private visible = true;
@@ -65,13 +73,10 @@ export class MolchanPanel {
     this.noteEl = div('chart-note');
     block.append(this.titleEl, this.canvas, this.skillEl, this.noteEl);
     const fblock = div('chart-block');
-    const ft = div('chart-title');
-    ft.textContent = 'Every factor on this deposit type: skill';
+    this.listTitleEl = div('chart-title');
     this.factorsEl = div('molchan-factors');
-    const fnote = div('chart-note');
-    fnote.textContent = 'Click a factor to show it. The bar is drawn from 0 (no better than random ground) '
-      + 'towards 0.5 (every deposit on the best-rated ground); left of 0, worse than random.';
-    fblock.append(ft, this.factorsEl, fnote);
+    this.listNoteEl = div('chart-note');
+    fblock.append(this.listTitleEl, this.factorsEl, this.listNoteEl);
     this.tip = div('popup');
     this.tip.style.display = 'none';
     this.el.append(block, fblock);
@@ -88,6 +93,11 @@ export class MolchanPanel {
 
   get width(): number { return this.visible ? this.el.offsetWidth : 0; }
 
+  /** More blocks, below the diagram and the list. */
+  appendBlocks(blocks: HTMLElement[]): void {
+    this.el.append(...blocks);
+  }
+
   setVisible(on: boolean): void {
     this.visible = on;
     this.el.style.display = on ? '' : 'none';
@@ -103,16 +113,21 @@ export class MolchanPanel {
     this.skillEl.textContent = `Skill ${sign(d.skill)} (${d.points.length} deposits)`
       + (agree ? '' : `: the dots give ${sign(fromDots)}, which does not match. Rebuild the archive.`);
     this.skillEl.classList.toggle('molchan-skill-bad', !agree);
-    this.noteEl.textContent = `${capital(d.rating)}. Across: the share of ground (every place and time slice, `
+    this.listTitleEl.textContent = d.listTitle ?? 'Every factor on this deposit type: skill';
+    this.listNoteEl.textContent = d.listNote ?? 'Click a factor to show it. The bar is drawn from 0 (no better '
+      + 'than random ground) towards 0.5 (every deposit on the best-rated ground); left of 0, worse than random.';
+    this.noteEl.textContent = d.note ?? `${capital(d.rating)}. Across: the share of ground (every place and time slice, `
       + 'weighted by area x duration) rated higher than where the deposit formed, ground rated the same '
       + 'counting half. Up: the share of deposits that would be missed if only ground rated higher than '
       + 'that were searched. Dashed: deposits placed at random on the ground. Skill is the shaded area '
       + 'between the curve and the dashed line, 0.5 minus the mean share. A share is a rank, not a '
       + 'chance that a deposit forms there. Filled dots: deposits on the map now; click one to go to it.';
     this.factorsEl.replaceChildren(...d.factors.map((f) => {
-      const row = div(`molchan-factor${f.current ? ' molchan-factor-current' : ''}`);
+      const pickable = f.pickable ?? true;
+      const row = div(`molchan-factor${f.current ? ' molchan-factor-current' : ''}${pickable ? '' : ' molchan-factor-fixed'}`);
       const name = div('molchan-factor-name');
-      name.textContent = f.id;
+      name.textContent = f.label ?? f.id;
+      if (f.tip) row.title = f.tip;
       const track = div('molchan-bar-track');
       const bar = div(`molchan-bar${f.skill < 0 ? ' molchan-bar-neg' : ''}`);
       // Zero in the middle of the track; half the track is a skill of 0.5.
@@ -122,7 +137,7 @@ export class MolchanPanel {
       const val = div('molchan-factor-skill');
       val.textContent = sign(f.skill);
       row.append(name, track, val);
-      row.addEventListener('click', () => this.cb.onPickFactor(f.id));
+      if (pickable) row.addEventListener('click', () => this.cb.onPickFactor(f.id));
       return row;
     }));
     this.redraw();
