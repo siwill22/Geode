@@ -255,6 +255,13 @@ const teeth800 = await page.evaluate(() => window.__molchan.teeth.visible);
 if (!teeth800) fail('subduction teeth not drawn at 800 Ma');
 await shoot('15-vms-boundaries-800');
 
+// --- kimberlites (not ore deposits, run as one more type): the best-of-all map, 120 Ma ------
+await setControl('Deposit type', 'Kimberlites', 'select');
+await setControl('Show', 'Combination', 'select');
+await setControl('Combination', 'Best-of-all', 'select');
+await setAge(120);
+await shoot('16-kimberlite-best-of-all-120');
+
 if (errors.length) { failures += errors.length; console.log('ERRORS:\n' + errors.join('\n')); }
 console.log(failures ? `${failures} problem(s)` : 'all checks passed');
 await browser.close();

@@ -555,7 +555,8 @@ export class MolchanInstance {
       const all = this.deps.deposits.type.filter((t) => t === v.type).length;
       const when = v.window === 'slice' ? `formed in this time slice` : `formed within ${v.window} Myr of ${v.age} Ma`;
       blocks.push({
-        title: `${this.typeShort} deposits ${when}`,
+        // kimberlites and carbonatites are rocks, not deposits: their short name is already plural
+        title: `${this.typeShort}${/s$/.test(this.typeShort) ? '' : ' deposits'} ${when}`,
         rows: [{ label: this.typeLabel, fill: '#ffffff', count: `${this.depIdx.length} of ${all}` }],
         note: 'Each drawn where it was at the time slice\'s age, moving with its plate (where it formed is in '
           + 'its popup), and coloured on the same scale as the ground by its '
