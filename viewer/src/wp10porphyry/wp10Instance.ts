@@ -1153,7 +1153,7 @@ function depthT(d: number, extentKm: number): number {
 
 /** Two-sided colour for a signed value s in [-1, 1]: neutral grey at 0, towards RdBu's
  *  red (negative) or blue (positive) ends. */
-function diverge(colors: [number, number, number][], s: number): string {
+export function diverge(colors: [number, number, number][], s: number): string {
   const g = [128, 136, 146];
   const end = s < 0 ? colors[Math.round(0.08 * (colors.length - 1))] : colors[Math.round(0.92 * (colors.length - 1))];
   const f = clamp01(Math.abs(s));

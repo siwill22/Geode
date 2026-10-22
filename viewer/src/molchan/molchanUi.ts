@@ -65,6 +65,11 @@ export class MolchanUI {
     map.add(state, 'syn_rift').name('Syn-rift margins').onChange(layers);
     map.add(state, 'collision').name('Collision margins').onChange(layers);
     map.add(state, 'after_collision').name('Margin lines after collision').onChange(layers);
+    if (index.files.boundaries) {
+      map.add(state, 'boundaries').name('Plate boundaries (Merdith 2021)').onChange(layers);
+      map.add(state, 'boundaryColour', { 'Type of boundary': 'label', 'Convergence rate': 'convergence' })
+        .name('  boundaries coloured by').onChange(layers);
+    }
     map.add(state, 'polygons').name('Continent polygons').onChange(layers);
     map.add(state, 'coastlines').name('Continents').onChange(layers);
     map.add(state, 'graticule').name('Latitude/longitude lines').onChange(layers);

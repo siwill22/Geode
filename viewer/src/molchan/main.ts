@@ -10,6 +10,7 @@ import { wireProjectionToggle } from '../core/projectionToggle';
 import { loadArchive, loadColormaps } from '../core/volume';
 import { fetchMaybeGzippedJSON } from '../../vendor/petrify/js/gzipFetch.js';
 import type { RiftsIndex } from '../riftsclimate/types';
+import type { BoundariesFile } from '../wp10porphyry/types';
 import { MolchanInstance } from './molchanInstance';
 import type { MolchanBoxesFile, MolchanDepositsFile, MolchanIndex } from './types';
 
@@ -23,7 +24,7 @@ const ARCHIVE = import.meta.env.VITE_ARCHIVE_BASE ?? `${import.meta.env.BASE_URL
 const BACKGROUND = 0x0b0d10;
 const START_PROJECTION: ProjectionMode = 'robinson';
 /** The archive format this page reads (prep_riftsclimate_molchan.py FORMAT). */
-const MOLCHAN_FORMAT = 3;
+const MOLCHAN_FORMAT = 4;
 
 /** An error whose message is meant for the reader: shown without a stack trace. */
 class ReadableError extends Error {}
@@ -111,14 +112,17 @@ async function boot(): Promise<void> {
       + `reads format ${MOLCHAN_FORMAT}. Rebuild it (env -u PYTHONPATH conda run -n riftsclimate python `
       + 'prep/prep_riftsclimate_molchan.py) or update the viewer code, then reload.');
   }
-  const [colormaps, boxes, deposits] = await Promise.all([
+  const [colormaps, boxes, deposits, boundaries] = await Promise.all([
     loadColormaps(ARCHIVE, archive.colormaps),
     fetchMaybeGzippedJSON(`${ARCHIVE}/${index.files.boxes}`) as Promise<MolchanBoxesFile>,
     fetchMaybeGzippedJSON(`${ARCHIVE}/${index.files.deposits}`) as Promise<MolchanDepositsFile>,
+    index.files.boundaries
+      ? fetchMaybeGzippedJSON(`${ARCHIVE}/${index.files.boundaries}`) as Promise<BoundariesFile>
+      : Promise.resolve(null),
   ]);
 
   instance = new MolchanInstance(camera, {
-    archiveBase: ARCHIVE, colormaps, index, rifts, boxes, deposits, rebuildCamera, onLayout: layout,
+    archiveBase: ARCHIVE, colormaps, index, rifts, boxes, deposits, boundaries, rebuildCamera, onLayout: layout,
   }, needsRender);
   instance.setCameraAspect(camera);
   layout();

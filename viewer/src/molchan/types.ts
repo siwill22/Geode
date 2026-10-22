@@ -36,8 +36,12 @@ export interface MolchanIndex {
    *  sorted, as RiftsClimate's pipeline computed them. */
   curves: Record<string, Record<string, { skill: number; shares: number[] }>>;
   counts: { places: number; snapshots: number; boxes: number; boxes_in_test: number; deposits: Record<string, number> };
-  files: { boxes: string; deposits: string };
+  /** boundaries: Merdith 2021's plate boundaries at every time slice (as the WP10 viewer's
+   *  BoundariesFile), null if not built. */
+  files: { boxes: string; deposits: string; boundaries: string | null };
   built_from: Record<string, string | null>;
+  /** Geode's Boundary Frames of the same model (with subduction polarity), for the teeth. */
+  teeth: { frames: string; age_max: number } | null;
   /** Step 3 of the ladder (combinations, equal weights, percentiles), per deposit type. */
   combos: Record<string, ComboEntry>;
   /** The region each place lies in today (as RiftsClimate's region_of), by place index. */
@@ -184,6 +188,9 @@ export interface MolchanViewState {
   collision: boolean;
   /** The margin lines from the end of their collision to today. */
   after_collision: boolean;
+  /** Merdith 2021's plate boundaries at the time slice, coloured by type or by convergence. */
+  boundaries: boolean;
+  boundaryColour: 'label' | 'convergence';
   polygons: boolean;
   coastlines: boolean;
   graticule: boolean;

@@ -235,6 +235,26 @@ if (picked2.name !== picked2.label) fail(`ranked row "${picked2.name}" showed ma
 await page.evaluate(() => { document.querySelector('.charts-panel').scrollTop = 0; });
 await shoot('12-cused-best-1-255');
 
+// --- plate boundaries: VMS, the passive margin, 400 Ma; then by convergence --------------
+await setControl('Show', 'One factor', 'select');
+await setControl('Deposit type', 'VMS', 'select');
+await setControl('Factor', 'passive margin', 'select');
+await setAge(400);
+const pl = await page.evaluate(() => { const i = window.__molchan; return { on: i.plateLines.visible, snap: i.plateSnap,
+  n: (i.deps.boundaries?.snapshots[String(i.plateSnap)] ?? []).length }; });
+if (!pl.on || pl.snap == null || !pl.n) fail(`plate boundaries not drawn at 400 Ma (${JSON.stringify(pl)})`);
+console.log(`plate boundaries at ${pl.snap} Ma: ${pl.n} boundaries`);
+await shoot('13-vms-boundaries-400');
+await setControl('boundaries coloured by', 'Convergence', 'select');
+await shoot('14-vms-boundaries-convergence-400');
+await setControl('boundaries coloured by', 'Type', 'select');
+const teeth = await page.evaluate(() => window.__molchan.teeth.visible);
+if (!teeth) fail('subduction teeth not drawn at 400 Ma');
+await setAge(800);
+const teeth800 = await page.evaluate(() => window.__molchan.teeth.visible);
+if (!teeth800) fail('subduction teeth not drawn at 800 Ma');
+await shoot('15-vms-boundaries-800');
+
 if (errors.length) { failures += errors.length; console.log('ERRORS:\n' + errors.join('\n')); }
 console.log(failures ? `${failures} problem(s)` : 'all checks passed');
 await browser.close();

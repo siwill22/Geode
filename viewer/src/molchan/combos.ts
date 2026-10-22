@@ -159,9 +159,12 @@ export class ComboPanel {
       ctx.stroke();
       const above = vals.filter((v) => v >= w.real).length;
       const med = vals.length ? vals[Math.floor((vals.length - 1) / 2)] / 2 + vals[Math.ceil((vals.length - 1) / 2)] / 2 : NaN;
-      text.push(`${cap(name)} skill: real ${w.real.toFixed(3)}; ${vals.length} fake worlds, median ${med.toFixed(3)}, `
-        + `highest ${vals.length ? vals[vals.length - 1].toFixed(3) : '-'}; ${above} of ${vals.length} reach the real one `
-        + `(without later collision: real ${w.real_nc.toFixed(3)}).`);
+      text.push(vals.length
+        ? `${cap(name)} skill: real ${w.real.toFixed(3)}; ${vals.length} fake worlds, median ${med.toFixed(3)}, `
+          + `highest ${vals[vals.length - 1].toFixed(3)}; ${above} of ${vals.length} reach the real one `
+          + `(without later collision: real ${w.real_nc.toFixed(3)}).`
+        : `${cap(name)} skill: real ${w.real.toFixed(3)} (without later collision ${w.real_nc.toFixed(3)}); `
+          + 'no fake worlds yet, so no chance level.');
     });
     // Axis ticks under the last row.
     ctx.fillStyle = INK;
@@ -192,9 +195,10 @@ export class ComboPanel {
     this.gainsEl.replaceChildren(...rows.map((g) => this.gainRow(g)));
     const n = rows[0]?.worlds ?? 0;
     this.gainsNote.textContent = 'The average change in regional skill when the factor is added to a combination '
-      + `that lacks it (step 3). The bar runs from 0 (the middle); half the track is ${GAIN_HALF}. The grey band runs `
-      + `from the median to the highest gain in ${n} fake worlds with no effect built in; in brackets, how many `
-      + 'of them reach the real gain.';
+      + `that lacks it (step 3). The bar runs from 0 (the middle); half the track is ${GAIN_HALF}. `
+      + (n ? `The grey band runs from the median to the highest gain in ${n} fake worlds with no effect built in; `
+        + 'in brackets, how many of them reach the real gain.'
+        : 'No fake worlds yet for this type, so no chance level is drawn.');
   }
 
   private gainRow(g: ComboGain): HTMLDivElement {

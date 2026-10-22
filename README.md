@@ -595,6 +595,20 @@ values were measured at, so lines and squares agree. Deposits are drawn at that 
 where RiftsClimate placed each at every time slice (its `positions.csv.gz`), so they move
 with the continents while they are on the map; where each formed is in its popup.
 
+Merdith 2021's plate boundaries at each time slice can be drawn under the margins, coloured by
+type or by convergence rate (RiftsClimate's `prep/geode_boundaries_export.py`, which checks they
+reproduce the subduction and ridge distances the analysis measured; run it before step 2 above).
+Subduction zones carry teeth on the overriding plate, drawn as in every Geode viewer from
+Boundary Frames, here Merdith 2021's for 0-1000 Ma (the shared reconstruction archive's stop at
+540 Ma). Build them once, before step 2; step 2 checks they hold the same subduction zones as
+RiftsClimate's boundaries at every time slice:
+
+```bash
+env -u PYTHONPATH conda run -n riftsclimate python -c "import sys; sys.path.insert(0, 'viewer/vendor/petrify/python'); \
+  from petrify.export import export_series; export_series(model_name='Merdith2021', start=0, end=1000, step=1, \
+  anchor_plate=0, out_dir='archive/riftsclimate/merdith2021/boundary_frames', quiet=True)"
+```
+
 "Show: Combination (step 3)" draws the combination results (RiftsClimate's step 3, equal
 weights): a combination's held-out map (each region set aside coloured by the map made without
 it), its Molchan diagram and skill in each region; the best-of-all choice, where each region

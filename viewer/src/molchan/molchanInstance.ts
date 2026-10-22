@@ -1,7 +1,10 @@
 import {
   FrontSide, Mesh, MeshBasicMaterial, Scene,
-  type Camera, type Material, type WebGLRenderer,
+  type Camera, type Material, type PerspectiveCamera, type WebGLRenderer,
 } from 'three';
+
+import { BoundaryOverlay } from '../core/boundaries';
+import type { ResolvedTheme } from '../core/theme';
 
 import { PointOverlay, type PointStyleHook, type PointsPayload } from '../core/pointOverlay';
 import { Coastlines, LAND_R_UNDER_SURFACE, fetchCoastlineData } from '../core/coastlines';
@@ -16,8 +19,10 @@ import type { Rect } from '../core/layout';
 import { fetchModelCoastlines } from '../riftsclimate/riftsclimateInstance';
 import { RiftLines } from '../riftsclimate/riftLines';
 import type { RiftsIndex, RiftsModel } from '../riftsclimate/types';
+import { BoundaryLines, CONV_MAX, LABEL_GROUPS } from '../wp10porphyry/boundaryLines';
 import { Boxes } from '../wp10porphyry/data';
-import { clamp01, fmtLonLat, fmtN, ramp, rampCss } from '../wp10porphyry/wp10Instance';
+import type { BoundariesFile } from '../wp10porphyry/types';
+import { clamp01, diverge, fmtLonLat, fmtN, ramp, rampCss } from '../wp10porphyry/wp10Instance';
 import type { LegendBlock } from '../wp10porphyry/wp10Ui';
 
 import { fetchMaybeGzippedJSON } from '../../vendor/petrify/js/gzipFetch.js';
@@ -68,6 +73,8 @@ export interface MolchanDeps {
   rifts: RiftsIndex;
   boxes: MolchanBoxesFile;
   deposits: MolchanDepositsFile;
+  /** Merdith 2021's plate boundaries per time slice (whole Myr), or null. */
+  boundaries: BoundariesFile | null;
   rebuildCamera(mode: ProjectionMode): Camera;
   /** The diagram panel opened or closed: the map must be resized. */
   onLayout(): void;
@@ -99,6 +106,11 @@ export class MolchanInstance {
   private model!: RiftsModel;
   private readonly outlines: RiftLines;
   private readonly margins: RiftLines;
+  /** Plate boundaries at the time slice on screen; the slice they belong to (whole Myr). */
+  private readonly plateLines: BoundaryLines;
+  /** Subduction teeth on the overriding plate's side, from Geode's Boundary Frames. */
+  private readonly teeth: BoundaryOverlay;
+  private plateSnap: number | null = null;
   private readonly boxLayer: PointOverlay;
   private readonly depLayer: PointOverlay;
 
@@ -134,6 +146,8 @@ export class MolchanInstance {
       syn_rift: true,
       collision: false,
       after_collision: false,
+      boundaries: !!deps.boundaries,
+      boundaryColour: 'label',
       polygons: false,
       coastlines: true,
       graticule: true,
@@ -144,9 +158,12 @@ export class MolchanInstance {
       new MeshBasicMaterial({ side: FrontSide, color: BACKDROP_COLOR }));
     this.scene.add(this.backdrop, this.graticule.lines);
 
-    // Drawing order: polygon outlines, ground boxes, margins, deposits.
+    // Drawing order: polygon outlines, ground boxes, plate boundaries, margins, deposits.
     this.outlines = new RiftLines(camera, 1.1);
     this.boxLayer = new PointOverlay(camera);
+    this.teeth = new BoundaryOverlay(camera as PerspectiveCamera);
+    this.plateLines = new BoundaryLines(camera, deps.boundaries?.convergent_cm_yr ?? 0.5,
+      (sgn) => diverge(deps.colormaps.RdBu.colors, sgn));
     this.margins = new RiftLines(camera);
     this.depLayer = new PointOverlay(camera);
 
@@ -262,6 +279,16 @@ export class MolchanInstance {
     for (const { p, data } of polygons) {
       this.outlines.addPhase(p.id, POLYGON_COLOUR, data.lines, data.table, this.view.polygons);
     }
+    if (this.deps.index.teeth) {
+      // Subduction zones only: the other types are drawn by BoundaryLines, so their stroke
+      // here is transparent (as the WP10 viewer).
+      const clear = { stroke: 'rgba(0,0,0,0)', width: 1, label: '' };
+      await this.teeth.load(`${base}/${this.deps.index.teeth.frames}`, {
+        subduction: { stroke: LABEL_GROUPS[0].colour, width: 1.2, label: 'Subduction zone' },
+        ridge: clear, transform: clear, other: clear,
+      });
+      this.plateSnap = null;
+    }
     this.ui.setStatus('');
     this.setCaption();
     this.applyAge(this.view.age);
@@ -293,6 +320,7 @@ export class MolchanInstance {
     this.coastlines?.setAge(Math.max(at, COAST_MIN_AGE));
     this.margins.setAge(at);
     this.outlines.setAge(at);
+    this.rebuildPlateLines();
     this.ui.setSlice(this.slice < 0 ? 'no time slice here'
       : `time slice ${sn.from_ma[this.slice]}-${sn.to_ma[this.slice]} Ma, measured at ${at} Ma`);
     this.rebuildBoxes();
@@ -305,6 +333,7 @@ export class MolchanInstance {
     this.graticule.lines.visible = this.view.graticule;
     for (const id of MARGINS) this.margins.setVisible(id, this.view[id]);
     for (const id of POLYGON_SETS) this.outlines.setVisible(id, this.view.polygons);
+    this.rebuildPlateLines();
     this.rebuildBoxes();
     this.rebuildDeposits();
     this.afterChange();
@@ -318,6 +347,52 @@ export class MolchanInstance {
     this.refreshLegend();
     this.refreshDiagram();
     this.onNeedsRender();
+  }
+
+  // --- plate boundaries ------------------------------------------------------------------
+
+  /** Merdith 2021's boundaries at the time slice on screen (its own age, whole Myr), the
+   *  boundaries RiftsClimate measured the subduction and ridge distances from. */
+  private rebuildPlateLines(): void {
+    const bf = this.deps.boundaries;
+    this.plateLines.visible = this.view.boundaries && !!bf;
+    if (!bf) return;
+    const snap = this.slice < 0 ? null : Math.round(this.deps.boxes.snapshots.snapshot_ma[this.slice]);
+    if (snap !== this.plateSnap) {
+      this.plateSnap = snap;
+      this.plateLines.setFeatures(snap === null ? [] : bf.snapshots[String(snap)] ?? [], bf.labels);
+      const t = this.deps.index.teeth;
+      if (t && snap !== null && snap <= t.age_max) void this.teeth.setAge(snap, () => this.onNeedsRender());
+    }
+    this.plateLines.restyle(this.view.boundaryColour, false);
+    this.styleTeeth();
+  }
+
+  /** Teeth in the subduction colour by type, pale by convergence (as the WP10 viewer). */
+  private styleTeeth(): void {
+    const t = this.deps.index.teeth;
+    this.teeth.visible = !!t && this.view.boundaries && this.plateSnap !== null && this.plateSnap <= t.age_max;
+    const stroke = this.view.boundaryColour === 'label' ? LABEL_GROUPS[0].colour : 'rgba(230, 235, 240, 0.85)';
+    this.teeth.applyTheme({
+      boundaryStyle: { subduction: { stroke, width: 1.2, label: 'Subduction zone' } },
+      boundaryDecoration: { triangleGap: 16, triangleSize: 6 },
+    } as unknown as ResolvedTheme);
+  }
+
+  /** A boundary under the pointer: its type and convergence rate there. */
+  private boundaryAt(x: number, y: number): string[] | null {
+    const bf = this.deps.boundaries;
+    if (!bf || !this.plateLines.visible || this.plateSnap === null) return null;
+    const hit = this.plateLines.pick(x, y);
+    if (!hit) return null;
+    const f = (bf.snapshots[String(this.plateSnap)] ?? [])[hit.feature];
+    if (!f) return null;
+    const label = bf.labels[f[0]];
+    const c = f[3][hit.vertex];
+    return [BoundaryLines.groupOf(label).id === 'other' ? label : BoundaryLines.groupOf(label).label,
+      `${label}, Merdith 2021 at ${this.plateSnap} Ma`,
+      c == null ? 'convergence: unknown (plate on one side only)'
+        : `${c >= 0 ? 'closing' : 'opening'} at ${Math.abs(c).toFixed(1)} cm/yr across it`];
   }
 
   // --- colours ---------------------------------------------------------------------------
@@ -488,6 +563,19 @@ export class MolchanInstance {
       });
     }
 
+    if (this.plateLines.visible) {
+      blocks.push(v.boundaryColour === 'label'
+        ? { title: `Plate boundaries, Merdith 2021, ${this.plateSnap ?? '-'} Ma`,
+          rows: LABEL_GROUPS.map((g) => ({ label: g.label, fill: g.colour })),
+          note: 'The lines the subduction and ridge distances are measured to; teeth on the overriding plate. '
+            + 'Hover one for its rate.' }
+        : { title: `Plate boundaries, Merdith 2021, ${this.plateSnap ?? '-'} Ma: convergence`,
+          ramp: { css: `linear-gradient(to right, ${[...Array(9).keys()].map((i) => `${diverge(this.deps.colormaps.RdBu.colors, i / 4 - 1)} ${i * 12.5}%`).join(', ')})`,
+            lo: `opening ${CONV_MAX} cm/yr`, mid: '0', hi: `closing ${CONV_MAX}` },
+          note: 'The rate the two plates close (+) or open (-) across the boundary, from their motions; '
+            + 'grey where a plate lies on one side only.' });
+    }
+
     const lines = (this.model?.rifts ?? []).filter((p) => (MARGINS as readonly string[]).includes(p.id)
       && v[p.id as typeof MARGINS[number]]);
     const rows = lines.map((p) => ({ label: p.label, fill: p.colour }));
@@ -627,6 +715,10 @@ export class MolchanInstance {
   }
 
   hoverAt(x: number, y: number): void {
+    // Deposits first, then a plate boundary, then the ground under it.
+    const onDeposit = this.depLayer.visible && this.depLayer.pick(x, y);
+    const b = onDeposit ? null : this.boundaryAt(x, y);
+    if (b) { this.ui.showTooltip(x, y, b); return; }
     for (const { kind, layer } of this.pickable()) {
       const picked = layer.pick(x, y);
       if (!picked) continue;
@@ -753,6 +845,8 @@ export class MolchanInstance {
     this.camera = camera;
     this.margins.setCamera(camera, mode);
     this.outlines.setCamera(camera, mode);
+    this.plateLines.setCamera(camera, mode);
+    this.teeth.setCamera(camera, mode);
     const oldGeom = this.backdrop.geometry;
     const oldMat = this.backdrop.material as Material;
     this.backdrop.geometry = createSurfaceGeometry(mode, BACKDROP_R);
@@ -794,6 +888,8 @@ export class MolchanInstance {
     for (const o of this.overlays) o.setReferenceRotation(q);
     this.margins.setOrientation(q);
     this.outlines.setOrientation(q);
+    this.plateLines.setOrientation(q);
+    this.teeth.setReferenceRotation(q);
     const lon = this.centreLongitude;
     this.ui.setMapHint(flat ? `Map centred on ${Math.abs(lon).toFixed(0)}°${lon < 0 ? 'W' : 'E'} · drag sideways to turn it` : '');
   }
@@ -803,6 +899,8 @@ export class MolchanInstance {
     for (const o of this.overlays) o.setCamera(camera, this.view.projection);
     this.margins.setCamera(camera, this.view.projection);
     this.outlines.setCamera(camera, this.view.projection);
+    this.plateLines.setCamera(camera, this.view.projection);
+    this.teeth.setCamera(camera, this.view.projection);
   }
 
   /** The map's rectangle: the window left of the diagram panel. */
@@ -811,6 +909,8 @@ export class MolchanInstance {
     for (const o of this.overlays) o.setRect(rect);
     this.margins.setRect(rect);
     this.outlines.setRect(rect);
+    this.plateLines.setRect(rect);
+    this.teeth.setRect(rect);
     this.ui.setRightInset(innerWidth - rect.width);
     this.panel.redraw();
   }
@@ -825,6 +925,8 @@ export class MolchanInstance {
     renderer.render(this.scene, this.camera);
     this.outlines.draw();
     this.boxLayer.draw();
+    if (this.plateLines.visible) this.plateLines.draw();
+    if (this.teeth.visible) this.teeth.draw();
     this.margins.draw();
     this.depLayer.draw();
   }

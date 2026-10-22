@@ -25,7 +25,17 @@ prep_riftsclimate.py). New content goes under archive/riftsclimate/molchan/ only
   combos/<type>/ranked.json.gz
                   every combination of the type with its regional skill, each region's, and the
                   map that draws it, if any
-  deposits.json.gz  the SEDEX, MVT and Cu-sed deposits the test uses: name, type, age, where they formed
+  boundaries.json.gz
+                  Merdith 2021's plate boundaries at every time slice (RiftsClimate's
+                  prep/geode_boundaries_export.py, checked there against the subduction and ridge
+                  distances the analysis measured): per boundary [label index, lon[], lat[],
+                  convergence cm/yr per point], as the WP10 viewer's
+  ../merdith2021/boundary_frames/  (not written here) Geode's own Boundary Frames of Merdith 2021,
+                  0-1000 Ma every 1 Myr, with each subduction zone's polarity (petrify's
+                  export_series; built once, see the README): the page draws the subduction
+                  teeth from them, checked here to have the same subduction zones as
+                  boundaries.json.gz at every time slice
+  deposits.json.gz  the SEDEX, MVT, Cu-sed, VMS and porphyry Cu deposits the test uses: name, type, age, where they formed
                   (Merdith 2021) and are today, region, each factor's value and share, and
                   where each was at every time slice's own age (RiftsClimate's positions.csv.gz;
                   deposit-major, null where it cannot be placed), so it moves with its plate
@@ -46,9 +56,11 @@ import pandas as pd
 
 RIFTSCLIMATE = Path("/Users/simon/GIT/RiftsClimate")
 PLATE_MODEL = "merdith2021"          # the id in archive/riftsclimate/index.json
-FORMAT = 3                 # 2: deposits carry their position at every time slice; 3: combinations
+FORMAT = 4                 # 2: deposits' positions at every slice; 3: combinations; 4: plate boundaries
 TYPES = {"PbZn-CD": "SEDEX (clastic-dominated Pb-Zn)", "PbZn-MVT": "MVT (Mississippi Valley-type Pb-Zn)",
-         "Cu-sed": "Cu-sed (sediment-hosted stratiform Cu)"}
+         "Cu-sed": "Cu-sed (sediment-hosted stratiform Cu)", "VMS": "VMS (volcanogenic massive sulfide)",
+         "Cu-por": "Cu-por (porphyry Cu)", "Kimberlite": "Kimberlites (Tappe et al. 2018)",
+         "Carbonatite": "Carbonatites (Humphreys-Williams & Zahirovic 2021)"}
 # Each column's unit, and how many decimals to keep.
 COLUMNS = {
     "post_rift_km": ("km", 0), "syn_rift_km": ("km", 0), "line_any_stage_km": ("km", 0),
@@ -103,6 +115,58 @@ def provenance(rc):
             (rc / "data/geode/molchan/boxes.csv.gz").stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
         "packed": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
     }
+
+
+TEETH_FRAMES = "riftsclimate/merdith2021/boundary_frames/boundaries.json"
+
+
+def pack_boundaries(path, out, snap_ma, archive):
+    """RiftsClimate's plate boundaries per time slice, packed as the WP10 viewer's
+    (prep_riftsclimate_wp10.py): per slice (whole Myr), [label index, lon[], lat[],
+    convergence[]] per boundary. Every slice of the boxes must have its boundaries."""
+    if not path.exists():
+        print(f"no {path}: no plate boundaries")
+        return None, None
+    with gzip.open(path, "rt") as fh:
+        bnd = json.load(fh)
+    labels = sorted({f["label"] for fs in bnd["snapshots_ma"].values() for f in fs})
+    lidx = {l: i for i, l in enumerate(labels)}
+    frames, npts = {}, 0
+    for age, fs in bnd["snapshots_ma"].items():
+        out_fs = []
+        for f in fs:
+            ll = np.asarray(f["lonlat"], float)
+            if len(ll) < 2:
+                continue
+            conv = [None if c is None else round(float(c), 2) for c in f["convergence_cm_yr"]]
+            out_fs.append([lidx[f["label"]], rounded(ll[:, 0], 2), rounded(ll[:, 1], 2), conv])
+            npts += len(ll)
+        frames[str(int(round(float(age))))] = out_fs
+    missing = sorted({int(round(a)) for a in snap_ma} - {int(k) for k in frames})
+    if missing:
+        raise SystemExit(f"plate boundaries missing for time slices {missing[:10]}")
+    size = write_gz_json(out / "boundaries.json.gz", {"model": bnd.get("model"),
+                                                      "convergent_cm_yr": bnd.get("convergent_cm_yr"),
+                                                      "labels": labels, "snapshots": frames})
+    print(f"boundaries: {len(frames)} time slices, {npts} points, {len(labels)} labels, {size / 1e6:.2f} MB")
+
+    # Subduction teeth: RiftsClimate's boundaries carry no polarity, so the page draws the teeth
+    # from Geode's Boundary Frames of the same model at the same whole-Myr age (as the WP10
+    # viewer). Every slice must have a frame with the same number of subduction zones.
+    idx_path = archive / TEETH_FRAMES
+    if not idx_path.exists():
+        raise SystemExit(f"no {idx_path}: build the Boundary Frames 0-1000 Ma first (README)")
+    have = {int(fr["time"]): fr for fr in json.loads(idx_path.read_text())["frames"]}
+    bad = []
+    for age, fs in frames.items():
+        fr = have.get(int(age))
+        n_rc = sum(1 for f in fs if labels[f[0]] == "SubductionZone")
+        if fr is None or fr["subduction"] != n_rc:
+            bad.append((age, n_rc, fr and fr["subduction"]))
+    if bad:
+        raise SystemExit(f"teeth: the Boundary Frames differ from the boundaries at {len(bad)} slices, e.g. {bad[:5]}")
+    print(f"teeth from {TEETH_FRAMES}: the same subduction zones at all {len(frames)} time slices")
+    return "riftsclimate/molchan/boundaries.json.gz", {"frames": TEETH_FRAMES, "age_max": max(have)}
 
 
 def pack_combos(src, out, boxes, pidx, sidx, P, S, deposits):
@@ -201,6 +265,10 @@ def main():
     boxes = pd.read_csv(src / "boxes.csv.gz")
     deposits = pd.read_csv(src / "deposits.csv")
     meta = json.loads((src / "molchan.json").read_text())
+    # the types RiftsClimate has written step 1 for (a type still running is left out)
+    types = [t for t in TYPES if t in meta["curves"]]
+    if set(meta["curves"]) - set(TYPES):
+        raise SystemExit(f"types this script has no label for: {sorted(set(meta['curves']) - set(TYPES))}")
     factors = meta["factors"]
     unknown = set(RATING) ^ set(factors)
     if unknown:
@@ -271,6 +339,7 @@ def main():
     print(f"deposits: {len(deposits)} ({deposits.deposit_class.value_counts().to_dict()}), {size / 1e3:.0f} kB")
 
     combos, place_region = pack_combos(src / "combos", out, boxes, pidx, sidx, P, S, deposits)
+    boundaries_file, teeth = pack_boundaries(src / "boundaries.json.gz", out, snap_ma, args.archive)
 
     # --- index ------------------------------------------------------------------------------
     index = {
@@ -278,16 +347,19 @@ def main():
         "format": FORMAT,
         "plate_model": PLATE_MODEL,
         "age_max": int(np.ceil(snaps[("to_ma", "max")].max())),
-        "types": [{"id": t, "label": TYPES[t]} for t in TYPES],
+        "types": [{"id": t, "label": TYPES[t]} for t in types],
         "factors": [{"id": f, "column": v["column"], "unit": COLUMNS[v["column"]][0],
-                     "rating": RATING[f], "types": ["PbZn-MVT"] if v["mvt_only"] else list(TYPES)}
+                     "rating": RATING[f], "types": ["PbZn-MVT"] if v["mvt_only"] else types}
                     for f, v in factors.items()],
         "curves": meta["curves"],
         "counts": {"places": P, "snapshots": S, "boxes": len(boxes),
                    "boxes_in_test": int((boxes.weight_in_test > 0).sum()),
                    "deposits": deposits.deposit_class.value_counts().to_dict()},
-        "files": {"boxes": "riftsclimate/molchan/boxes.json.gz", "deposits": "riftsclimate/molchan/deposits.json.gz"},
+        "files": {"boxes": "riftsclimate/molchan/boxes.json.gz", "deposits": "riftsclimate/molchan/deposits.json.gz",
+                  "boundaries": boundaries_file},
         "built_from": provenance(args.riftsclimate),
+        # subduction teeth: the Boundary Frames to draw them from (polarity), or null
+        "teeth": teeth,
         # step 3 of the ladder (combinations), per type; the region each place lies in today
         "combos": combos,
         "place_region": place_region,
