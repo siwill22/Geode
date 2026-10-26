@@ -24,7 +24,7 @@ const ARCHIVE = import.meta.env.VITE_ARCHIVE_BASE ?? `${import.meta.env.BASE_URL
 const BACKGROUND = 0x0b0d10;
 const START_PROJECTION: ProjectionMode = 'robinson';
 /** The archive format this page reads (prep_riftsclimate_molchan.py FORMAT). */
-const MOLCHAN_FORMAT = 4;
+const MOLCHAN_FORMAT = 5;
 
 /** An error whose message is meant for the reader: shown without a stack trace. */
 class ReadableError extends Error {}

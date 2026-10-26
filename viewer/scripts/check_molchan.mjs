@@ -262,6 +262,24 @@ await setControl('Combination', 'Best-of-all', 'select');
 await setAge(120);
 await shoot('16-kimberlite-best-of-all-120');
 
+// --- the new candidate factors (steps 1-2 only): kimberlites at 120 Ma -----------------------
+await setControl('Show', 'One factor', 'select');
+await setControl('Factor', 'tectonothermal age (TC1)', 'select');
+await setControl('coloured by', 'Value', 'select');
+const within = await page.$eval('.molchan-skill', (e) => e.innerText);
+if (!/Within period [+−]\d\.\d{3}/.test(within)) fail(`no within-period skill for a new factor: "${within}"`);
+await shoot('17-kimberlite-tc1-120-value');
+await setControl('coloured by', 'Share', 'select');
+await setControl('Factor', 'LIP within 10 Myr', 'select');
+await setAge(800);
+// no LIP record for ages older than 660 Ma: every square grey, out of the factor's test
+const lipShares = await page.evaluate(() => { const b = window.__molchan.deps.boxes;
+  const n = b.snapshots.snapshot_ma.length;
+  const s = b.snapshots.snapshot_ma.findIndex((x, k) => b.snapshots.from_ma[k] <= 800 && 800 < b.snapshots.to_ma[k]);
+  return b.shares['LIP within 10 Myr'].filter((v, k) => k % n === s && v != null).length; });
+if (lipShares) fail(`LIP within 10 Myr has ${lipShares} shares at 800 Ma (no record there)`);
+await shoot('18-kimberlite-lip-800-none');
+
 if (errors.length) { failures += errors.length; console.log('ERRORS:\n' + errors.join('\n')); }
 console.log(failures ? `${failures} problem(s)` : 'all checks passed');
 await browser.close();

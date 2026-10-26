@@ -20,6 +20,23 @@ export interface MolchanFactor {
   rating: string;
   /** The deposit types it is tested on. */
   types: string[];
+  /** 'ladder': a factor of steps 1-3; 'new': a new candidate factor for mantle-derived magmas,
+   *  through steps 1-2 only (RiftsClimate's prep/combo_new_factors.py). */
+  group?: 'ladder' | 'new';
+}
+
+/** One factor on one deposit type, as RiftsClimate's pipeline computed it. */
+export interface MolchanCurve {
+  /** 0.5 minus the mean share, against all the factor's ground (step 1). */
+  skill: number;
+  /** Every deposit's share, sorted. */
+  shares: number[];
+  /** New factors only: each deposit ranked against its own geological period's ground only. */
+  within_period?: number;
+  /** New factors only: each deposit ranked against its own region's ground only (step 2). */
+  step2?: number | null;
+  /** New factors only: the textbook 5% level, counting districts (1.645 / sqrt(12 n)). */
+  ref95_districts?: number;
 }
 
 export interface MolchanIndex {
@@ -34,7 +51,7 @@ export interface MolchanIndex {
   factors: MolchanFactor[];
   /** curves[type][factor]: the skill (0.5 minus the mean share) and every deposit's share,
    *  sorted, as RiftsClimate's pipeline computed them. */
-  curves: Record<string, Record<string, { skill: number; shares: number[] }>>;
+  curves: Record<string, Record<string, MolchanCurve>>;
   counts: { places: number; snapshots: number; boxes: number; boxes_in_test: number; deposits: Record<string, number> };
   /** boundaries: Merdith 2021's plate boundaries at every time slice (as the WP10 viewer's
    *  BoundariesFile), null if not built. */

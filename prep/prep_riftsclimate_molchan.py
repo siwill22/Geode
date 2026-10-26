@@ -10,8 +10,9 @@ What the archive already holds is READ by the page, never copied: the Merdith 20
 margin lines and continent polygons (archive/riftsclimate/index.json, written by
 prep_riftsclimate.py). New content goes under archive/riftsclimate/molchan/ only:
 
-  index.json      factors (label, column, unit, kind), deposit types, the Molchan curves
-                  (every deposit's share, sorted) and skills, counts, provenance
+  index.json      factors (label, column, unit, kind, group), deposit types, the Molchan curves
+                  (every deposit's share, sorted) and skills (for the new candidate factors also
+                  the within-period and region-by-region skills), counts, provenance
   boxes.json.gz   every place's id and, for each place and time slice, where
                   the place was (Merdith 2021), its weight, its weight in the test (time slices
                   merged in pairs), each factor's value and each factor's share of the test's
@@ -56,7 +57,8 @@ import pandas as pd
 
 RIFTSCLIMATE = Path("/Users/simon/GIT/RiftsClimate")
 PLATE_MODEL = "merdith2021"          # the id in archive/riftsclimate/index.json
-FORMAT = 4                 # 2: deposits' positions at every slice; 3: combinations; 4: plate boundaries
+FORMAT = 5                 # 2: deposits' positions at every slice; 3: combinations; 4: plate boundaries;
+                           # 5: the new candidate factors (steps 1-2), with within-period and regional skills
 TYPES = {"PbZn-CD": "SEDEX (clastic-dominated Pb-Zn)", "PbZn-MVT": "MVT (Mississippi Valley-type Pb-Zn)",
          "Cu-sed": "Cu-sed (sediment-hosted stratiform Cu)", "VMS": "VMS (volcanogenic massive sulfide)",
          "Cu-por": "Cu-por (porphyry Cu)", "Kimberlite": "Kimberlites (Tappe et al. 2018)",
@@ -66,6 +68,13 @@ COLUMNS = {
     "post_rift_km": ("km", 0), "syn_rift_km": ("km", 0), "line_any_stage_km": ("km", 0),
     "craton_edge_km": ("km", 0), "subduction_km": ("km", 0), "abs_lat_Merdith2021": ("°", 1),
     "collision_km": ("km", 0), "line_post_collision_km": ("km", 0),
+    # the new candidate factors for mantle-derived magmas (RiftsClimate's prep/combo_new_factors.py)
+    "llsvp_edge_km": ("km", 0), "llsvp_inside": ("yes/no", 0), "opt1_cmb_k": ("K", 0),
+    "opt1_basal_edge_km": ("km", 0), "opt1_um_k": ("K", 0), "lip_km": ("km", 0),
+    "gen_passive_km_main": ("km", 0), "gen_passive_km_tight": ("km", 0), "gen_passive_km_loose": ("km", 0),
+    "gen_closing_km_main": ("km", 0), "rift_wave_km_20": ("km", 0), "rift_wave_km_16": ("km", 0),
+    "craton_edge_signed_km": ("km", 0), "tc1_age_ma": ("Ma", 0), "inside_craton": ("yes/no", 0),
+    "lab_km": ("km", 0),
 }
 # How each factor rates the ground, in words (the export's FACTORS, as text for the page).
 RATING = {
@@ -78,6 +87,31 @@ RATING = {
     "distance from the equator": "nearer the equator (palaeolatitude) rates higher",
     "evaporite hump 19 by 18": "a bell curve in palaeolatitude, highest at 19°, width 18°",
     "collision at the time 500 km": "within 500 km of a margin in collision at the time rates 1, elsewhere 0",
+    # the new candidate factors (steps 1-2 only); mantle structure is measured where the place was
+    # in Muller 2022's mantle frame, though the square is drawn at its Merdith 2021 position
+    "LLSVP edge (SMEAN)": "nearer the edge of the LLSVPs (SMEAN 1% slow outline, Muller 2022 mantle frame) rates higher",
+    "within 10 degrees of the LLSVP edge": "within 1110 km of the LLSVP edge (Muller 2022 mantle frame) rates 1, elsewhere 0",
+    "above an LLSVP": "above an LLSVP (inside the SMEAN outline, Muller 2022 mantle frame) rates 1, elsewhere 0",
+    "core-mantle boundary temperature (OPT1)": "hotter at 2840 km in Muller 2022's OPT1 flow model at the time rates higher",
+    "hot basal structure edge (OPT1)": "nearer the edge of the hottest 20.9% of the core-mantle boundary (OPT1, at the time) rates higher",
+    "upper-mantle temperature at 293 km (OPT1)": "hotter at 293 km in the OPT1 flow model at the time rates higher",
+    "LIP within 10 Myr": "nearer a LIP emplaced within 10 Myr of the time rates higher; no value for ages older than 660 Ma",
+    "farther from subduction": "farther from a subduction zone at the time rates higher",
+    "subduction 1000-1500 km inboard": "1000-1500 km from a subduction zone at the time rates 1, elsewhere 0",
+    "generated passive margin": "nearer a generated passive margin at the time (main: 300 / 500 km) rates higher",
+    "generated passive margin, tight": "nearer a generated passive margin at the time (tight: 200 / 250 km) rates higher",
+    "generated passive margin, loose": "nearer a generated passive margin at the time (loose: 500 / 1000 km) rates higher",
+    "generated passive margin 200-1200 km": "200-1200 km from a generated passive margin at the time rates 1, elsewhere 0",
+    "rift wave 20.6 km/Myr": "nearer where a wave leaving a generated margin at breakup at 20.6 km/Myr would be (within 60 Myr) rates higher",
+    "rift wave 16.1 km/Myr": "nearer where a wave leaving a generated margin at breakup at 16.1 km/Myr would be (within 60 Myr) rates higher",
+    "generated margin closing at the time": "within 500 km of a generated margin that is closing at the time rates 1, elsewhere 0",
+    "200-300 km inside the craton edge": "200-300 km inside the craton edge (present-day map) rates 1, elsewhere 0",
+    "within 600 km of the craton edge": "within 600 km of the craton edge (present-day map) rates 1, elsewhere 0",
+    "tectonothermal age (TC1)": "older lithosphere (Artemieva 2006 TC1, present-day map) rates higher",
+    "Archean lithosphere (TC1)": "Archean lithosphere (TC1 age 2500 Ma or more, present-day map) rates 1, elsewhere 0",
+    "inside thick lithosphere": "inside the craton edge (present-day map) rates 1, elsewhere 0",
+    "lithosphere at least 150 km": "lithosphere 150 km thick or more (present-day map) rates 1, elsewhere 0",
+    "lithosphere thickness": "thicker lithosphere (present-day map) rates higher",
 }
 
 
@@ -348,8 +382,10 @@ def main():
         "plate_model": PLATE_MODEL,
         "age_max": int(np.ceil(snaps[("to_ma", "max")].max())),
         "types": [{"id": t, "label": TYPES[t]} for t in types],
+        # group: "ladder" for the factors of steps 1-3, "new" for the new candidates (steps 1-2 only)
         "factors": [{"id": f, "column": v["column"], "unit": COLUMNS[v["column"]][0],
-                     "rating": RATING[f], "types": ["PbZn-MVT"] if v["mvt_only"] else types}
+                     "rating": RATING[f], "types": ["PbZn-MVT"] if v["mvt_only"] else types,
+                     "group": "new" if v.get("new") else "ladder"}
                     for f, v in factors.items()],
         "curves": meta["curves"],
         "counts": {"places": P, "snapshots": S, "boxes": len(boxes),

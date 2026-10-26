@@ -15,11 +15,16 @@ export interface DiagramData {
   rating: string;
   /** RiftsClimate's skill for this type and factor (index.json curves). */
   skill: number;
+  /** More skills after the skill line (the new factors' within-period and regional skills). */
+  skillExtra?: string;
   points: DiagramPoint[];
   selected: number | null;
   /** Every factor tested on this type, with its skill, for switching factor here; for a
    *  combination, each region set aside with its skill (label, tip; not pickable). */
-  factors: Array<{ id: string; skill: number; current: boolean; label?: string; tip?: string; pickable?: boolean }>;
+  factors: Array<{ id: string; skill: number; current: boolean; label?: string; tip?: string; pickable?: boolean;
+    /** The new factors: the within-period skill, shown beside the skill; their rows sit under
+     *  their own heading (group 'new'). */
+    within?: number | null; group?: 'new' }>;
   /** The list's title and note, if not the factors'. */
   listTitle?: string;
   listNote?: string;
@@ -111,7 +116,8 @@ export class MolchanPanel {
     const fromDots = d.points.length ? 0.5 - d.points.reduce((a, p) => a + p.share, 0) / d.points.length : NaN;
     const agree = Math.abs(fromDots - d.skill) < 1e-3;
     this.skillEl.textContent = `Skill ${sign(d.skill)} (${d.points.length} deposits)`
-      + (agree ? '' : `: the dots give ${sign(fromDots)}, which does not match. Rebuild the archive.`);
+      + (agree ? '' : `: the dots give ${sign(fromDots)}, which does not match. Rebuild the archive.`)
+      + (d.skillExtra ? `. ${d.skillExtra}` : '');
     this.skillEl.classList.toggle('molchan-skill-bad', !agree);
     this.listTitleEl.textContent = d.listTitle ?? 'Every factor on this deposit type: skill';
     this.listNoteEl.textContent = d.listNote ?? 'Click a factor to show it. The bar is drawn from 0 (no better '
@@ -122,25 +128,39 @@ export class MolchanPanel {
       + 'that were searched. Dashed: deposits placed at random on the ground. Skill is the shaded area '
       + 'between the curve and the dashed line, 0.5 minus the mean share. A share is a rank, not a '
       + 'chance that a deposit forms there. Filled dots: deposits on the map now; click one to go to it.';
-    this.factorsEl.replaceChildren(...d.factors.map((f) => {
-      const pickable = f.pickable ?? true;
-      const row = div(`molchan-factor${f.current ? ' molchan-factor-current' : ''}${pickable ? '' : ' molchan-factor-fixed'}`);
-      const name = div('molchan-factor-name');
-      name.textContent = f.label ?? f.id;
-      if (f.tip) row.title = f.tip;
-      const track = div('molchan-bar-track');
-      const bar = div(`molchan-bar${f.skill < 0 ? ' molchan-bar-neg' : ''}`);
-      // Zero in the middle of the track; half the track is a skill of 0.5.
-      const w = Math.min(50, Math.abs(f.skill) * 100);
-      Object.assign(bar.style, { width: `${w}%`, left: f.skill < 0 ? `${50 - w}%` : '50%' });
-      track.appendChild(bar);
-      const val = div('molchan-factor-skill');
-      val.textContent = sign(f.skill);
-      row.append(name, track, val);
-      if (pickable) row.addEventListener('click', () => this.cb.onPickFactor(f.id));
-      return row;
-    }));
+    const rows: HTMLElement[] = [];
+    d.factors.forEach((f, i) => {
+      if (f.group === 'new' && d.factors[i - 1]?.group !== 'new') {
+        const head = div('molchan-factor-head');
+        head.textContent = 'New candidate factors (steps 1-2 only): skill, and within period';
+        rows.push(head);
+      }
+      rows.push(this.factorRow(f));
+    });
+    this.factorsEl.replaceChildren(...rows);
     this.redraw();
+  }
+
+  private factorRow(f: DiagramData['factors'][number]): HTMLElement {
+    const pickable = f.pickable ?? true;
+    const row = div(`molchan-factor${f.current ? ' molchan-factor-current' : ''}${pickable ? '' : ' molchan-factor-fixed'}`);
+    const name = div('molchan-factor-name');
+    name.textContent = f.label ?? f.id;
+    if (f.tip) row.title = f.tip;
+    const track = div('molchan-bar-track');
+    const bar = div(`molchan-bar${f.skill < 0 ? ' molchan-bar-neg' : ''}`);
+    // Zero in the middle of the track; half the track is a skill of 0.5.
+    const w = Math.min(50, Math.abs(f.skill) * 100);
+    Object.assign(bar.style, { width: `${w}%`, left: f.skill < 0 ? `${50 - w}%` : '50%' });
+    track.appendChild(bar);
+    const val = div('molchan-factor-skill');
+    val.textContent = sign(f.skill);
+    const wp = div('molchan-factor-skill molchan-factor-within');
+    wp.textContent = f.within == null ? '' : sign(f.within);
+    if (f.within != null) wp.title = 'Within period: each deposit against its own geological period\'s ground only';
+    row.append(name, track, val, wp);
+    if (pickable) row.addEventListener('click', () => this.cb.onPickFactor(f.id));
+    return row;
   }
 
   redraw(): void {

@@ -623,6 +623,17 @@ for c in PbZn-CD PbZn-MVT Cu-sed; do
 done
 ```
 
+The factor list also holds RiftsClimate's new candidate factors for mantle-derived magmas
+(its `prep/combo_new_factors.py`: LLSVP edge, the OPT1 flow model, LIPs, generated passive
+margins and the rift wave, distance from subduction, lithosphere age and thickness), under their
+own heading. They went through steps 1-2 only, so they have no combinations. Each is tested on
+its own ground: boxes with no value for it (e.g. no LIP record for ages older than 660 Ma) are
+grey and are not in its test. The diagram also shows their within-period skill (each deposit
+against its own geological period's ground only), their region-by-region skill and the 5%
+level, as RiftsClimate wrote them. Mantle-structure values were measured where the place was in
+Muller 2022's mantle frame, though every square is drawn at its Merdith 2021 position.
+`npm run check:molchan` checks every factor's skill on screen, the new ones included.
+
 ### Unresolved inputs
 
 These still need a path supplied, because no public source is recorded for them. Both are used

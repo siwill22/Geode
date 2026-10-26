@@ -50,7 +50,8 @@ const POLYGON_COLOUR = '#c8ced6';
 
 /** Each column in words, and where its colour scale saturates when coloured by value: a
  *  distance colour scale is most use near the features, so it stops at a few thousand km. */
-const COLUMN: Record<string, { label: string; top: number }> = {
+/** Each column's label and colour scale for "Value of the factor" (lo defaults to 0). */
+const COLUMN: Record<string, { label: string; top: number; lo?: number }> = {
   post_rift_km: { label: 'Distance to a passive (post-rift) margin', top: 3000 },
   syn_rift_km: { label: 'Distance to an active (syn-rift) axis', top: 3000 },
   line_any_stage_km: { label: 'Distance to a margin line in any stage', top: 3000 },
@@ -59,6 +60,23 @@ const COLUMN: Record<string, { label: string; top: number }> = {
   abs_lat_Merdith2021: { label: 'Palaeolatitude, degrees from the equator', top: 90 },
   collision_km: { label: 'Distance to a margin in collision', top: 3000 },
   line_post_collision_km: { label: 'Distance to a margin line after its collision', top: 3000 },
+  // the new candidate factors (steps 1-2 only)
+  llsvp_edge_km: { label: 'Distance to the LLSVP edge (Muller 2022 mantle frame)', top: 4000 },
+  llsvp_inside: { label: 'Above an LLSVP (1 = yes)', top: 1 },
+  opt1_cmb_k: { label: 'Temperature anomaly at 2840 km (OPT1)', lo: -400, top: 300 },
+  opt1_basal_edge_km: { label: 'Distance to the edge of the hot basal structure (OPT1)', top: 2500 },
+  opt1_um_k: { label: 'Temperature anomaly at 293 km (OPT1)', lo: -200, top: 100 },
+  lip_km: { label: 'Distance to a LIP emplaced within 10 Myr', top: 5000 },
+  gen_passive_km_main: { label: 'Distance to a generated passive margin (main)', top: 3000 },
+  gen_passive_km_tight: { label: 'Distance to a generated passive margin (tight)', top: 3000 },
+  gen_passive_km_loose: { label: 'Distance to a generated passive margin (loose)', top: 3000 },
+  gen_closing_km_main: { label: 'Distance to a generated margin closing at the time', top: 3000 },
+  rift_wave_km_20: { label: 'Distance to the rift wave at 20.6 km/Myr', top: 2000 },
+  rift_wave_km_16: { label: 'Distance to the rift wave at 16.1 km/Myr', top: 2000 },
+  craton_edge_signed_km: { label: 'Distance to the craton edge, negative inside', lo: -1000, top: 1500 },
+  tc1_age_ma: { label: 'Tectonothermal age of the lithosphere (TC1)', top: 3500 },
+  inside_craton: { label: 'Inside thick lithosphere (1 = yes)', top: 1 },
+  lab_km: { label: 'Lithosphere thickness', top: 300 },
 };
 
 type Kind = 'box' | 'deposit';
@@ -406,7 +424,9 @@ export class MolchanInstance {
       return share == null ? NO_VALUE : ramp(this.deps.colormaps.viridis.colors, 1 - share);
     }
     if (value == null) return NO_VALUE;
-    return ramp(this.deps.colormaps.cividis.colors, 1 - clamp01(value / (COLUMN[this.factor.column]?.top ?? 1)));
+    const col = COLUMN[this.factor.column] ?? { top: 1 };
+    const lo = col.lo ?? 0;
+    return ramp(this.deps.colormaps.cividis.colors, 1 - clamp01((value - lo) / (col.top - lo)));
   }
 
   // --- the point sets --------------------------------------------------------------------
@@ -532,9 +552,13 @@ export class MolchanInstance {
             + (cm.kind === 'best' ? ' Each region uses the combination picked for it on the other regions.' : ''),
         });
       } else if (v.colourBy === 'share') {
+        const none = pts.filter((p) => p.share == null).length;
         blocks.push({
           title: `Ground, ${sliceText}: share rated higher by "${f.id}"`,
           ramp: { css: rampCss(this.deps.colormaps.viridis.colors, 1, 0), lo: '0 (best rated)', hi: '1 (worst rated)' },
+          // a new candidate factor is tested only on the ground with a value for it (e.g. no LIP
+          // record for ages older than 660 Ma)
+          rows: none ? [{ label: 'no value for this factor: not in its test', fill: NO_VALUE, count: String(none) }] : [],
           note: `Share of all the test's ground (every place and time slice, weighted by area x duration) rated `
             + `higher than this box, the same rated counting half. ${pts.length} places shown, ${counted}. `
             + 'A square is a place (about 290 km apart) where it was then.',
@@ -543,10 +567,13 @@ export class MolchanInstance {
         const col = COLUMN[f.column] ?? { label: f.column, top: 1 };
         const none = pts.filter((p) => p.value == null).length;
         blocks.push({
-          title: `Ground, ${sliceText}: ${col.label.toLowerCase()}`,
-          ramp: { css: rampCss(this.deps.colormaps.cividis.colors, 1, 0), lo: `0 ${f.unit}`, hi: `${fmtN(col.top)} ${f.unit}${col.top < 90 ? ' or more' : ''}` },
+          title: `Ground, ${sliceText}: ${col.label[0].toLowerCase() + col.label.slice(1)}`,
+          ramp: { css: rampCss(this.deps.colormaps.cividis.colors, 1, 0),
+            lo: f.unit === 'yes/no' ? 'no' : `${fmtN(col.lo ?? 0)} ${f.unit}${col.lo != null ? ' or less' : ''}`,
+            hi: f.unit === 'yes/no' ? 'yes' : `${fmtN(col.top)} ${f.unit}${col.top > 1 ? ' or more' : ''}` },
           rows: none ? [{ label: 'none at this time (cannot be measured)', fill: NO_VALUE, count: String(none) }] : [],
-          note: `${pts.length} places shown, ${counted}. Distances are along the Earth's surface.`,
+          note: `${pts.length} places shown, ${counted}.${f.unit === 'km' ? ' Distances are along the Earth\'s surface.' : ''}`
+            + (f.group === 'new' ? ' A new candidate factor (steps 1-2 only, not in the combinations).' : ''),
         });
       }
     }
@@ -603,10 +630,13 @@ export class MolchanInstance {
       ]);
       return;
     }
-    const skill = this.deps.index.curves[this.view.type]?.[this.factor.id]?.skill;
+    const curve = this.deps.index.curves[this.view.type]?.[this.factor.id];
+    const skill = curve?.skill;
     this.ui.setCaption([
-      `${this.typeShort}, "${this.factor.id}": ${this.factor.rating}. Skill ${skill == null ? '-' : skill.toFixed(3)}. `
-        + 'Merdith 2021 plate model. Click anything for its values.',
+      // the rating in words is in the diagram's note: kept out of here so the caption stays short
+      `${this.typeShort}, "${this.factor.id}". Skill ${skill == null ? '-' : skill.toFixed(3)}`
+        + (curve?.within_period != null ? `; within period ${curve.within_period.toFixed(3)}` : '')
+        + '. Merdith 2021 plate model. Click anything for its values.',
       'Squares: the ground, where each place was in the time slice covering this age. Diamonds: deposits, '
         + 'where each was at that time slice\'s age, moving with its plate.',
       `Values from RiftsClimate ${b.riftsclimate_commit ?? '?'} (${b.script}, ${b.script_state}), written ${b.data_written}.`,
@@ -631,14 +661,22 @@ export class MolchanInstance {
     }
     points.sort((a, c) => a.share - c.share);
     const curves = this.deps.index.curves[this.view.type] ?? {};
+    const c = curves[this.factor.id];
+    const fmt = (x: number) => `${x >= 0 ? '+' : '−'}${Math.abs(x).toFixed(3)}`;
     this.panel.setData({
       title: `Molchan diagram: ${this.typeShort}, "${this.factor.id}"`,
       rating: this.factor.rating,
-      skill: curves[this.factor.id]?.skill ?? NaN,
+      skill: c?.skill ?? NaN,
+      // the new factors: within period (each deposit against its own period's ground) and region
+      // by region (step 2), as RiftsClimate's prep/combo_new_factors.py computed them
+      skillExtra: c?.within_period == null ? undefined
+        : `Within period ${fmt(c.within_period)}; region by region ${c.step2 == null ? '-' : fmt(c.step2)}; `
+          + `5% level ${c.ref95_districts?.toFixed(3) ?? '-'} counting districts.`,
       points,
       selected: this.selection?.kind === 'deposit' ? this.selection.id : null,
       factors: this.deps.index.factors.filter((f) => f.types.includes(this.view.type))
-        .map((f) => ({ id: f.id, skill: curves[f.id]?.skill ?? NaN, current: f.id === this.factor.id })),
+        .map((f) => ({ id: f.id, skill: curves[f.id]?.skill ?? NaN, current: f.id === this.factor.id,
+          within: curves[f.id]?.within_period ?? null, group: f.group === 'new' ? 'new' : undefined })),
     });
   }
 
@@ -934,5 +972,8 @@ export class MolchanInstance {
 }
 
 function fmtValue(v: number, unit: string): string {
-  return unit === 'km' ? `${Math.round(v).toLocaleString()} km` : `${v.toFixed(1)}${unit}`;
+  if (unit === 'km') return `${Math.round(v).toLocaleString()} km`;
+  if (unit === 'yes/no') return v ? 'yes' : 'no';
+  if (unit === 'K' || unit === 'Ma') return `${Math.round(v).toLocaleString()} ${unit}`;
+  return `${v.toFixed(1)}${unit}`;
 }
