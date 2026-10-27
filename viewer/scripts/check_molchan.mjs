@@ -280,24 +280,6 @@ const lipShares = await page.evaluate(() => { const b = window.__molchan.deps.bo
 if (lipShares) fail(`LIP within 10 Myr has ${lipShares} shares at 800 Ma (no record there)`);
 await shoot('18-kimberlite-lip-800-none');
 
-// --- generated margins (RiftsClimate's prep/margin_generator.py): today, then 150 Ma ---------
-const hasGen = await page.evaluate(() => !!window.__molchan.deps.generated);
-if (!hasGen) fail('no generated margins in the archive');
-else {
-  await setControl('Factor', 'generated passive margin', 'select');
-  await setControl('Generated margins (RiftsClimate)', true, 'bool');
-  await setAge(0);
-  const n0 = await page.evaluate(() => window.__molchan.genPts.length);
-  if (!(n0 > 1000)) fail(`generated passive margins today: ${n0} points`);
-  console.log(`generated passive margins (main) today: ${n0} points`);
-  await shoot('19-generated-passive-0');
-  await setControl('show', 'Passive, rifting and closing', 'select');
-  await setAge(150);
-  await shoot('20-generated-all-150');
-  await setControl('show', 'Passive only', 'select');
-  await setControl('Generated margins (RiftsClimate)', false, 'bool');
-}
-
 if (errors.length) { failures += errors.length; console.log('ERRORS:\n' + errors.join('\n')); }
 console.log(failures ? `${failures} problem(s)` : 'all checks passed');
 await browser.close();

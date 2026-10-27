@@ -30,8 +30,8 @@ import { ComboPanel } from './combos';
 import { MolchanPanel, type DiagramPoint } from './diagram';
 import { MolchanUI } from './molchanUi';
 import type {
-  ComboEntry, ComboMap, ComboMapFile, ComboRankedFile, GeneratedMarginsFile, MolchanBoxesFile, MolchanDepositsFile,
-  MolchanFactor, MolchanIndex, MolchanViewState,
+  ComboEntry, ComboMap, ComboMapFile, ComboRankedFile, MolchanBoxesFile, MolchanDepositsFile, MolchanFactor,
+  MolchanIndex, MolchanViewState,
 } from './types';
 
 const LAND_FILL_COLOR = 0x5f5a52;
@@ -41,10 +41,6 @@ const COAST_MIN_AGE = 0.001;
 const RING = { highlightRadius: 6, highlightWidth: 2.2, highlight: 'rgba(255, 255, 255, 1)' };
 const BOX_SIZE = 2.4;
 const DEP_SIZE = 4.4;
-/** RiftsClimate's generated margins: one dot per continent-outline point (about every 50 km). */
-const GEN_SIZE = 3.0;
-// colours outside the ground's viridis and cividis, so they read on any ground
-const GEN_COLOUR: Record<string, string> = { passive: '#ff3df2', rifting: '#ffd54f', closing: '#ff7a1a' };
 /** Ground with no such feature at the time (a distance that cannot be measured). */
 const NO_VALUE = 'rgba(150, 156, 164, 0.35)';
 const MARGINS = ['post_rift', 'syn_rift', 'collision', 'after_collision'] as const;
@@ -97,8 +93,6 @@ export interface MolchanDeps {
   deposits: MolchanDepositsFile;
   /** Merdith 2021's plate boundaries per time slice (whole Myr), or null. */
   boundaries: BoundariesFile | null;
-  /** RiftsClimate's generated margins per time slice (whole Myr), or null. */
-  generated: GeneratedMarginsFile | null;
   rebuildCamera(mode: ProjectionMode): Camera;
   /** The diagram panel opened or closed: the map must be resized. */
   onLayout(): void;
@@ -137,10 +131,6 @@ export class MolchanInstance {
   private plateSnap: number | null = null;
   private readonly boxLayer: PointOverlay;
   private readonly depLayer: PointOverlay;
-  private readonly genLayer: PointOverlay;
-  /** The generated-margin points on screen: their state, and breakup age (main, passive). */
-  private genPts: Array<{ state: string; breakup: number | null }> = [];
-  private genSnap: number | null = null;
 
   private readonly boxes: Boxes;
   private readonly comboPanel: ComboPanel;
@@ -176,9 +166,6 @@ export class MolchanInstance {
       after_collision: false,
       boundaries: !!deps.boundaries,
       boundaryColour: 'label',
-      generated: false,
-      genVersion: 'main',
-      genShow: 'passive',
       polygons: false,
       coastlines: true,
       graticule: true,
@@ -196,7 +183,6 @@ export class MolchanInstance {
     this.plateLines = new BoundaryLines(camera, deps.boundaries?.convergent_cm_yr ?? 0.5,
       (sgn) => diverge(deps.colormaps.RdBu.colors, sgn));
     this.margins = new RiftLines(camera);
-    this.genLayer = new PointOverlay(camera);
     this.depLayer = new PointOverlay(camera);
 
     this.ui = new MolchanUI(this.view, {
@@ -353,7 +339,6 @@ export class MolchanInstance {
     this.margins.setAge(at);
     this.outlines.setAge(at);
     this.rebuildPlateLines();
-    this.rebuildGenerated();
     this.ui.setSlice(this.slice < 0 ? 'no time slice here'
       : `time slice ${sn.from_ma[this.slice]}-${sn.to_ma[this.slice]} Ma, measured at ${at} Ma`);
     this.rebuildBoxes();
@@ -367,14 +352,12 @@ export class MolchanInstance {
     for (const id of MARGINS) this.margins.setVisible(id, this.view[id]);
     for (const id of POLYGON_SETS) this.outlines.setVisible(id, this.view.polygons);
     this.rebuildPlateLines();
-    this.rebuildGenerated();
     this.rebuildBoxes();
     this.rebuildDeposits();
     this.afterChange();
   }
 
   private afterChange(): void {
-    this.genLayer.visible = this.view.generated && !!this.deps.generated && this.genSnap !== null;
     this.boxLayer.visible = this.view.boxes;
     this.depLayer.visible = this.view.deposits;
     this.refreshHighlight();
@@ -382,49 +365,6 @@ export class MolchanInstance {
     this.refreshLegend();
     this.refreshDiagram();
     this.onNeedsRender();
-  }
-
-  // --- generated margins -----------------------------------------------------------------
-
-  /** RiftsClimate's generated margins at the time slice's own age (whole Myr, as the boxes'
-   *  distances to them were measured), in the chosen version: passive points only, or passive,
-   *  rifting and closing. */
-  private rebuildGenerated(): void {
-    const g = this.deps.generated;
-    this.genSnap = null;
-    this.genPts = [];
-    if (!g || !this.view.generated || this.slice < 0) return;
-    const snap = Math.round(this.deps.boxes.snapshots.snapshot_ma[this.slice]);
-    const f = g.snapshots[String(snap)];
-    if (!f) return;
-    this.genSnap = snap;
-    const st = f[this.view.genVersion];
-    const pts: Array<Record<string, unknown>> = [];
-    // closing first, then rifting, so the passive points are drawn on top
-    for (const want of ['closing', 'rifting', 'passive']) {
-      if (this.view.genShow === 'passive' && want !== 'passive') continue;
-      const k = g.states.indexOf(want);
-      for (let i = 0; i < st.length; i++) {
-        if (st[i] !== k) continue;
-        pts.push({ lon: f.lon[i], lat: f.lat[i], state: want });
-        this.genPts.push({ state: want, breakup: this.view.genVersion === 'main' ? f.breakup_main[i] : null });
-      }
-    }
-    this.load(this.genLayer, pts, (p) => ({ symbol: 'circle', size: GEN_SIZE, fill: GEN_COLOUR[p.state as string] }),
-      GEN_SIZE, 'rgba(8, 10, 14, 0.85)');
-  }
-
-  /** A generated-margin point under the pointer: its state, and for a passive point (main) its
-   *  generated breakup. */
-  private generatedAt(x: number, y: number): string[] | null {
-    if (!this.genLayer.visible) return null;
-    const hit = this.genLayer.pick(x, y);
-    const p = hit ? this.genPts[hit.index] : undefined;
-    if (!p) return null;
-    const [dr, dc] = this.deps.generated!.versions[this.view.genVersion];
-    return [`Generated margin: ${p.state}`,
-      `${this.view.genVersion} version (${dr} / ${dc} km), Merdith 2021 at ${this.genSnap} Ma`,
-      ...(p.breakup != null ? [`generated breakup (spreading onset) ${p.breakup} Ma`] : [])];
   }
 
   // --- plate boundaries ------------------------------------------------------------------
@@ -664,19 +604,6 @@ export class MolchanInstance {
             + 'grey where a plate lies on one side only.' });
     }
 
-    if (this.genLayer.visible && this.deps.generated) {
-      const [dr, dc] = this.deps.generated.versions[this.view.genVersion];
-      const n = (s: string) => String(this.genPts.filter((p) => p.state === s).length);
-      const shown = this.view.genShow === 'passive' ? ['passive'] : ['passive', 'rifting', 'closing'];
-      blocks.push({
-        title: `Generated margins (${this.view.genVersion}), Merdith 2021, ${this.genSnap} Ma`,
-        rows: shown.map((s) => ({ label: s === 'passive' ? 'Passive margin' : s === 'rifting' ? 'Rifting'
-          : 'Closing (end of the passive stage)', fill: GEN_COLOUR[s], count: n(s) })),
-        note: `Continent-outline points: rifting within ${dr} km of a spreading boundary, passive once it has moved `
-          + `away, closing once a closing boundary is within ${dc} km. Hover one for more.`,
-      });
-    }
-
     const lines = (this.model?.rifts ?? []).filter((p) => (MARGINS as readonly string[]).includes(p.id)
       && v[p.id as typeof MARGINS[number]]);
     const rows = lines.map((p) => ({ label: p.label, fill: p.colour }));
@@ -829,7 +756,7 @@ export class MolchanInstance {
   hoverAt(x: number, y: number): void {
     // Deposits first, then a plate boundary, then the ground under it.
     const onDeposit = this.depLayer.visible && this.depLayer.pick(x, y);
-    const b = onDeposit ? null : this.generatedAt(x, y) ?? this.boundaryAt(x, y);
+    const b = onDeposit ? null : this.boundaryAt(x, y);
     if (b) { this.ui.showTooltip(x, y, b); return; }
     for (const { kind, layer } of this.pickable()) {
       const picked = layer.pick(x, y);
@@ -949,7 +876,7 @@ export class MolchanInstance {
 
   // --- projection and frame ----------------------------------------------------------------
 
-  private get overlays(): PointOverlay[] { return [this.boxLayer, this.genLayer, this.depLayer]; }
+  private get overlays(): PointOverlay[] { return [this.boxLayer, this.depLayer]; }
 
   setProjection(mode: ProjectionMode): void {
     this.view.projection = mode;
@@ -1040,7 +967,6 @@ export class MolchanInstance {
     if (this.plateLines.visible) this.plateLines.draw();
     if (this.teeth.visible) this.teeth.draw();
     this.margins.draw();
-    if (this.genLayer.visible) this.genLayer.draw();
     this.depLayer.draw();
   }
 }

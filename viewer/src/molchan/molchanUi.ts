@@ -70,13 +70,6 @@ export class MolchanUI {
       map.add(state, 'boundaryColour', { 'Type of boundary': 'label', 'Convergence rate': 'convergence' })
         .name('  boundaries coloured by').onChange(layers);
     }
-    if (index.files.generated_margins) {
-      map.add(state, 'generated').name('Generated margins (RiftsClimate)').onChange(layers);
-      map.add(state, 'genVersion', { 'Main (300 / 500 km)': 'main', 'Tight (200 / 250 km)': 'tight', 'Loose (500 / 1000 km)': 'loose' })
-        .name('  version').onChange(layers);
-      map.add(state, 'genShow', { 'Passive only': 'passive', 'Passive, rifting and closing': 'all' })
-        .name('  show').onChange(layers);
-    }
     map.add(state, 'polygons').name('Continent polygons').onChange(layers);
     map.add(state, 'coastlines').name('Continents').onChange(layers);
     map.add(state, 'graticule').name('Latitude/longitude lines').onChange(layers);
