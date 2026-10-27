@@ -71,8 +71,6 @@ COLUMNS = {
     # the new candidate factors for mantle-derived magmas (RiftsClimate's prep/combo_new_factors.py)
     "llsvp_edge_km": ("km", 0), "llsvp_inside": ("yes/no", 0), "opt1_cmb_k": ("K", 0),
     "opt1_basal_edge_km": ("km", 0), "opt1_um_k": ("K", 0), "lip_km": ("km", 0),
-    "gen_passive_km_main": ("km", 0), "gen_passive_km_tight": ("km", 0), "gen_passive_km_loose": ("km", 0),
-    "gen_closing_km_main": ("km", 0), "rift_wave_km_20": ("km", 0), "rift_wave_km_16": ("km", 0),
     "craton_edge_signed_km": ("km", 0), "tc1_age_ma": ("Ma", 0), "inside_craton": ("yes/no", 0),
     "lab_km": ("km", 0),
 }
@@ -98,13 +96,6 @@ RATING = {
     "LIP within 10 Myr": "nearer a LIP emplaced within 10 Myr of the time rates higher; no value for ages older than 660 Ma",
     "farther from subduction": "farther from a subduction zone at the time rates higher",
     "subduction 1000-1500 km inboard": "1000-1500 km from a subduction zone at the time rates 1, elsewhere 0",
-    "generated passive margin": "nearer a generated passive margin at the time (main: 300 / 500 km) rates higher",
-    "generated passive margin, tight": "nearer a generated passive margin at the time (tight: 200 / 250 km) rates higher",
-    "generated passive margin, loose": "nearer a generated passive margin at the time (loose: 500 / 1000 km) rates higher",
-    "generated passive margin 200-1200 km": "200-1200 km from a generated passive margin at the time rates 1, elsewhere 0",
-    "rift wave 20.6 km/Myr": "nearer where a wave leaving a generated margin at breakup at 20.6 km/Myr would be (within 60 Myr) rates higher",
-    "rift wave 16.1 km/Myr": "nearer where a wave leaving a generated margin at breakup at 16.1 km/Myr would be (within 60 Myr) rates higher",
-    "generated margin closing at the time": "within 500 km of a generated margin that is closing at the time rates 1, elsewhere 0",
     "200-300 km inside the craton edge": "200-300 km inside the craton edge (present-day map) rates 1, elsewhere 0",
     "within 600 km of the craton edge": "within 600 km of the craton edge (present-day map) rates 1, elsewhere 0",
     "tectonothermal age (TC1)": "older lithosphere (Artemieva 2006 TC1, present-day map) rates higher",

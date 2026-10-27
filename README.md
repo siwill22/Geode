@@ -624,8 +624,8 @@ done
 ```
 
 The factor list also holds RiftsClimate's new candidate factors for mantle-derived magmas
-(its `prep/combo_new_factors.py`: LLSVP edge, the OPT1 flow model, LIPs, generated passive
-margins and the rift wave, distance from subduction, lithosphere age and thickness), under their
+(its `prep/combo_new_factors.py`: LLSVP edge, the OPT1 flow model, LIPs, distance from
+subduction, lithosphere age and thickness), under their
 own heading. They went through steps 1-2 only, so they have no combinations. Each is tested on
 its own ground: boxes with no value for it (e.g. no LIP record for ages older than 660 Ma) are
 grey and are not in its test. The diagram also shows their within-period skill (each deposit
