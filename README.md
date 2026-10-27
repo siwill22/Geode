@@ -634,6 +634,20 @@ level, as RiftsClimate wrote them. Mantle-structure values were measured where t
 Muller 2022's mantle frame, though every square is drawn at its Merdith 2021 position.
 `npm run check:molchan` checks every factor's skill on screen, the new ones included.
 
+"Generated margins (RiftsClimate)" draws RiftsClimate's passive margins generated from Merdith
+2021 (its `prep/margin_generator.py`, `docs/spec/generated-margins.md`) at the time slice's own
+age. Each continent-outline point, about every 50 km, is drawn as a dot coloured by its state.
+The version (main, tight or loose) and the states drawn (passive only, or passive, rifting and
+closing) can be chosen. Hovering a passive point shows its generated breakup age. In the
+RiftsClimate repo, before step 2 above:
+
+```bash
+env -u PYTHONPATH PYTHONPATH=prep conda run -n riftsclimate python prep/margin_generator.py viewer
+```
+
+That run checks that the passive points (main) give the distances to a generated passive margin
+that the analysis measured, at every time slice.
+
 ### Unresolved inputs
 
 These still need a path supplied, because no public source is recorded for them. Both are used

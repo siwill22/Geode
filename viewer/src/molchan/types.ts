@@ -55,7 +55,7 @@ export interface MolchanIndex {
   counts: { places: number; snapshots: number; boxes: number; boxes_in_test: number; deposits: Record<string, number> };
   /** boundaries: Merdith 2021's plate boundaries at every time slice (as the WP10 viewer's
    *  BoundariesFile), null if not built. */
-  files: { boxes: string; deposits: string; boundaries: string | null };
+  files: { boxes: string; deposits: string; boundaries: string | null; generated_margins?: string | null };
   built_from: Record<string, string | null>;
   /** Geode's Boundary Frames of the same model (with subduction polarity), for the teeth. */
   teeth: { frames: string; age_max: number } | null;
@@ -178,6 +178,25 @@ export interface MolchanDepositsFile {
   shares: Record<string, Array<number | null>>;
 }
 
+/** RiftsClimate's generated margins (prep/margin_generator.py): per time slice (whole Myr), every
+ *  continent-outline point that is rifting, passive or closing in any version, where it was
+ *  then. State per version as an index into `states` ('none', 'rifting', 'passive', 'closing'). */
+export interface GeneratedMarginsFile {
+  /** Per version, [d_rift, d_conv] in km. */
+  versions: Record<string, [number, number]>;
+  states: string[];
+  snapshots: Record<string, {
+    lon: number[]; lat: number[];
+    main: number[]; tight: number[]; loose: number[];
+    /** The generated breakup (spreading onset) of passive points, main version; null otherwise. */
+    breakup_main: Array<number | null>;
+  }>;
+}
+
+export type GenVersion = 'main' | 'tight' | 'loose';
+/** Which generated-margin states are drawn. */
+export type GenShow = 'passive' | 'all';
+
 export type ColourBy = 'share' | 'value';
 /** Which deposits are on the map: those formed in this time slice, or within N Myr of the age. */
 export type DepositWindow = 'slice' | '10' | '25' | '50';
@@ -208,6 +227,10 @@ export interface MolchanViewState {
   /** Merdith 2021's plate boundaries at the time slice, coloured by type or by convergence. */
   boundaries: boolean;
   boundaryColour: 'label' | 'convergence';
+  /** RiftsClimate's generated margins at the time slice, in one version. */
+  generated: boolean;
+  genVersion: GenVersion;
+  genShow: GenShow;
   polygons: boolean;
   coastlines: boolean;
   graticule: boolean;

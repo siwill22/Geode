@@ -36,6 +36,12 @@ prep_riftsclimate.py). New content goes under archive/riftsclimate/molchan/ only
                   export_series; built once, see the README): the page draws the subduction
                   teeth from them, checked here to have the same subduction zones as
                   boundaries.json.gz at every time slice
+  generated_margins.json.gz
+                  RiftsClimate's generated margins (its prep/margin_generator.py viewer, checked
+                  there to give the distances the analysis measured): at every time slice's own
+                  whole-Myr age, every continent-outline point (about every 50 km) that is
+                  rifting, passive or closing in any version, where it was then, its state per
+                  version and, where passive (main), the generated breakup age
   deposits.json.gz  the SEDEX, MVT, Cu-sed, VMS and porphyry Cu deposits the test uses: name, type, age, where they formed
                   (Merdith 2021) and are today, region, each factor's value and share, and
                   where each was at every time slice's own age (RiftsClimate's positions.csv.gz;
@@ -58,7 +64,8 @@ import pandas as pd
 RIFTSCLIMATE = Path("/Users/simon/GIT/RiftsClimate")
 PLATE_MODEL = "merdith2021"          # the id in archive/riftsclimate/index.json
 FORMAT = 5                 # 2: deposits' positions at every slice; 3: combinations; 4: plate boundaries;
-                           # 5: the new candidate factors (steps 1-2), with within-period and regional skills
+                           # 5: the new candidate factors (steps 1-2), with within-period and regional skills;
+                           #    generated margins (optional file)
 TYPES = {"PbZn-CD": "SEDEX (clastic-dominated Pb-Zn)", "PbZn-MVT": "MVT (Mississippi Valley-type Pb-Zn)",
          "Cu-sed": "Cu-sed (sediment-hosted stratiform Cu)", "VMS": "VMS (volcanogenic massive sulfide)",
          "Cu-por": "Cu-por (porphyry Cu)", "Kimberlite": "Kimberlites (Tappe et al. 2018)",
@@ -152,6 +159,33 @@ def provenance(rc):
 
 
 TEETH_FRAMES = "riftsclimate/merdith2021/boundary_frames/boundaries.json"
+# The generated-margin versions (RiftsClimate docs/spec/generated-margins.md): rifting while a
+# spreading boundary is within d_rift km; passive from then until a closing boundary comes within
+# d_conv km; closing after that. States as RiftsClimate codes them.
+GEN_VERSIONS = {"main": [300, 500], "tight": [200, 250], "loose": [500, 1000]}
+GEN_STATES = ["none", "rifting", "passive", "closing"]
+
+
+def pack_generated_margins(path, out, snap_ma):
+    """RiftsClimate's generated margins per time slice (whole Myr): per slice, columns lon, lat,
+    the state per version (GEN_STATES index) and the breakup age of passive (main) points. Every
+    slice of the boxes must have its points."""
+    if not path.exists():
+        print(f"no {path}: no generated margins")
+        return None
+    g = pd.read_csv(path)
+    frames = {}
+    for age, f in g.groupby("age_ma"):
+        frames[str(int(age))] = {"lon": rounded(f["lon"], 2), "lat": rounded(f["lat"], 2),
+                                 **{v: f[f"state_{v}"].astype(int).tolist() for v in GEN_VERSIONS},
+                                 "breakup_main": rounded(f["spread_onset_main"], 0)}
+    missing = sorted({int(round(a)) for a in snap_ma} - {int(k) for k in frames})
+    if missing:
+        raise SystemExit(f"generated margins missing for time slices {missing[:10]}")
+    size = write_gz_json(out / "generated_margins.json.gz",
+                         {"versions": GEN_VERSIONS, "states": GEN_STATES, "snapshots": frames})
+    print(f"generated margins: {len(frames)} time slices, {len(g)} points, {size / 1e6:.2f} MB")
+    return "riftsclimate/molchan/generated_margins.json.gz"
 
 
 def pack_boundaries(path, out, snap_ma, archive):
@@ -374,6 +408,7 @@ def main():
 
     combos, place_region = pack_combos(src / "combos", out, boxes, pidx, sidx, P, S, deposits)
     boundaries_file, teeth = pack_boundaries(src / "boundaries.json.gz", out, snap_ma, args.archive)
+    generated_file = pack_generated_margins(src / "generated_margins.csv.gz", out, snap_ma)
 
     # --- index ------------------------------------------------------------------------------
     index = {
@@ -392,7 +427,7 @@ def main():
                    "boxes_in_test": int((boxes.weight_in_test > 0).sum()),
                    "deposits": deposits.deposit_class.value_counts().to_dict()},
         "files": {"boxes": "riftsclimate/molchan/boxes.json.gz", "deposits": "riftsclimate/molchan/deposits.json.gz",
-                  "boundaries": boundaries_file},
+                  "boundaries": boundaries_file, "generated_margins": generated_file},
         "built_from": provenance(args.riftsclimate),
         # subduction teeth: the Boundary Frames to draw them from (polarity), or null
         "teeth": teeth,

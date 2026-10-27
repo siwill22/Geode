@@ -12,7 +12,7 @@ import { fetchMaybeGzippedJSON } from '../../vendor/petrify/js/gzipFetch.js';
 import type { RiftsIndex } from '../riftsclimate/types';
 import type { BoundariesFile } from '../wp10porphyry/types';
 import { MolchanInstance } from './molchanInstance';
-import type { MolchanBoxesFile, MolchanDepositsFile, MolchanIndex } from './types';
+import type { GeneratedMarginsFile, MolchanBoxesFile, MolchanDepositsFile, MolchanIndex } from './types';
 
 /**
  * The RiftsClimate Molchan viewer: the inputs of the one-factor Molchan test (the ground
@@ -112,17 +112,20 @@ async function boot(): Promise<void> {
       + `reads format ${MOLCHAN_FORMAT}. Rebuild it (env -u PYTHONPATH conda run -n riftsclimate python `
       + 'prep/prep_riftsclimate_molchan.py) or update the viewer code, then reload.');
   }
-  const [colormaps, boxes, deposits, boundaries] = await Promise.all([
+  const [colormaps, boxes, deposits, boundaries, generated] = await Promise.all([
     loadColormaps(ARCHIVE, archive.colormaps),
     fetchMaybeGzippedJSON(`${ARCHIVE}/${index.files.boxes}`) as Promise<MolchanBoxesFile>,
     fetchMaybeGzippedJSON(`${ARCHIVE}/${index.files.deposits}`) as Promise<MolchanDepositsFile>,
     index.files.boundaries
       ? fetchMaybeGzippedJSON(`${ARCHIVE}/${index.files.boundaries}`) as Promise<BoundariesFile>
       : Promise.resolve(null),
+    index.files.generated_margins
+      ? fetchMaybeGzippedJSON(`${ARCHIVE}/${index.files.generated_margins}`) as Promise<GeneratedMarginsFile>
+      : Promise.resolve(null),
   ]);
 
   instance = new MolchanInstance(camera, {
-    archiveBase: ARCHIVE, colormaps, index, rifts, boxes, deposits, boundaries, rebuildCamera, onLayout: layout,
+    archiveBase: ARCHIVE, colormaps, index, rifts, boxes, deposits, boundaries, generated, rebuildCamera, onLayout: layout,
   }, needsRender);
   instance.setCameraAspect(camera);
   layout();
