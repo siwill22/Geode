@@ -107,6 +107,10 @@ export interface ComboWorlds {
 
 export interface ComboEntry {
   step: string;
+  /** Which candidates: 'main candidates', or 'with screened new factors' (RiftsClimate's
+   *  screened run: two slots filled per region set aside by step 1 on the other regions;
+   *  index.json key "<type>|screened"). */
+  set?: string;
   /** The regions set aside (enough deposits). */
   regions: string[];
   maps: ComboMap[];
@@ -134,6 +138,12 @@ export interface ComboRankedFile {
   with_collision: boolean[];
   n_factors: number[];
   map: Array<string | null>;
+}
+
+/** The index.json key of the combination set on screen: "<type>" or "<type>|screened". */
+export function comboKey(index: MolchanIndex, state: MolchanViewState): string {
+  const screened = `${state.type}|screened`;
+  return state.comboSet === 'screened' && index.combos?.[screened] ? screened : state.type;
 }
 
 /** Every place and time slice, place-major: value[place * nSnapshots + snapshot], null where
@@ -191,6 +201,9 @@ export interface MolchanViewState {
   factor: string;
   /** The combination map on screen (ComboMap.id). */
   combo: string;
+  /** Which combination set: the main candidates, or the run with screened new factors
+   *  (where one exists for the type). */
+  comboSet: 'main' | 'screened';
   age: number;
   projection: ProjectionMode;
   boxes: boolean;

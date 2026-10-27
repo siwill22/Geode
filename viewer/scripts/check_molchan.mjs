@@ -200,7 +200,9 @@ for (const t of combos) {
   for (const m of t.maps) {
     const shown = await page.evaluate(async ([type, id]) => {
       const inst = window.__molchan;
-      inst.view.type = type; inst.view.show = 'combination'; inst.view.combo = id;
+      // a key "<type>|screened" is that type's run with screened new factors
+      inst.view.type = type.split('|')[0]; inst.view.comboSet = type.endsWith('|screened') ? 'screened' : 'main';
+      inst.view.show = 'combination'; inst.view.combo = id;
       await inst.applySetting();
       const el = document.querySelector('.molchan-skill');
       return { text: el.innerText, bad: el.classList.contains('molchan-skill-bad') };
@@ -212,7 +214,7 @@ for (const t of combos) {
   }
 }
 console.log(`combination maps checked: ${nMaps}`);
-await page.evaluate(() => { const i = window.__molchan; i.view.show = 'factor'; i.view.type = 'PbZn-CD'; });
+await page.evaluate(() => { const i = window.__molchan; i.view.show = 'factor'; i.view.type = 'PbZn-CD'; i.view.comboSet = 'main'; });
 await setControl('Deposit type', 'Cu-sed', 'select');
 await setControl('Show', 'Combination', 'select');
 await setControl('Combination', 'Best-of-all', 'select');
@@ -261,6 +263,13 @@ await setControl('Show', 'Combination', 'select');
 await setControl('Combination', 'Best-of-all', 'select');
 await setAge(120);
 await shoot('16-kimberlite-best-of-all-120');
+// the run with screened new factors (RiftsClimate's COMBO_STUDY=screened), where written
+if (await page.evaluate(() => !!window.__molchan.deps.index.combos['Kimberlite|screened'])) {
+  await setControl('candidates', 'With screened new factors', 'select');
+  await setControl('Combination', 'Best-of-all', 'select');
+  await shoot('16b-kimberlite-screened-best-of-all-120');
+  await setControl('candidates', 'Main candidates', 'select');
+}
 
 // --- the new candidate factors (steps 1-2 only): kimberlites at 120 Ma -----------------------
 await setControl('Show', 'One factor', 'select');

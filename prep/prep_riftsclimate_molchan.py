@@ -211,10 +211,16 @@ def pack_combos(src, out, boxes, pidx, sidx, P, S, deposits):
     dep_order = {d: i for i, d in enumerate(deposits["deposit_id"])}
 
     entries, place_region = {}, None
-    for t in TYPES:
-        d = src / t
+    # each type's main step 3 run, and where written its run with screened new factors
+    # (RiftsClimate's COMBO_STUDY=screened, folder <type>-screened), as the key "<type>|screened"
+    sets = [(t, t, None) for t in TYPES] + [(f"{t}|screened", f"{t}-screened", "with screened new factors")
+                                             for t in TYPES]
+    for key, folder, set_label in sets:
+        t = key
+        d = src / folder
         if not (d / "maps.json").exists():
-            print(f"combos {t}: none written (run prep/geode_combo_export.py in RiftsClimate)")
+            if set_label is None:
+                print(f"combos {t}: none written (run prep/geode_combo_export.py in RiftsClimate)")
             continue
         maps = json.loads((d / "maps.json").read_text())["maps"]
         cells = pd.read_csv(d / "cells.csv.gz")
@@ -240,8 +246,8 @@ def pack_combos(src, out, boxes, pidx, sidx, P, S, deposits):
             got = 0.5 - np.nanmean(dep)
             if abs(got - m["skill"]) > 1e-3:
                 raise SystemExit(f"combos {t} {m['id']}: deposits give {got:.4f}, RiftsClimate {m['skill']:.4f}")
-            m["file"] = f"riftsclimate/molchan/combos/{t}/{m['id']}.json.gz"
-            size += write_gz_json(out / "combos" / t / f"{m['id']}.json.gz",
+            m["file"] = f"riftsclimate/molchan/combos/{folder}/{m['id']}.json.gz"
+            size += write_gz_json(out / "combos" / folder / f"{m['id']}.json.gz",
                                   {"id": m["id"], "boxes": rounded(grid * 1000, 0), "deposits": rounded(dep, 4)})
         r = pd.read_csv(d / "ranked.csv")
         regions = [c.split("|")[1] for c in r.columns if c.startswith("region|")]
@@ -250,16 +256,17 @@ def pack_combos(src, out, boxes, pidx, sidx, P, S, deposits):
                   "with_collision": r["with_collision"].astype(bool).tolist(),
                   "n_factors": r["n_factors"].astype(int).tolist(),
                   "map": [m if isinstance(m, str) else None for m in r["map"]]}
-        size += write_gz_json(out / "combos" / t / "ranked.json.gz", ranked)
+        size += write_gz_json(out / "combos" / folder / "ranked.json.gz", ranked)
         gains = pd.read_csv(d / "gains.csv")
         gw = pd.read_csv(d / "gain_worlds.csv") if (d / "gain_worlds.csv").exists() else pd.DataFrame(
             columns=["skill", "factor", "gain"])
         wd = pd.read_csv(d / "worlds.csv")
         entries[t] = {
             "step": "3: equal weights, percentiles",
+            "set": set_label or "main candidates",
             "regions": regions,
             "maps": maps,
-            "ranked": f"riftsclimate/molchan/combos/{t}/ranked.json.gz",
+            "ranked": f"riftsclimate/molchan/combos/{folder}/ranked.json.gz",
             "count": len(r),
             "gains": {k: [{"group": x.group, "factor": x.factor, "gain": round(float(x.gain), 4),
                            "worlds": int(x.worlds) if np.isfinite(x.worlds) else 0,

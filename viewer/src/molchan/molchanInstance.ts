@@ -33,6 +33,7 @@ import type {
   ComboEntry, ComboMap, ComboMapFile, ComboRankedFile, MolchanBoxesFile, MolchanDepositsFile, MolchanFactor,
   MolchanIndex, MolchanViewState,
 } from './types';
+import { comboKey } from './types';
 
 const LAND_FILL_COLOR = 0x5f5a52;
 const BACKDROP_R = LAND_R_UNDER_SURFACE * (1 - 0.0006);
@@ -147,6 +148,7 @@ export class MolchanInstance {
       show: 'factor',
       factor: ix.factors[0].id,
       combo: ix.combos?.[ix.types[0].id]?.maps[0]?.id ?? '',
+      comboSet: 'main',
       age: 400,
       projection: 'globe',
       boxes: true,
@@ -220,7 +222,17 @@ export class MolchanInstance {
 
   private get comboMode(): boolean { return this.view.show === 'combination' && !!this.comboEntry; }
 
-  private get comboEntry(): ComboEntry | undefined { return this.deps.index.combos?.[this.view.type]; }
+  private get comboEntry(): ComboEntry | undefined { return this.deps.index.combos?.[this.comboKey]; }
+
+  /** " (with screened new factors)" when that set is on screen; the slots' factors are in each
+   *  region's popup lines (what was chosen without it). */
+  private get screenedNote(): string {
+    const s = this.comboEntry?.set;
+    return s && s !== 'main candidates' ? ` (${s})` : '';
+  }
+
+  /** The combination set on screen: the type's main run, or its run with screened new factors. */
+  private get comboKey(): string { return comboKey(this.deps.index, this.view); }
 
   private get comboMap(): ComboMap | undefined {
     return this.comboEntry?.maps.find((m) => m.id === this.view.combo);
@@ -230,9 +242,9 @@ export class MolchanInstance {
   private async loadCombo(): Promise<void> {
     const m = this.comboMap;
     if (!m) { this.comboData = null; return; }
-    if (this.comboData?.id === `${this.view.type}/${m.id}`) return;
+    if (this.comboData?.id === m.file) return;
     if (!this.comboFiles.has(m.file)) {
-      const id = `${this.view.type}/${m.id}`;
+      const id = m.file;
       this.comboFiles.set(m.file, (fetchMaybeGzippedJSON(`${this.deps.archiveBase}/${m.file}`) as Promise<ComboMapFile>)
         .then((f) => ({ id, boxes: f.boxes.map((v) => (v == null ? null : v / 1000)), deposits: f.deposits })));
     }
@@ -537,7 +549,7 @@ export class MolchanInstance {
         const e = this.comboEntry!;
         const none = pts.filter((p) => p.share == null).length;
         blocks.push({
-          title: `Held-out map, ${sliceText}: ${cm.combination ?? 'best-of-all choice'}`,
+          title: `Held-out map${this.screenedNote}, ${sliceText}: ${cm.combination ?? 'best-of-all choice'}`,
           ramp: { css: rampCss(this.deps.colormaps.viridis.colors, 1, 0), lo: '0 (best rated)', hi: '1 (worst rated)' },
           rows: none ? [{ label: 'region not set aside (too few deposits)', fill: NO_VALUE, count: String(none) }] : [],
           note: `Each region set aside (${e.regions.join(', ')}) is coloured by the map made without it: a square's `
@@ -615,7 +627,7 @@ export class MolchanInstance {
     const cm = this.comboMap;
     if (this.comboMode && cm) {
       this.ui.setCaption([
-        `${this.typeShort}, ${cm.kind === 'best' ? 'the best-of-all choice' : `"${cm.combination}"`}: step 3 of the `
+        `${this.typeShort}${this.screenedNote}, ${cm.kind === 'best' ? 'the best-of-all choice' : `"${cm.combination}"`}: step 3 of the `
           + `ladder (equal weights, percentiles). ${cm.kind === 'best' ? 'Fully held-out skill' : 'Regional skill'} `
           + `${cm.skill.toFixed(3)}. Merdith 2021 plate model. Click anything for its values.`,
         'Squares: the ground, where each place was in the time slice covering this age, coloured by its held-out '
@@ -640,7 +652,7 @@ export class MolchanInstance {
   private refreshDiagram(): void {
     const e = this.comboEntry;
     this.comboPanel.setVisible(this.comboMode);
-    if (this.comboMode && e) this.comboPanel.setData(this.view.type, e, this.view.combo);
+    if (this.comboMode && e) this.comboPanel.setData(this.comboKey, e, this.view.combo);
     if (this.comboMode) { this.refreshComboDiagram(); return; }
     const d = this.deps.deposits;
     const shares = d.shares[this.factor.id];

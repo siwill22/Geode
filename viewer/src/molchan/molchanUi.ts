@@ -2,6 +2,7 @@ import GUI, { type Controller } from 'lil-gui';
 
 import type { LegendBlock } from '../wp10porphyry/wp10Ui';
 import type { MolchanFactor, MolchanIndex, MolchanViewState } from './types';
+import { comboKey } from './types';
 
 export interface MolchanUICallbacks {
   /** Deposit type or factor changed. */
@@ -21,6 +22,7 @@ export class MolchanUI {
   readonly gui: GUI;
   private factorCtl: Controller;
   private comboCtl: Controller;
+  private comboSetCtl: Controller;
   private colourCtl: Controller;
   private ageSlider: HTMLInputElement;
   private ageInput: HTMLInputElement;
@@ -48,6 +50,9 @@ export class MolchanUI {
       .name('Show').onChange(() => { this.enableControls(); this.cb.onSetting(); });
     this.factorCtl = this.gui.add(state, 'factor', this.factorOptions()).name('Factor');
     this.factorCtl.onChange(() => this.cb.onSetting());
+    // the run with screened new factors, where RiftsClimate wrote one for the type
+    this.comboSetCtl = this.gui.add(state, 'comboSet', { 'Main candidates': 'main', 'With screened new factors': 'screened' })
+      .name('  candidates').onChange(() => { this.setComboOptions(); this.cb.onSetting(); });
     this.comboCtl = this.gui.add(state, 'combo', this.comboOptions()).name('Combination');
     this.comboCtl.onChange(() => this.cb.onSetting());
 
@@ -118,7 +123,7 @@ export class MolchanUI {
   /** The combination maps written for the chosen type: the best-of-all choice first. */
   private comboOptions(): Record<string, string> {
     const out: Record<string, string> = {};
-    const maps = this.index.combos?.[this.state.type]?.maps ?? [];
+    const maps = this.index.combos?.[comboKey(this.index, this.state)]?.maps ?? [];
     let top = 0;
     for (const m of maps) {
       const name = m.kind === 'best' ? 'Best-of-all choice (each region its own pick)'
@@ -143,6 +148,7 @@ export class MolchanUI {
     const combo = this.state.show === 'combination';
     this.factorCtl.show(!combo);
     this.comboCtl.show(combo);
+    this.comboSetCtl.show(combo && !!this.index.combos?.[`${this.state.type}|screened`]);
     this.colourCtl.enable(!combo);
     this.gui.title(combo ? 'Combinations (step 3): held-out maps' : 'One-factor Molchan test: its inputs');
   }

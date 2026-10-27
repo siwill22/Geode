@@ -634,6 +634,13 @@ level, as RiftsClimate wrote them. Mantle-structure values were measured where t
 Muller 2022's mantle frame, though every square is drawn at its Merdith 2021 position.
 `npm run check:molchan` checks every factor's skill on screen, the new ones included.
 
+In combination mode, a type with a screened run (RiftsClimate's `COMBO_STUDY=screened`, so far
+kimberlites) has a "candidates" choice: the main candidates, or the run with screened new factors.
+In that run, two slots are filled for each region set aside by the new factors' step 1 skill on
+the other regions. The factor in each slot is named in that region's combination below the
+diagram. Write it in RiftsClimate before step 2 above:
+`COMBO_STUDY=screened COMBO_CLASS=Kimberlite PYTHONPATH=prep conda run -n riftsclimate python prep/geode_combo_export.py`.
+
 ### Unresolved inputs
 
 These still need a path supplied, because no public source is recorded for them. Both are used
