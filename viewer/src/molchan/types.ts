@@ -146,6 +146,31 @@ export function comboKey(index: MolchanIndex, state: MolchanViewState): string {
   return state.comboSet === 'screened' && index.combos?.[screened] ? screened : state.type;
 }
 
+/** A screened run names its slots ("@new idea 1"); each region set aside fills them by step 1
+ *  on the other regions, the same for every combination. Name the factor where every region
+ *  filled the slot the same way, otherwise say it varies. */
+export function nameSlots(entry: ComboEntry | undefined, text: string): string {
+  if (!entry || !text.includes('@new idea')) return text;
+  return text.replace(/@new idea (\d)/g, (_slot, n) => {
+    const fills = slotFills(entry, n);
+    const names = [...new Set(Object.values(fills))];
+    return names.length === 1 ? `${names[0]} [new idea ${n}]` : `new idea ${n} (varies by region)`;
+  });
+}
+
+/** What filled slot n for each region set aside. */
+export function slotFills(entry: ComboEntry, n: string): Record<string, string> {
+  const tail = ` [new idea ${n}]`;
+  const out: Record<string, string> = {};
+  for (const m of entry.maps) {
+    for (const [r, g] of Object.entries(m.regions)) {
+      const hit = g.combination.split(/ \+ | \| both at once: | x /).find((t) => t.endsWith(tail));
+      if (hit) out[r] = hit.slice(0, -tail.length);
+    }
+  }
+  return out;
+}
+
 /** Every place and time slice, place-major: value[place * nSnapshots + snapshot], null where
  *  the place has no box. */
 export interface MolchanBoxesFile {

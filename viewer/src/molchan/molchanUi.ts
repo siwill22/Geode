@@ -1,8 +1,8 @@
 import GUI, { type Controller } from 'lil-gui';
 
 import type { LegendBlock } from '../wp10porphyry/wp10Ui';
-import type { ComboMap, MolchanFactor, MolchanIndex, MolchanViewState } from './types';
-import { comboKey } from './types';
+import type { MolchanFactor, MolchanIndex, MolchanViewState } from './types';
+import { comboKey, nameSlots } from './types';
 
 export interface MolchanUICallbacks {
   /** Deposit type or factor changed. */
@@ -126,7 +126,7 @@ export class MolchanUI {
     const maps = this.index.combos?.[comboKey(this.index, this.state)]?.maps ?? [];
     let top = 0;
     for (const m of maps) {
-      const label = slotNames(m);
+      const label = nameSlots(this.index.combos?.[comboKey(this.index, this.state)], m.label);
       const name = m.kind === 'best' ? 'Best-of-all choice (each region its own pick)'
         : m.kind === 'top' ? `Best ${++top}: ${label}`
           : m.kind === 'published' ? `Published: ${label}` : `One factor: ${label}`;
@@ -284,20 +284,6 @@ export class MolchanUI {
   hideTooltip(): void {
     this.tooltip.style.display = 'none';
   }
-}
-
-/** A screened run's label names its slots ("@new idea 1"); each region set aside fills them
- *  without seeing itself. Name the factor when every region filled the slot the same way. */
-function slotNames(m: ComboMap): string {
-  return m.label.replace(/@new idea (\d)/g, (slot, n) => {
-    const fills = new Set<string>();
-    for (const r of Object.values(m.regions)) {
-      const hit = r.combination.split(/ \+ | \| both at once: | x /)
-        .find((t) => t.endsWith(` [new idea ${n}]`));
-      if (hit) fills.add(hit.slice(0, -` [new idea ${n}]`.length));
-    }
-    return fills.size === 1 ? `${[...fills][0]} [new idea ${n}]` : `${slot.slice(1)} (varies by region)`;
-  });
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string): HTMLElementTagNameMap[K] {

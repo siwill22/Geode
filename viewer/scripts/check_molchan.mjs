@@ -268,6 +268,12 @@ if (await page.evaluate(() => !!window.__molchan.deps.index.combos['Kimberlite|s
   await setControl('candidates', 'With screened new factors', 'select');
   await setControl('Combination', 'Best-of-all', 'select');
   await shoot('16b-kimberlite-screened-best-of-all-120');
+  // slots are named by what filled them (or "varies by region"), never "@new idea"
+  await setControl('Combination', 'Best 1', 'select');
+  await page.waitForFunction(() => document.querySelectorAll('.combo-row').length > 0, null, { timeout: 30000 });
+  const raw = await page.evaluate(() => document.body.innerText.split('\n').filter((l) => l.includes('@new idea')));
+  if (raw.length) fail(`slot names left unnamed on screen: ${raw.slice(0, 3).join(' | ')}`);
+  await shoot('16c-kimberlite-screened-best-1-120');
   await setControl('candidates', 'Main candidates', 'select');
 }
 

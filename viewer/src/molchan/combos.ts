@@ -1,4 +1,5 @@
 import type { ComboEntry, ComboGain, ComboRankedFile } from './types';
+import { nameSlots, slotFills } from './types';
 
 /**
  * The side-panel blocks for step 3 of RiftsClimate's ladder (combinations with equal weights),
@@ -204,7 +205,7 @@ export class ComboPanel {
   private gainRow(g: ComboGain): HTMLDivElement {
     const row = div('molchan-factor combo-gain');
     const name = div('molchan-factor-name');
-    name.textContent = g.factor;
+    name.textContent = nameSlots(this.entry ?? undefined, g.factor);
     const track = div('molchan-bar-track');
     const pct = (v: number) => 50 + Math.max(-50, Math.min(50, v / GAIN_HALF * 50));
     if (g.median != null && g.highest != null) {
@@ -217,8 +218,11 @@ export class ComboPanel {
     track.appendChild(bar);
     const val = div('molchan-factor-skill combo-gain-value');
     val.textContent = `${sign(g.gain)}${g.at_or_above != null ? ` (${g.at_or_above})` : ''}`;
-    row.title = `${g.factor}: gain ${sign(g.gain)}; fake worlds median ${g.median?.toFixed(3) ?? '-'}, `
-      + `highest ${g.highest?.toFixed(3) ?? '-'}; ${g.at_or_above ?? '-'} of ${g.worlds} reach it`;
+    const slot = /^@new idea (\d)$/.exec(g.factor);
+    const fills = slot && this.entry
+      ? '\n' + Object.entries(slotFills(this.entry, slot[1])).map(([r, f]) => `made without ${r}: ${f}`).join('\n') : '';
+    row.title = `${name.textContent}: gain ${sign(g.gain)}; fake worlds median ${g.median?.toFixed(3) ?? '-'}, `
+      + `highest ${g.highest?.toFixed(3) ?? '-'}; ${g.at_or_above ?? '-'} of ${g.worlds} reach it${fills}`;
     row.append(name, track, val);
     return row;
   }
@@ -233,7 +237,7 @@ export class ComboPanel {
     const rows: HTMLDivElement[] = [];
     let found = 0;
     for (let i = 0; i < r.combination.length; i++) {
-      const c = r.combination[i];
+      const c = nameSlots(e, r.combination[i]);
       const lc = c.toLowerCase();
       if (words.length && !words.every((w) => lc.includes(w))) continue;
       found++;

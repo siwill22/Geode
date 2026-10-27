@@ -33,7 +33,7 @@ import type {
   ComboEntry, ComboMap, ComboMapFile, ComboRankedFile, MolchanBoxesFile, MolchanDepositsFile, MolchanFactor,
   MolchanIndex, MolchanViewState,
 } from './types';
-import { comboKey } from './types';
+import { comboKey, nameSlots } from './types';
 
 const LAND_FILL_COLOR = 0x5f5a52;
 const BACKDROP_R = LAND_R_UNDER_SURFACE * (1 - 0.0006);
@@ -549,7 +549,7 @@ export class MolchanInstance {
         const e = this.comboEntry!;
         const none = pts.filter((p) => p.share == null).length;
         blocks.push({
-          title: `Held-out map${this.screenedNote}, ${sliceText}: ${cm.combination ?? 'best-of-all choice'}`,
+          title: `Held-out map${this.screenedNote}, ${sliceText}: ${nameSlots(e, cm.combination ?? 'best-of-all choice')}`,
           ramp: { css: rampCss(this.deps.colormaps.viridis.colors, 1, 0), lo: '0 (best rated)', hi: '1 (worst rated)' },
           rows: none ? [{ label: 'region not set aside (too few deposits)', fill: NO_VALUE, count: String(none) }] : [],
           note: `Each region set aside (${e.regions.join(', ')}) is coloured by the map made without it: a square's `
@@ -627,7 +627,7 @@ export class MolchanInstance {
     const cm = this.comboMap;
     if (this.comboMode && cm) {
       this.ui.setCaption([
-        `${this.typeShort}${this.screenedNote}, ${cm.kind === 'best' ? 'the best-of-all choice' : `"${cm.combination}"`}: step 3 of the `
+        `${this.typeShort}${this.screenedNote}, ${cm.kind === 'best' ? 'the best-of-all choice' : `"${nameSlots(this.comboEntry, cm.combination ?? '')}"`}: step 3 of the `
           + `ladder (equal weights, percentiles). ${cm.kind === 'best' ? 'Fully held-out skill' : 'Regional skill'} `
           + `${cm.skill.toFixed(3)}. Merdith 2021 plate model. Click anything for its values.`,
         'Squares: the ground, where each place was in the time slice covering this age, coloured by its held-out '
@@ -702,7 +702,7 @@ export class MolchanInstance {
     points.sort((a, c) => a.share - c.share);
     const best = cm.kind === 'best';
     this.panel.setData({
-      title: `Molchan diagram: ${this.typeShort}, ${best ? 'the best-of-all choice' : `"${cm.combination}"`}`,
+      title: `Molchan diagram: ${this.typeShort}, ${best ? 'the best-of-all choice' : `"${nameSlots(this.comboEntry, cm.combination ?? '')}"`}`,
       rating: '',
       skill: cm.skill,
       points: this.comboData ? points : [],
