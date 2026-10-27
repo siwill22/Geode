@@ -71,6 +71,7 @@ npm run dev   # http://localhost:5173                        mantle viewer
               # http://localhost:5173/riftsclimate.html          RiftsClimate deposit viewer
               # http://localhost:5173/wp10porphyry.html          RiftsClimate WP10 porphyry Cu viewer
               # http://localhost:5173/molchan.html               RiftsClimate one-factor Molchan test, its inputs
+              # http://localhost:5173/skillwindow.html           RiftsClimate step 1 skill in any time window
               # http://localhost:5173/themelab.html               Theme Lab
               # http://localhost:5173/globe.html                generated: single-model-globe
               # http://localhost:5173/groupGlobe.html            generated: model-group-globe
@@ -640,6 +641,28 @@ In that run, two slots are filled for each region set aside by the new factors' 
 the other regions. The factor in each slot is named in that region's combination below the
 diagram. Write it in RiftsClimate before step 2 above:
 `COMBO_STUDY=screened COMBO_CLASS=Kimberlite PYTHONPATH=prep conda run -n riftsclimate python prep/geode_combo_export.py`.
+
+
+### RiftsClimate skill by time window
+
+`skillwindow.html` shows RiftsClimate's step 1 (the plain Molchan test, one factor at a time,
+direction stated in advance) in any time window the reader picks: every factor's skill in the
+window, with the 5% level counting districts and the whole record's skill beside it; the chosen
+factor's Molchan diagram; and its skill through time in a moving window. Any factor can be
+reversed (only the sign of its skill changes). It is for reading strengths by eye; nothing is
+fitted. The page computes the skills itself from each factor's rank of every cell and deposit,
+which RiftsClimate writes (its `prep/geode_window_export.py` defines the test; see its
+docs/spec/factor-combinations.md, "Step 1 in a time window"). Kimberlites only so far.
+
+```bash
+# 1. in the RiftsClimate repo: -> data/geode/window/ (stops unless the ranks give the stored step 1)
+env -u PYTHONPATH PYTHONPATH=prep conda run -n riftsclimate python prep/geode_window_export.py Kimberlite
+# 2. here: -> archive/riftsclimate/window/ (copying and gzipping only)
+python prep/prep_riftsclimate_window.py
+```
+
+`npm run check:skillwindow` compares the page's skill, deposits and districts with RiftsClimate's
+in a set of windows, for every factor, and shoots the page.
 
 ### Unresolved inputs
 

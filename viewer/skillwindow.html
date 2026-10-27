@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Skill by Time Window</title>
+    <link rel="icon" href="data:," />
+    <style>
+      /* The Molchan viewer's colours (molchan.html), on a page without a map. */
+      :root { color-scheme: dark; }
+      html, body {
+        margin: 0; background: #0b0d10;
+        font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, sans-serif;
+        color: #d8dee4;
+      }
+      .page { max-width: 1500px; margin: 0 auto; padding: 14px 16px 24px; box-sizing: border-box; }
+      header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; margin-bottom: 10px; }
+      h1 { font-size: 16px; font-weight: 600; margin: 0; color: #e6ebf0; }
+      .lede { color: #8a96a1; font-size: 12px; max-width: 110ch; margin: 0 0 12px; }
+      select, input, .btn {
+        font: inherit; font-size: 12px; color: #d8dee4; background: #161a1f;
+        border: 1px solid #2a3139; border-radius: 4px; padding: 3px 7px;
+      }
+      .btn { cursor: pointer; }
+      .btn:hover { border-color: #4a5662; }
+      .btn-on { background: #26303a; border-color: #5a6b7c; color: #e6ebf0; }
+      input[type="number"] { width: 6ch; text-align: right; font-variant-numeric: tabular-nums; }
+      .block { background: #11151a; border: 1px solid #1d232a; border-radius: 6px; padding: 10px 12px; }
+      .block-title { color: #e0e6ec; font-size: 12px; font-weight: 600; margin-bottom: 6px; display: flex;
+        flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+      .block-title .spacer { flex: 1; }
+      .note { color: #7d8894; font-size: 10.5px; line-height: 1.45; margin-top: 6px; }
+      #ages { width: 100%; height: 110px; display: block; touch-action: none; }
+      .window-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 6px; font-size: 12px; }
+      #presets { display: flex; flex-wrap: wrap; gap: 4px; }
+      #counts { color: #b9c3cc; font-size: 12px; margin-top: 6px; }
+      .grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 12px; margin-top: 12px; align-items: start; }
+      @media (max-width: 1000px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+
+      /* every factor: name, bar (0 in the middle), skill, deposits / districts */
+      .factor {
+        display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, 34%) 5.5ch 8ch;
+        align-items: center; gap: 8px; padding: 3px 6px; border-radius: 3px; cursor: pointer;
+      }
+      .factor:hover { background: #1b1f24; }
+      .factor-on { background: #20262d; color: #e6ebf0; }
+      .factor-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .factor-better { color: #6d7883; font-size: 11px; }
+      .factor-skill { text-align: right; font-variant-numeric: tabular-nums; }
+      .factor-n { text-align: right; color: #7d8894; font-size: 11px; font-variant-numeric: tabular-nums; }
+      .group-head { margin: 8px 0 2px; padding: 0 6px; font-size: 10.5px; color: #7d8894; text-transform: uppercase; letter-spacing: 0.04em; }
+      .list-head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, 34%) 5.5ch 8ch; gap: 8px;
+        padding: 0 6px; color: #6d7883; font-size: 10.5px; }
+      .list-head > :nth-child(n+3) { text-align: right; }
+      .track { position: relative; height: 10px; background: rgba(200, 210, 220, 0.05); border-radius: 2px; }
+      .track::after { content: ''; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: rgba(200, 210, 220, 0.35); }
+      .track-band { position: absolute; top: 0; bottom: 0; background: rgba(200, 210, 220, 0.13); }
+      .bar { position: absolute; top: 1px; bottom: 1px; border-radius: 2px; }
+      .track-whole { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: #e6ebf0; opacity: 0.7; border-radius: 1px; }
+      .key { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11px; color: #9aa6b1; margin-top: 8px; }
+      .key span { display: inline-flex; align-items: center; gap: 5px; }
+      .sw { display: inline-block; width: 14px; height: 8px; border-radius: 2px; }
+
+      #molchan { width: 100%; height: 300px; display: block; }
+      #through { width: 100%; height: 220px; display: block; cursor: pointer; }
+      #detail-title { font-size: 13px; }
+      #detail-better { color: #8a96a1; font-size: 12px; }
+      #detail-skill { color: #b9c3cc; font-size: 12px; margin: 6px 0; }
+      #through-readout { color: #b9c3cc; font-size: 11px; min-height: 1.4em; margin-top: 2px; }
+      .detail > .block + .block { margin-top: 12px; }
+      #provenance { color: #5d6873; font-size: 10.5px; margin-top: 14px; }
+      #error { position: fixed; left: 50%; top: 40%; transform: translateX(-50%); padding: 12px 16px; background: #3a1d1d;
+        border: 1px solid #7a3a3a; border-radius: 6px; max-width: 70ch; }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header>
+        <h1>Skill by time window</h1>
+        <label>Deposit type <select id="type"></select></label>
+      </header>
+      <p class="lede">
+        Step 1 of RiftsClimate's ladder, the plain Molchan test, one factor at a time, in the window you choose.
+        Each factor rates the continental area of every time slice in the window, in the direction stated before
+        any test. Each deposit in the window is ranked against that ground: its share is the share of the ground
+        (area x time) rated higher than the place where it formed. Skill is 0.5 minus the average share: 0 is no
+        better than placing deposits at random, positive means deposits sit on ground the factor rates highly.
+        Nothing is fitted or chosen here.
+      </p>
+
+      <section class="block">
+        <div class="block-title">Time window <span class="spacer"></span>
+          <span class="note" style="margin:0">drag its ends or the shaded window; drag elsewhere for a new one</span></div>
+        <canvas id="ages" aria-label="Deposits per 10 Myr, with the chosen window"></canvas>
+        <div class="window-row">
+          <label>from <input id="young" type="number" min="0" max="1000" step="1" /> Ma</label>
+          <label>to <input id="old" type="number" min="0" max="1000" step="1" /> Ma</label>
+          <div id="presets"></div>
+        </div>
+        <div id="counts"></div>
+        <div class="note">Bars: the type's deposits per 10 Myr, by age (bright inside the window). A deposit counts if its
+          age is at least the younger end and less than the older end. Cells count by the part of their time slice
+          inside the window.</div>
+      </section>
+
+      <div class="grid">
+        <section class="block">
+          <div class="block-title">Every factor in this window <span class="spacer"></span>
+            <span>order</span>
+            <button id="sort-group" class="btn">by group</button>
+            <button id="sort-skill" class="btn">by skill</button>
+          </div>
+          <div class="list-head"><span>factor, and what it rates better</span><span>skill (0 in the middle)</span>
+            <span>skill</span><span>deposits / districts</span></div>
+          <div id="factors"></div>
+          <div class="key">
+            <span><i class="sw" style="background:#6ea0dc"></i>positive skill</span>
+            <span><i class="sw" style="background:#c8615a"></i>negative skill</span>
+            <span><i class="sw" style="background:rgba(200,210,220,0.25)"></i>within the 5% level, counting districts</span>
+            <span><i class="sw" style="background:#e6ebf0;width:2px;height:12px"></i>skill over the whole record (0-1000 Ma)</span>
+          </div>
+          <div class="note">Half the track is 0.4 of skill. The 5% level is the textbook one for a rating fixed in
+            advance, 1.645 / sqrt(12 n) (Zechar &amp; Jordan 2008), with n the districts in the window (deposits within
+            200 km and 30 Myr of another, joined in chains): deposits of one district share a setting, so they are not
+            independent. Counting deposits instead gives a narrower level (shown above the list). A skill inside the band
+            is what placing the deposits at random could give. Click a factor for its Molchan diagram and its skill
+            through time. Over 0-1000 Ma these numbers differ slightly from the main test's step 1, which merges time
+            slices in pairs to save time.</div>
+        </section>
+
+        <div class="detail">
+          <section class="block">
+            <div class="block-title"><span id="detail-title"></span><span class="spacer"></span>
+              <button id="reverse" class="btn"></button></div>
+            <div id="detail-better"></div>
+            <div id="detail-skill"></div>
+            <canvas id="molchan" aria-label="Molchan diagram for the chosen factor and window"></canvas>
+            <div class="note">The Molchan diagram: searching the window's ground from the best rated down, how many
+              deposits are still missed. The diagonal is random placement; the shaded area between the curve and the
+              diagonal is the skill. Reversing the direction mirrors the curve and changes only the skill's sign.</div>
+          </section>
+          <section class="block">
+            <div class="block-title">The same factor through time <span class="spacer"></span>
+              <label>moving window <input id="moving" type="number" min="10" max="1000" step="10" /> Myr</label></div>
+            <canvas id="through" aria-label="Skill in a moving window through time"></canvas>
+            <div id="through-readout"></div>
+            <div class="note">The skill in windows of this width, moved 10 Myr at a time, plotted at each window's
+              middle. Grey band: the 5% level counting districts in each window. Orange: the chosen window. Windows
+              with fewer than 5 deposits are left out. Neighbouring windows share most of their deposits, so the line
+              is smooth by construction; its wiggles are not independent.</div>
+          </section>
+        </div>
+      </div>
+      <div id="provenance"></div>
+    </div>
+    <script type="module" src="/src/skillwindow/main.ts"></script>
+  </body>
+</html>

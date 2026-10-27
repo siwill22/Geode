@@ -38,6 +38,7 @@ export default defineConfig({
         riftsclimate: fileURLToPath(new URL('riftsclimate.html', import.meta.url)),
         wp10porphyry: fileURLToPath(new URL('wp10porphyry.html', import.meta.url)),
         molchan: fileURLToPath(new URL('molchan.html', import.meta.url)),
+        skillwindow: fileURLToPath(new URL('skillwindow.html', import.meta.url)),
         oldmap: fileURLToPath(new URL('oldmap.html', import.meta.url)),
         themelab: fileURLToPath(new URL('themelab.html', import.meta.url)),
         shlab: fileURLToPath(new URL('shlab.html', import.meta.url)),
