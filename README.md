@@ -652,11 +652,11 @@ factor's Molchan diagram; and its skill through time in a moving window. Any fac
 reversed (only the sign of its skill changes). It is for reading strengths by eye; nothing is
 fitted. The page computes the skills itself from each factor's rank of every cell and deposit,
 which RiftsClimate writes (its `prep/geode_window_export.py` defines the test; see its
-docs/spec/factor-combinations.md, "Step 1 in a time window"). Kimberlites only so far.
+docs/spec/factor-combinations.md, "Step 1 in a time window"). All seven deposit types.
 
 ```bash
 # 1. in the RiftsClimate repo: -> data/geode/window/ (stops unless the ranks give the stored step 1)
-env -u PYTHONPATH PYTHONPATH=prep conda run -n riftsclimate python prep/geode_window_export.py Kimberlite
+env -u PYTHONPATH PYTHONPATH=prep conda run -n riftsclimate python prep/geode_window_export.py   # every type
 # 2. here: -> archive/riftsclimate/window/ (copying and gzipping only)
 python prep/prep_riftsclimate_window.py
 ```

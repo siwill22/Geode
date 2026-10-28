@@ -4,7 +4,7 @@
  * expected_<type>.json): the page's skill equals RiftsClimate's (to 1e-4: the page reads the
  * cells' areas and time slices as 32-bit numbers), and the deposits and districts counted are
  * the same. Then shoots: the whole record; 0-200 Ma with tectonothermal age chosen; the list by
- * skill; a factor reversed; a window dragged on the age chart.
+ * skill; a factor reversed; a window dragged on the age chart; every type over the whole record.
  *
  * Needs the dev server up:  npx vite --port 5183 &  node scripts/check_skillwindow.mjs [outdir] [url]
  */
@@ -110,6 +110,15 @@ await page.waitForTimeout(200);
 const win = await page.evaluate(() => [Number(document.getElementById('young').value), Number(document.getElementById('old').value)]);
 if (Math.abs(win[0] - 300) > 3 || Math.abs(win[1] - 600) > 3) fail(`dragged window is ${win[0]}-${win[1]} Ma, not about 300-600`);
 await shoot('05-kimberlite-dragged-300-600');
+
+// every type, whole record, by skill
+const types = await page.evaluate(() => Object.keys(window.__skillwindow.index.types));
+for (const t of types) {
+  await page.selectOption('#type', t);
+  await page.waitForTimeout(400);
+  await page.click('#presets .btn:nth-child(1)');
+  await shoot(`06-${t}-0-1000-by-skill`);
+}
 
 if (errors.length) { for (const e of errors) fail(`browser: ${e}`); }
 await browser.close();

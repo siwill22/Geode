@@ -31,7 +31,8 @@ const INK = '#97a3ad';
 const AXIS = 'rgba(200, 210, 220, 0.35)';
 const BAND = 'rgba(200, 210, 220, 0.13)';
 
-interface Factor { id: string; group: string; better: string; stated: boolean }
+/** stated_for: the types the direction was stated for, where not every type (null = all). */
+interface Factor { id: string; group: string; better: string; stated: boolean; stated_for: string[] | null }
 interface Index {
   format: number; span_ma: number; cells: number; factors: Factor[]; ground_file: string;
   types: Record<string, { deposits: number; districts: number; deposits_file: string; expected_file: string }>;
@@ -96,6 +97,15 @@ function computeAll(young: number, old: number): Map<string, FactorResult> {
 function shown(id: string, r: FactorResult | undefined): number | null {
   if (!r || r.skill == null) return null;
   return state.reversed.has(id) ? -r.skill : r.skill;
+}
+
+/** How the factor's direction came about, for the chosen type. */
+function statedText(f: Factor, long: boolean): string {
+  if (!f.stated) return long ? ' (no direction stated in advance: shown this way by default)' : ' (no direction stated in advance)';
+  if (f.stated_for && !f.stated_for.includes(state.type)) {
+    return ` (direction stated for ${f.stated_for.map((t) => TYPE_LABEL[t] ?? t).join(', ')} only)`;
+  }
+  return long ? ' (direction stated in advance)' : '';
 }
 
 function betterText(f: Factor): string {
@@ -243,7 +253,7 @@ function factorRow(f: Factor): HTMLElement {
   const row = el('div', `factor${f.id === state.factor ? ' factor-on' : ''}`);
   const name = el('div', 'factor-name');
   name.append(el('span', '', f.id));
-  name.append(el('span', 'factor-better', ` ${betterText(f)}${f.stated ? '' : ' (no direction stated in advance)'}`));
+  name.append(el('span', 'factor-better', ` ${betterText(f)}${statedText(f, false)}`));
   const track = el('div', 'track');
   const pct = (v: number) => 50 + Math.max(-50, Math.min(50, v / BAR_HALF * 50));
   if (r && r.districts) {
@@ -279,7 +289,7 @@ function renderDetail(): void {
   const r = results.get(f.id)!;
   const s = shown(f.id, r);
   $('detail-title').textContent = f.id;
-  $('detail-better').textContent = `${betterText(f)}${f.stated ? ' (direction stated in advance)' : ' (no direction stated in advance: shown this way by default)'}`;
+  $('detail-better').textContent = `${betterText(f)}${statedText(f, true)}`;
   $('reverse').textContent = state.reversed.has(f.id) ? 'Back to the stated direction' : 'Reverse the direction';
   $('detail-skill').textContent = `Skill ${fmt(s)} in ${state.young}-${state.old} Ma; ${r.deposits} deposits, ${r.districts} districts; `
     + `5% level ${ref95(r.districts).toFixed(3)} counting districts, ${ref95(r.deposits).toFixed(3)} counting deposits. `
@@ -555,7 +565,7 @@ async function start(): Promise<void> {
   (window as unknown as { __skillwindow: unknown }).__skillwindow = {
     index, compute: (young: number, old: number) => Object.fromEntries([...computeAll(young, old)].map(([id, r]) => [
       id, { skill: r.skill, deposits: r.deposits, districts: r.districts }])),
-    setType: async (t: string) => { state.type = t; await loadType(); update(); },
+    setType: async (t: string) => { state.type = t; $<HTMLSelectElement>('type').value = t; await loadType(); update(); },
   };
   requestAnimationFrame(() => { document.body.dataset.ready = '1'; });
 }
