@@ -23,6 +23,11 @@ export class MolchanUI {
   private factorCtl: Controller;
   private comboCtl: Controller;
   private comboSetCtl: Controller;
+  private comboAllCtl: Controller;
+  private legendBody: HTMLDivElement;
+  private legendToggle: HTMLButtonElement;
+  /** Legend blocks folded by the reader, by the start of their title (kept across redraws). */
+  private folded = new Set<string>(readFolded());
   private colourCtl: Controller;
   private ageSlider: HTMLInputElement;
   private ageInput: HTMLInputElement;
@@ -55,6 +60,8 @@ export class MolchanUI {
       .name('  candidates').onChange(() => { this.setComboOptions(); this.cb.onSetting(); });
     this.comboCtl = this.gui.add(state, 'combo', this.comboOptions()).name('Combination');
     this.comboCtl.onChange(() => this.cb.onSetting());
+    this.comboAllCtl = this.gui.add(state, 'comboAll').name('  list also baselines, earlier ideas')
+      .onChange(() => { this.setComboOptions(); this.cb.onSetting(); });
 
     const layers = () => this.cb.onLayers();
     const map = this.gui.addFolder('Map layers');
@@ -83,7 +90,17 @@ export class MolchanUI {
 
     this.status = el('div', 'status');
     this.legend = el('div', 'legend');
+    // the legend can be folded away, whole or block by block, so it does not hide the map
+    const head = el('div', 'legend-head');
+    this.legendToggle = el('button', 'legend-toggle');
+    this.legendToggle.type = 'button';
+    this.legendToggle.addEventListener('click', () => this.setLegendOpen(this.legend.classList.contains('legend-closed')));
+    head.append(this.legendToggle);
+    this.legendBody = el('div', 'legend-body');
+    this.legend.append(head, this.legendBody);
+    this.setLegendOpen(readFlag('molchan-legend-open', true));
     this.caption = el('div', 'caption');
+    if (!readFlag('molchan-caption-open', true)) this.caption.classList.add('caption-closed');
     this.tooltip = el('div', 'popup');
     this.tooltip.style.display = 'none';
 
@@ -117,19 +134,25 @@ export class MolchanUI {
     this.setAge(state.age);
     this.enableControls();
     this.layout();
-    addEventListener('resize', () => this.layout());
+    addEventListener('resize', () => { this.layout(); this.fitLegend(); });
   }
 
-  /** The combination maps written for the chosen type: the best-of-all choice first. */
+  /** The combination maps written for the chosen type: the combination to use first, then the
+   *  held-out test of choosing it, then the best by regional skill (picked with hindsight); the
+   *  one-factor baselines and the earlier ideas only when asked for. */
   private comboOptions(): Record<string, string> {
     const out: Record<string, string> = {};
-    const maps = this.index.combos?.[comboKey(this.index, this.state)]?.maps ?? [];
+    const entry = this.index.combos?.[comboKey(this.index, this.state)];
+    const maps = entry?.maps ?? [];
+    const order = ['use', 'best', 'top', 'published', 'one factor'];
     let top = 0;
-    for (const m of maps) {
-      const label = nameSlots(this.index.combos?.[comboKey(this.index, this.state)], m.label);
-      const name = m.kind === 'best' ? 'Best-of-all choice (each region its own pick)'
-        : m.kind === 'top' ? `Best ${++top}: ${label}`
-          : m.kind === 'published' ? `Published: ${label}` : `One factor: ${label}`;
+    for (const m of [...maps].sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind))) {
+      if (!this.state.comboAll && (m.kind === 'published' || m.kind === 'one factor')) continue;
+      const label = nameSlots(entry, m.label);
+      const name = m.kind === 'use' ? 'Combination to use (chosen on all regions)'
+        : m.kind === 'best' ? 'Held-out test of the choice (best-of-all)'
+          : m.kind === 'top' ? `Best ${++top} (hindsight): ${label}`
+            : m.kind === 'published' ? `Earlier idea: ${label}` : `One factor (baseline): ${label}`;
       out[name] = m.id;
     }
     return out;
@@ -150,6 +173,7 @@ export class MolchanUI {
     this.factorCtl.show(!combo);
     this.comboCtl.show(combo);
     this.comboSetCtl.show(combo && !!this.index.combos?.[`${this.state.type}|screened`]);
+    this.comboAllCtl.show(combo);
     this.colourCtl.enable(!combo);
     this.gui.title(combo ? 'Combinations (step 3): held-out maps' : 'One-factor Molchan test: its inputs');
   }
@@ -220,20 +244,55 @@ export class MolchanUI {
     this.status.style.display = text ? '' : 'none';
   }
 
+  /** The caption: its first line always shown; the rest can be folded away. */
   setCaption(lines: string[]): void {
-    this.caption.replaceChildren(...lines.map((t, i) => {
-      const d = el('div', i === 0 ? '' : 'caption-counts');
+    const fold = el('button', 'caption-toggle');
+    fold.type = 'button';
+    fold.title = 'Fold or unfold the caption';
+    fold.textContent = this.caption.classList.contains('caption-closed') ? '+' : '−';
+    fold.addEventListener('click', () => {
+      const closed = this.caption.classList.toggle('caption-closed');
+      fold.textContent = closed ? '+' : '−';
+      writeFlag('molchan-caption-open', !closed);
+      this.fitLegend();
+    });
+    this.caption.replaceChildren(fold, ...lines.map((t, i) => {
+      const d = el('div', i === 0 ? 'caption-first' : 'caption-counts');
       d.textContent = t;
       return d;
     }));
+    this.fitLegend();
+  }
+
+  /** The legend stops above the caption and scrolls, so the two never overlap. */
+  private fitLegend(): void {
+    requestAnimationFrame(() => {
+      const top = this.caption.getBoundingClientRect().top;
+      this.legend.style.maxHeight = `${Math.max(120, top - 12 - 12)}px`;
+    });
+  }
+
+  private setLegendOpen(open: boolean): void {
+    this.legend.classList.toggle('legend-closed', !open);
+    this.legendToggle.textContent = open ? '▾ Legend' : '▸ Legend';
+    this.legendToggle.title = open ? 'Fold the legend away' : 'Show the legend';
+    writeFlag('molchan-legend-open', open);
   }
 
   setLegend(blocks: LegendBlock[]): void {
-    this.legend.replaceChildren();
+    this.legendBody.replaceChildren();
     for (const b of blocks) {
       const box = el('div', 'legend-block');
+      // a block folds to its title; the key is the title's start, which does not change with age
+      const key = b.title.split(/[,:(]|\d/)[0].trim();
+      if (this.folded.has(key)) box.classList.add('legend-block-folded');
       const t = el('div', 'legend-title');
       t.textContent = b.title;
+      t.title = 'Click to fold or unfold';
+      t.addEventListener('click', () => {
+        if (box.classList.toggle('legend-block-folded')) this.folded.add(key); else this.folded.delete(key);
+        writeFolded(this.folded);
+      });
       box.appendChild(t);
       if (b.ramp) {
         const bar = el('div', 'legend-ramp');
@@ -266,7 +325,7 @@ export class MolchanUI {
         n.textContent = b.note;
         box.appendChild(n);
       }
-      this.legend.appendChild(box);
+      this.legendBody.appendChild(box);
     }
   }
 
@@ -290,4 +349,24 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string): HTMLEle
   const e = document.createElement(tag);
   if (cls) e.className = cls;
   return e;
+}
+
+// Per-viewer conveniences (folded legend and caption), kept in this browser only.
+function readFlag(key: string, fallback: boolean): boolean {
+  try {
+    const v = localStorage.getItem(key);
+    return v == null ? fallback : v === '1';
+  } catch { return fallback; }
+}
+
+function writeFlag(key: string, on: boolean): void {
+  try { localStorage.setItem(key, on ? '1' : '0'); } catch { /* storage unavailable: not kept */ }
+}
+
+function readFolded(): string[] {
+  try { return JSON.parse(localStorage.getItem('molchan-legend-folded') ?? '[]') as string[]; } catch { return []; }
+}
+
+function writeFolded(keys: Set<string>): void {
+  try { localStorage.setItem('molchan-legend-folded', JSON.stringify([...keys])); } catch { /* not kept */ }
 }

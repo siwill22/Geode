@@ -635,6 +635,14 @@ level, as RiftsClimate wrote them. Mantle-structure values were measured where t
 Muller 2022's mantle frame, though every square is drawn at its Merdith 2021 position.
 `npm run check:molchan` checks every factor's skill on screen, the new ones included.
 
+In combination mode the list opens on the combination to use: Best 1, fitted on all regions,
+every region coloured (its skill is not a test; the caption and diagram give what to expect on
+new ground, the held-out test of the choice). Next comes that held-out test (the best-of-all
+choice, with a tally of the factors in its regions' picks), then Best 1 to 20 (picked with
+hindsight). The one-factor baselines and the earlier ideas appear when "list also baselines,
+earlier ideas" is ticked. The legend folds away (whole, or a block by clicking its title), and
+the caption folds to its first line.
+
 In combination mode, a type with a screened run (RiftsClimate's `COMBO_STUDY=screened`, so far
 kimberlites) has a "candidates" choice: the main candidates, or the run with screened new factors.
 In that run, two slots are filled for each region set aside by the new factors' step 1 skill on

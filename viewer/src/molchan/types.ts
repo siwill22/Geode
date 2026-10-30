@@ -69,9 +69,11 @@ export interface MolchanIndex {
  *  without it; shares within that region's continental area). */
 export interface ComboMap {
   id: string;
-  /** 'best': the best-of-all choice (each region's own pick); 'top': among the 20 best by
-   *  regional skill; 'published': a published idea or earlier pair; 'one factor'. */
-  kind: 'best' | 'top' | 'published' | 'one factor';
+  /** 'use': the combination to use, Best 1 fitted on all regions (its map is not held out);
+   *  'best': the best-of-all choice (each region's own pick, the held-out test of choosing);
+   *  'top': among the 20 best by regional skill (picked with hindsight); 'published': a published
+   *  idea or earlier pair; 'one factor'. */
+  kind: 'use' | 'best' | 'top' | 'published' | 'one factor';
   label: string;
   /** Null for the best-of-all choice, whose regions use different combinations. */
   combination: string | null;
@@ -83,6 +85,13 @@ export interface ComboMap {
    *  without seeing it (directions, preferred distances). */
   regions: Record<string, { combination: string; chosen: string[] }>;
   file: string;
+  /** 'use' only: what the fit on all regions chose, the best-of-all choice's held-out skill
+   *  (what to expect on new ground) and Best 1's regional skill (picked with hindsight). */
+  fitted_on_all?: { combination: string; chosen: string[] };
+  heldout_skill?: number;
+  hindsight_skill?: number;
+  /** 'best' only: how many regions' picks hold each factor (slots named by their fill). */
+  tally?: Record<string, number>;
 }
 
 export interface ComboGain {
@@ -229,6 +238,8 @@ export interface MolchanViewState {
   /** Which combination set: the main candidates, or the run with screened new factors
    *  (where one exists for the type). */
   comboSet: 'main' | 'screened';
+  /** List the one-factor baselines and the earlier (published) ideas among the combinations. */
+  comboAll: boolean;
   age: number;
   projection: ProjectionMode;
   boxes: boolean;

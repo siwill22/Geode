@@ -217,7 +217,7 @@ console.log(`combination maps checked: ${nMaps}`);
 await page.evaluate(() => { const i = window.__molchan; i.view.show = 'factor'; i.view.type = 'PbZn-CD'; i.view.comboSet = 'main'; });
 await setControl('Deposit type', 'Cu-sed', 'select');
 await setControl('Show', 'Combination', 'select');
-await setControl('Combination', 'Best-of-all', 'select');
+await setControl('Combination', 'Held-out test', 'select');
 await setAge(255);
 await shoot('09-cused-best-of-all-255');
 // The panel blocks below the diagram, and a ranked row picked from the list.
@@ -260,13 +260,13 @@ await shoot('15-vms-boundaries-800');
 // --- kimberlites (not ore deposits, run as one more type): the best-of-all map, 120 Ma ------
 await setControl('Deposit type', 'Kimberlites', 'select');
 await setControl('Show', 'Combination', 'select');
-await setControl('Combination', 'Best-of-all', 'select');
+await setControl('Combination', 'Held-out test', 'select');
 await setAge(120);
 await shoot('16-kimberlite-best-of-all-120');
 // the run with screened new factors (RiftsClimate's COMBO_STUDY=screened), where written
 if (await page.evaluate(() => !!window.__molchan.deps.index.combos['Kimberlite|screened'])) {
   await setControl('candidates', 'With screened new factors', 'select');
-  await setControl('Combination', 'Best-of-all', 'select');
+  await setControl('Combination', 'Held-out test', 'select');
   await shoot('16b-kimberlite-screened-best-of-all-120');
   // slots are named by what filled them (or "varies by region"), never "@new idea"
   await setControl('Combination', 'Best 1', 'select');
@@ -274,6 +274,24 @@ if (await page.evaluate(() => !!window.__molchan.deps.index.combos['Kimberlite|s
   const raw = await page.evaluate(() => document.body.innerText.split('\n').filter((l) => l.includes('@new idea')));
   if (raw.length) fail(`slot names left unnamed on screen: ${raw.slice(0, 3).join(' | ')}`);
   await shoot('16c-kimberlite-screened-best-1-120');
+  // the combination to use (fitted on all regions), with what to expect on new ground
+  await setControl('Combination', 'Combination to use', 'select');
+  const useText = await page.$eval('.molchan-skill', (e) => e.innerText);
+  if (!/not a test\. Expected on new ground .*: [+−]?\d\.\d{3}/.test(useText)) fail(`combination to use: "${useText}"`);
+  await shoot('16d-kimberlite-screened-use-120');
+  // the held-out test lists how many regions' picks hold each factor
+  await setControl('Combination', 'Held-out test', 'select');
+  const tallyText = await page.evaluate(() => document.body.innerText.includes("In the regions' picks (of "));
+  if (!tallyText) fail('no tally of the regions\' picks under the held-out test');
+  // the legend and the caption fold away, and come back
+  await page.click('.legend-toggle');
+  const legendHidden = await page.$eval('.legend-body', (e) => getComputedStyle(e).display === 'none');
+  await page.click('.caption-toggle');
+  const captionShort = await page.$$eval('.caption-counts', (els) => els.every((e) => getComputedStyle(e).display === 'none'));
+  if (!legendHidden || !captionShort) fail(`folding: legend hidden ${legendHidden}, caption folded ${captionShort}`);
+  await shoot('16e-kimberlite-screened-folded-120');
+  await page.click('.legend-toggle');
+  await page.click('.caption-toggle');
   await setControl('candidates', 'Main candidates', 'select');
 }
 

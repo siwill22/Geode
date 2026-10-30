@@ -65,14 +65,28 @@
       #projection-toggle:hover { background: #262b32; }
       #projection-toggle svg { display: block; width: 22px; height: 22px; }
 
-      /* What is on screen and what could not be drawn: always visible, not
-         behind a disclosure (the paleobio caption's rule). */
+      /* What is on screen: its first line always visible; the rest can be folded
+         away when it covers the map (the scientist asked, 2026-10-30). */
       .caption {
+        position: relative;
         grid-column: 1; justify-self: start; max-width: 54ch;
         color: #93a0ac; font-size: 11px; line-height: 1.5;
-        background: rgba(10, 13, 17, 0.6); padding: 6px 9px; border-radius: 4px;
+        background: rgba(10, 13, 17, 0.6); padding: 6px 24px 6px 9px; border-radius: 4px;
       }
       .caption-counts { margin-top: 3px; color: #7d8894; }
+      .caption-closed .caption-counts { display: none; }
+      .caption-closed .caption-first {
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46ch;
+      }
+      .caption-toggle, .legend-toggle {
+        font: inherit; color: #b9c3cc; background: #1b1f24; cursor: pointer;
+        border: 1px solid #3a4048; border-radius: 3px;
+      }
+      .caption-toggle:hover, .legend-toggle:hover { background: #262b32; color: #e6ebf0; }
+      .caption-toggle {
+        position: absolute; right: 4px; top: 4px; width: 16px; height: 16px; padding: 0;
+        font-size: 12px; line-height: 14px; text-align: center;
+      }
 
       .legend {
         position: fixed; left: 12px; top: 12px;
@@ -84,8 +98,16 @@
         background: rgba(10, 13, 17, 0.8); border: 1px solid #262c33;
       }
       .legend-title {
-        color: #cfd6dd; font-size: 11px; letter-spacing: 0.02em; margin-bottom: 5px;
+        color: #cfd6dd; font-size: 11px; letter-spacing: 0.02em; margin-bottom: 5px; cursor: pointer;
       }
+      .legend-title::before { content: '▾ '; color: #6d7883; }
+      .legend-head { display: flex; }
+      .legend-toggle { padding: 2px 8px; font-size: 11px; }
+      .legend-body { display: flex; flex-direction: column; gap: 5px; }
+      .legend-closed .legend-body { display: none; }
+      .legend-block-folded > :not(.legend-title) { display: none; }
+      .legend-block-folded .legend-title { margin-bottom: 0; }
+      .legend-block-folded .legend-title::before { content: '▸ '; }
       .legend-row { display: flex; align-items: center; gap: 7px; font-size: 12px; color: #c3ccd5; padding: 1px 0; }
       .legend-swatch { flex: none; width: 11px; height: 11px; border-radius: 2px; border: 1px solid rgba(255,255,255,0.25); }
       .legend-label { flex: 1 1 auto; }

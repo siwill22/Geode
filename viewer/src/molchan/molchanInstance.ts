@@ -149,6 +149,7 @@ export class MolchanInstance {
       factor: ix.factors[0].id,
       combo: ix.combos?.[ix.types[0].id]?.maps[0]?.id ?? '',
       comboSet: 'main',
+      comboAll: false,
       age: 400,
       projection: 'globe',
       boxes: true,
@@ -548,13 +549,17 @@ export class MolchanInstance {
       if (this.comboMode && cm) {
         const e = this.comboEntry!;
         const none = pts.filter((p) => p.share == null).length;
+        const use = cm.kind === 'use';
         blocks.push({
-          title: `Held-out map${this.screenedNote}, ${sliceText}: ${nameSlots(e, cm.combination ?? 'best-of-all choice')}`,
+          title: `${use ? 'Combination to use' : 'Held-out map'}${this.screenedNote}, ${sliceText}: ${this.comboName(cm)}`,
           ramp: { css: rampCss(this.deps.colormaps.viridis.colors, 1, 0), lo: '0 (best rated)', hi: '1 (worst rated)' },
-          rows: none ? [{ label: 'region not set aside (too few deposits)', fill: NO_VALUE, count: String(none) }] : [],
-          note: `Each region set aside (${e.regions.join(', ')}) is coloured by the map made without it: a square's `
-            + 'share of that region\'s continental area (every place and time slice, weighted by area x duration) '
-            + `rated higher, the same rated counting half. ${pts.length} places shown, ${counted}.`
+          rows: none ? [{ label: use ? 'no value' : 'region not set aside (too few deposits)', fill: NO_VALUE, count: String(none) }] : [],
+          note: (use
+            ? 'Every region, also those with too few deposits to be set aside, coloured by the map fitted on all '
+              + 'regions (directions and preferred distances learned from every deposit): '
+            : `Each region set aside (${e.regions.join(', ')}) is coloured by the map made without it: `)
+            + 'a square\'s share of that region\'s continental area (every place and time slice, weighted by area x '
+            + `duration) rated higher, the same rated counting half. ${pts.length} places shown, ${counted}.`
             + (cm.kind === 'best' ? ' Each region uses the combination picked for it on the other regions.' : ''),
         });
       } else if (v.colourBy === 'share') {
@@ -622,14 +627,25 @@ export class MolchanInstance {
     this.ui.setLegend(blocks);
   }
 
+  /** A combination map's name, its slots named by what filled them. */
+  private comboName(cm: ComboMap): string {
+    if (cm.kind === 'use') return `the combination to use, "${cm.fitted_on_all?.combination ?? cm.combination}"`;
+    if (cm.kind === 'best') return 'the held-out test of the choice (best-of-all)';
+    return `"${nameSlots(this.comboEntry, cm.combination ?? '')}"`;
+  }
+
   private setCaption(): void {
     const b = this.deps.index.built_from;
     const cm = this.comboMap;
     if (this.comboMode && cm) {
+      const what = cm.kind === 'use'
+        ? `Skill ${cm.skill.toFixed(3)} on the deposits it was fitted on, so not a test; expected on new ground: `
+          + `${cm.heldout_skill?.toFixed(3) ?? '-'} (the held-out test of the choice)`
+        : cm.kind === 'best' ? `Fully held-out skill ${cm.skill.toFixed(3)}`
+          : `Regional skill ${cm.skill.toFixed(3)}${cm.kind === 'top' ? ' (this combination was picked with hindsight)' : ''}`;
       this.ui.setCaption([
-        `${this.typeShort}${this.screenedNote}, ${cm.kind === 'best' ? 'the best-of-all choice' : `"${nameSlots(this.comboEntry, cm.combination ?? '')}"`}: step 3 of the `
-          + `ladder (equal weights, percentiles). ${cm.kind === 'best' ? 'Fully held-out skill' : 'Regional skill'} `
-          + `${cm.skill.toFixed(3)}. Merdith 2021 plate model. Click anything for its values.`,
+        `${this.typeShort}${this.screenedNote}, ${this.comboName(cm)}: step 3 of the ladder (equal weights, `
+          + `percentiles). ${what}. Merdith 2021 plate model. Click anything for its values.`,
         'Squares: the ground, where each place was in the time slice covering this age, coloured by its held-out '
           + 'map. Diamonds: deposits, where each was at that time slice\'s age, moving with its plate.',
         `Values from RiftsClimate ${b.riftsclimate_commit ?? '?'} (prep/geode_combo_export.py).`,
@@ -701,27 +717,44 @@ export class MolchanInstance {
     }
     points.sort((a, c) => a.share - c.share);
     const best = cm.kind === 'best';
+    const use = cm.kind === 'use';
+    const nRegions = Object.keys(cm.skill_by_region).length;
+    const tally = best && cm.tally
+      ? `In the regions' picks (of ${nRegions}): ` + Object.entries(cm.tally).map(([f, n]) => `${f} ${n}`).join('; ') + '. '
+      : '';
     this.panel.setData({
-      title: `Molchan diagram: ${this.typeShort}, ${best ? 'the best-of-all choice' : `"${nameSlots(this.comboEntry, cm.combination ?? '')}"`}`,
+      title: `Molchan diagram: ${this.typeShort}, ${this.comboName(cm)}`,
       rating: '',
       skill: cm.skill,
+      skillExtra: use ? `Fitted on all regions, so not a test. Expected on new ground (the held-out test of the `
+        + `choice): ${cm.heldout_skill?.toFixed(3) ?? '-'}` : best ? `The held-out test of choosing. ${tally}`.trim() : undefined,
       points: this.comboData ? points : [],
       selected: this.selection?.kind === 'deposit' ? this.selection.id : null,
       factors: Object.entries(cm.skill_by_region).map(([r, sk]) => ({
         id: r, skill: sk, current: false, pickable: false,
         label: `${r} (${cm.deposits_by_region[r]})${best ? `: ${cm.regions[r].combination}` : ''}`,
-        tip: `Made without ${r}: ${cm.regions[r].combination}\n${cm.regions[r].chosen.join('\n')}`,
+        tip: use ? `Fitted on all regions: ${cm.regions[r].chosen.join('\n')}`
+          : `Made without ${r}: ${cm.regions[r].combination}\n${cm.regions[r].chosen.join('\n')}`,
       })),
-      listTitle: best ? 'Each region set aside: the combination picked for it, and its skill there'
-        : 'Each region set aside: skill there',
-      listNote: 'In brackets, the region\'s deposits. Hover a row for what was chosen without that region '
-        + '(directions, preferred distances). The skill above pools the regions, each deposit counting once.',
-      note: 'Each deposit\'s share of its own region\'s continental area rated higher, by the map made without '
-        + 'that region (a held-out map). Up: the share of deposits that would be missed if only ground rated '
-        + 'higher than that were searched. Dashed: deposits placed at random. Skill is the shaded area, 0.5 minus '
+      listTitle: use ? 'Each region: skill of the map fitted on all regions (not held out)'
+        : best ? 'Each region set aside: the combination picked for it, and its skill there'
+          : 'Each region set aside: skill there',
+      listNote: 'In brackets, the region\'s deposits. '
+        + (use ? 'Hover a row for the directions and preferred distances learned from all regions. The skill above '
+          + 'counts every deposit, also those in regions too small to be set aside.'
+          : 'Hover a row for what was chosen without that region (directions, preferred distances). The skill '
+          + 'above pools the regions, each deposit counting once.'),
+      note: (use
+        ? 'Each deposit\'s share of its own region\'s continental area rated higher, by the map fitted on all '
+          + 'regions. That map has seen every deposit, so its curve flatters it; the held-out test of the choice '
+          + 'says what to expect on new ground.'
+        : 'Each deposit\'s share of its own region\'s continental area rated higher, by the map made without '
+          + 'that region (a held-out map).')
+        + ' Up: the share of deposits that would be missed if only ground rated higher than that were searched. '
+        + 'Dashed: deposits placed at random. Skill is the shaded area, 0.5 minus '
         + `the mean share${best ? ': here the fully held-out skill, nothing about a region having helped choose '
-          + 'or make its map' : ': the regional skill of the tables'}. Filled dots: deposits on the map now; click one `
-        + 'to go to it.',
+          + 'or make its map' : use ? '' : ': the regional skill of the tables'}. Filled dots: deposits on the map now; `
+        + 'click one to go to it.',
     });
   }
 
