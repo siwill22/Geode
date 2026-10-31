@@ -672,6 +672,19 @@ python prep/prep_riftsclimate_window.py
 `npm run check:skillwindow` compares the page's skill, deposits and districts with RiftsClimate's
 in a set of windows, for every factor, and shoots the page.
 
+### Other runs of the RiftsClimate analysis (`?run=`)
+
+Both RiftsClimate pages can show another run of the same analysis beside the usual results, e.g.
+the run rebuilt on TPAC's kunanyi cluster on a HEALPix Nside 32 grid (places about 204 km apart
+rather than 290): `molchan.html?run=healpix32` and `skillwindow.html?run=healpix32`. Each run has
+its own sections, `archive/riftsclimate/molchan-<run>/` and `window-<run>/`, written by the two
+packers with `--run <run>` from RiftsClimate's `data/geode-<run>/`. The run's grid is named in its
+index, and the page shows it in the caption, provenance line and tab title; a finer grid also
+draws smaller squares. The runs and their grids are listed in `RUNS` in
+`prep/prep_riftsclimate_molchan.py`. Without `?run=` nothing changes. RiftsClimate's
+`hpc/README.md` ("Viewers for a run") gives the whole sequence (`hpc/pull_viewer.sh` fetches and
+packs).
+
 ### Unresolved inputs
 
 These still need a path supplied, because no public source is recorded for them. Both are used

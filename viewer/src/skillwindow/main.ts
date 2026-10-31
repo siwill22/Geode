@@ -13,7 +13,12 @@ import { fetchMaybeGzippedJSON } from '../../vendor/petrify/js/gzipFetch.js';
  */
 
 const ARCHIVE = import.meta.env.VITE_ARCHIVE_BASE ?? `${import.meta.env.BASE_URL}archive`;
-const BASE = `${ARCHIVE}/riftsclimate/window`;
+/** Which run's results: none (archive/riftsclimate/window/), or ?run=<name> for
+ *  archive/riftsclimate/window-<name>/ (e.g. ?run=healpix32: the HEALPix Nside 32 grid, rebuilt on
+ *  kunanyi; prep_riftsclimate_window.py --run). */
+const RUN = new URLSearchParams(location.search).get('run');
+if (RUN && !/^[a-z0-9]+$/.test(RUN)) throw new Error(`No such run: "${RUN}".`);
+const BASE = `${ARCHIVE}/riftsclimate/window${RUN ? `-${RUN}` : ''}`;
 /** The archive format this page reads (prep_riftsclimate_window.py FORMAT). */
 const FORMAT = 1;
 const TYPE_LABEL: Record<string, string> = {
@@ -38,6 +43,8 @@ interface Index {
   types: Record<string, { deposits: number; districts: number; deposits_file: string; expected_file: string }>;
   windows: [number, number][];
   built_from: { riftsclimate_commit: string | null; script_state: string; data_written: string };
+  /** The grid the cells sit on, when it is not the usual Fibonacci lattice of about 290 km. */
+  grid?: { name: string; spacing_km: number };
 }
 interface DepositsFile extends WindowDeposits { type: string; id: string[]; name: string[]; age_ma: number[]; lon: number[]; lat: number[] }
 
@@ -558,7 +565,9 @@ async function start(): Promise<void> {
   wireThroughTime();
   const b = index.built_from;
   $('provenance').textContent = `Computed in this page from RiftsClimate ${b.riftsclimate_commit ?? '?'} `
-    + `(prep/geode_window_export.py, ${b.script_state}; data written ${b.data_written}). ${index.cells} cells.`;
+    + `(prep/geode_window_export.py, ${b.script_state}; data written ${b.data_written}). ${index.cells} cells`
+    + (index.grid ? ` on ${index.grid.name}, places about ${index.grid.spacing_km} km apart.` : '.');
+  if (index.grid) document.title += ` (${index.grid.name})`;
   results = computeAll(state.young, state.old);
   update();
   // for scripts/check_skillwindow.mjs: the same test in any window, without the page

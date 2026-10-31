@@ -40,7 +40,11 @@ const BACKDROP_R = LAND_R_UNDER_SURFACE * (1 - 0.0006);
 const BACKDROP_COLOR = 0x16202b;
 const COAST_MIN_AGE = 0.001;
 const RING = { highlightRadius: 6, highlightWidth: 2.2, highlight: 'rgba(255, 255, 255, 1)' };
+/** A ground square's size at the usual grid (places about 290 km apart); finer grids draw smaller squares. */
 const BOX_SIZE = 2.4;
+const USUAL_SPACING_KM = 290;
+/** How many combination maps the page keeps loaded at once (the most recently shown). */
+const COMBO_FILES_KEPT = 12;
 const DEP_SIZE = 4.4;
 /** Ground with no such feature at the time (a distance that cannot be measured). */
 const NO_VALUE = 'rgba(150, 156, 164, 0.35)';
@@ -131,6 +135,8 @@ export class MolchanInstance {
   private readonly comboPanel: ComboPanel;
   /** The combination map on screen, once fetched; files fetched so far (by path). */
   private comboData: ComboShares | null = null;
+  /** The combination maps loaded, the most recent last; only the last COMBO_FILES_KEPT are kept (a map
+   *  holds every box, about a million at Nside 32, so keeping all of them can exhaust the tab). */
   private readonly comboFiles = new Map<string, Promise<ComboShares>>();
   private readonly rankedFiles = new Map<string, Promise<ComboRankedFile>>();
   private boxIdx: number[] = [];
@@ -244,10 +250,16 @@ export class MolchanInstance {
     const m = this.comboMap;
     if (!m) { this.comboData = null; return; }
     if (this.comboData?.id === m.file) return;
+    const kept = this.comboFiles.get(m.file);
+    if (kept) {                       // seen again: now the most recent
+      this.comboFiles.delete(m.file);
+      this.comboFiles.set(m.file, kept);
+    }
     if (!this.comboFiles.has(m.file)) {
       const id = m.file;
       this.comboFiles.set(m.file, (fetchMaybeGzippedJSON(`${this.deps.archiveBase}/${m.file}`) as Promise<ComboMapFile>)
         .then((f) => ({ id, boxes: f.boxes.map((v) => (v == null ? null : v / 1000)), deposits: f.deposits })));
+      while (this.comboFiles.size > COMBO_FILES_KEPT) this.comboFiles.delete(this.comboFiles.keys().next().value!);
     }
     this.ui.setStatus('loading the map ...');
     const data = await this.comboFiles.get(m.file)!;
@@ -278,6 +290,14 @@ export class MolchanInstance {
 
   /** "SEDEX", "MVT": the type's label up to its first space. */
   private get typeShort(): string { return this.typeLabel.split(' ')[0]; }
+  /** How far apart the ground's places are: the usual lattice, or the run's own grid. */
+  private get spacingKm(): number { return this.deps.index.grid?.spacing_km ?? USUAL_SPACING_KM; }
+  private get boxSize(): number { return BOX_SIZE * this.spacingKm / USUAL_SPACING_KM; }
+  /** Named in the caption only when the run is not on the usual lattice. */
+  private get gridNote(): string {
+    const g = this.deps.index.grid;
+    return g ? `Grid: ${g.name}, places about ${g.spacing_km} km apart. ` : '';
+  }
 
   async boot(): Promise<void> {
     this.ui.setStatus('loading continents and margins ...');
@@ -483,9 +503,9 @@ export class MolchanInstance {
       return { lon, lat, share: b.at(shares, p, s) ?? null, value: b.at(values, p, s) ?? null, slice: s };
     });
     this.load(this.boxLayer, pts, (p) => ({
-      symbol: 'square', size: BOX_SIZE,
+      symbol: 'square', size: this.boxSize,
       fill: this.colourOf(p.share as number | null, p.value as number | null),
-    }), BOX_SIZE, 'rgba(8, 10, 14, 0.6)');
+    }), this.boxSize, 'rgba(8, 10, 14, 0.6)');
   }
 
   /** Where this deposit is drawn: where it was at the time slice's own age, on its plate, so it
@@ -572,7 +592,7 @@ export class MolchanInstance {
           rows: none ? [{ label: 'no value for this factor: not in its test', fill: NO_VALUE, count: String(none) }] : [],
           note: `Share of all the test's ground (every place and time slice, weighted by area x duration) rated `
             + `higher than this box, the same rated counting half. ${pts.length} places shown, ${counted}. `
-            + 'A square is a place (about 290 km apart) where it was then.',
+            + `A square is a place (about ${this.spacingKm} km apart) where it was then.`,
         });
       } else {
         const col = COLUMN[f.column] ?? { label: f.column, top: 1 };
@@ -648,7 +668,7 @@ export class MolchanInstance {
           + `percentiles). ${what}. Merdith 2021 plate model. Click anything for its values.`,
         'Squares: the ground, where each place was in the time slice covering this age, coloured by its held-out '
           + 'map. Diamonds: deposits, where each was at that time slice\'s age, moving with its plate.',
-        `Values from RiftsClimate ${b.riftsclimate_commit ?? '?'} (prep/geode_combo_export.py).`,
+        `${this.gridNote}Values from RiftsClimate ${b.riftsclimate_commit ?? '?'} (prep/geode_combo_export.py).`,
       ]);
       return;
     }
@@ -661,7 +681,7 @@ export class MolchanInstance {
         + '. Merdith 2021 plate model. Click anything for its values.',
       'Squares: the ground, where each place was in the time slice covering this age. Diamonds: deposits, '
         + 'where each was at that time slice\'s age, moving with its plate.',
-      `Values from RiftsClimate ${b.riftsclimate_commit ?? '?'} (${b.script}, ${b.script_state}), written ${b.data_written}.`,
+      `${this.gridNote}Values from RiftsClimate ${b.riftsclimate_commit ?? '?'} (${b.script}, ${b.script_state}), written ${b.data_written}.`,
     ]);
   }
 

@@ -23,6 +23,11 @@ import type { MolchanBoxesFile, MolchanDepositsFile, MolchanIndex } from './type
 const ARCHIVE = import.meta.env.VITE_ARCHIVE_BASE ?? `${import.meta.env.BASE_URL}archive`;
 const BACKGROUND = 0x0b0d10;
 const START_PROJECTION: ProjectionMode = 'robinson';
+/** Which run's results: none (the usual archive/riftsclimate/molchan/), or ?run=<name> for
+ *  archive/riftsclimate/molchan-<name>/ (e.g. ?run=healpix32: the HEALPix Nside 32 grid, rebuilt on
+ *  kunanyi; prep_riftsclimate_molchan.py --run). */
+const RUN = new URLSearchParams(location.search).get('run');
+const SECTION = `riftsclimate/molchan${RUN ? `-${RUN}` : ''}`;
 /** The archive format this page reads (prep_riftsclimate_molchan.py FORMAT). */
 const MOLCHAN_FORMAT = 5;
 
@@ -101,17 +106,19 @@ renderer.domElement.addEventListener('pointermove', (ev) => {
 renderer.domElement.addEventListener('pointerleave', () => instance?.hoverOut());
 
 async function boot(): Promise<void> {
+  if (RUN && !/^[a-z0-9]+$/.test(RUN)) throw new ReadableError(`No such run: "${RUN}".`);
   const archive = await loadArchive(ARCHIVE);
   const [index, rifts] = await Promise.all([
-    fetchMaybeGzippedJSON(`${ARCHIVE}/riftsclimate/molchan/index.json`) as Promise<MolchanIndex>,
+    fetchMaybeGzippedJSON(`${ARCHIVE}/${SECTION}/index.json`) as Promise<MolchanIndex>,
     fetchMaybeGzippedJSON(`${ARCHIVE}/riftsclimate/index.json`) as Promise<RiftsIndex>,
   ]);
   const fmt = index.format ?? 1;
   if (fmt !== MOLCHAN_FORMAT) {
-    throw new ReadableError(`The Molchan archive (archive/riftsclimate/molchan/) is format ${fmt}; this page `
+    throw new ReadableError(`The Molchan archive (archive/${SECTION}/) is format ${fmt}; this page `
       + `reads format ${MOLCHAN_FORMAT}. Rebuild it (env -u PYTHONPATH conda run -n riftsclimate python `
       + 'prep/prep_riftsclimate_molchan.py) or update the viewer code, then reload.');
   }
+  if (index.grid) document.title += ` (${index.grid.name})`;
   const [colormaps, boxes, deposits, boundaries] = await Promise.all([
     loadColormaps(ARCHIVE, archive.colormaps),
     fetchMaybeGzippedJSON(`${ARCHIVE}/${index.files.boxes}`) as Promise<MolchanBoxesFile>,

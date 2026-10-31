@@ -43,6 +43,11 @@ prep_riftsclimate.py). New content goes under archive/riftsclimate/molchan/ only
 
 Run with the RiftsClimate environment, like prep_riftsclimate.py:
     env -u PYTHONPATH conda run -n riftsclimate python prep/prep_riftsclimate_molchan.py
+
+Another run of the same analysis (e.g. on a different grid) gets its own section beside this one,
+leaving it untouched: --run healpix32 reads RiftsClimate's data/geode-healpix32/molchan/ and writes
+archive/riftsclimate/molchan-healpix32/, with the grid named in its index; the page reads it with
+molchan.html?run=healpix32. Runs and their grids are listed in RUNS.
 """
 
 import argparse
@@ -56,6 +61,11 @@ import numpy as np
 import pandas as pd
 
 RIFTSCLIMATE = Path("/Users/simon/GIT/RiftsClimate")
+# other runs of the analysis (--run): the grid its ground sits on, named in the index and on the page
+RUNS = {"healpix32": {"name": "HEALPix Nside 32 (rebuilt on kunanyi)", "spacing_km": 204},
+        "healpix64": {"name": "HEALPix Nside 64 (rebuilt on kunanyi)", "spacing_km": 102}}
+SECTION = "riftsclimate/molchan"     # the archive section written (set by --run)
+DATA = "data/geode/molchan"          # where in RiftsClimate the export is read from (set by --run)
 PLATE_MODEL = "merdith2021"          # the id in archive/riftsclimate/index.json
 FORMAT = 5                 # 2: deposits' positions at every slice; 3: combinations; 4: plate boundaries;
                            # 5: the new candidate factors (steps 1-2), with within-period and regional skills
@@ -135,9 +145,9 @@ def provenance(rc):
         "script": script,
         "script_state": ("untracked" if status.startswith("??") else
                          "uncommitted changes" if status else "committed"),
-        "data": "data/geode/molchan/",
+        "data": f"{DATA}/",
         "data_written": datetime.datetime.fromtimestamp(
-            (rc / "data/geode/molchan/boxes.csv.gz").stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
+            (rc / DATA / "boxes.csv.gz").stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
         "packed": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
     }
 
@@ -191,7 +201,7 @@ def pack_boundaries(path, out, snap_ma, archive):
     if bad:
         raise SystemExit(f"teeth: the Boundary Frames differ from the boundaries at {len(bad)} slices, e.g. {bad[:5]}")
     print(f"teeth from {TEETH_FRAMES}: the same subduction zones at all {len(frames)} time slices")
-    return "riftsclimate/molchan/boundaries.json.gz", {"frames": TEETH_FRAMES, "age_max": max(have)}
+    return f"{SECTION}/boundaries.json.gz", {"frames": TEETH_FRAMES, "age_max": max(have)}
 
 
 def pack_combos(src, out, boxes, pidx, sidx, P, S, deposits):
@@ -225,10 +235,19 @@ def pack_combos(src, out, boxes, pidx, sidx, P, S, deposits):
         maps = json.loads((d / "maps.json").read_text())["maps"]
         cells = pd.read_csv(d / "cells.csv.gz")
         cflat = cells["place"].map(pidx).to_numpy() * S + cells["snapshot_ma"].map(sidx).to_numpy()
-        if set(cflat) != set(flat[in_test]):
-            raise SystemExit(f"combos {t}: the cells are not the boxes in the test")
+        # step 3 rates every cell of the step 1 test that has a value for each of its factors: a cell
+        # with one blank (e.g. no plate speed where the plate model has no polygon at that time; 3
+        # cells at Nside 32) is left out of step 3, and drawn without a value in its maps
+        extra = set(cflat) - set(flat[in_test])
+        if extra:
+            raise SystemExit(f"combos {t}: {len(extra)} cells are not boxes in the test")
+        left_out = len(set(flat[in_test]) - set(cflat))
+        if left_out:
+            print(f"combos {t}: {left_out} boxes of the test are not in step 3 (a factor has no value there)")
         pos = pd.Series(np.arange(len(cells)), index=cflat)
         take = pos.reindex(from_flat).to_numpy()
+        have = ~np.isnan(take)                  # boxes step 3 left out stay blank (see left_out)
+        take = np.where(have, take, 0).astype(int)
         if place_region is None:
             reg = cells.groupby("place")["region"].first()
             place_region = [reg.get(p, "") if isinstance(reg.get(p, ""), str) else "" for p in sorted(pidx, key=pidx.get)]
@@ -239,14 +258,14 @@ def pack_combos(src, out, boxes, pidx, sidx, P, S, deposits):
         size = 0
         for m in maps:
             grid = np.full(P * S, np.nan)
-            grid[flat] = cells[m["id"]].to_numpy(float)[take]
+            grid[flat] = np.where(have, cells[m["id"]].to_numpy(float)[take], np.nan)
             dep = np.full(len(deposits), np.nan)
             dep[drow] = dc[m["id"]].to_numpy(float)
             # the skill must come back from the deposits' shares as written
             got = 0.5 - np.nanmean(dep)
             if abs(got - m["skill"]) > 1e-3:
                 raise SystemExit(f"combos {t} {m['id']}: deposits give {got:.4f}, RiftsClimate {m['skill']:.4f}")
-            m["file"] = f"riftsclimate/molchan/combos/{folder}/{m['id']}.json.gz"
+            m["file"] = f"{SECTION}/combos/{folder}/{m['id']}.json.gz"
             size += write_gz_json(out / "combos" / folder / f"{m['id']}.json.gz",
                                   {"id": m["id"], "boxes": rounded(grid * 1000, 0), "deposits": rounded(dep, 4)})
         r = pd.read_csv(d / "ranked.csv")
@@ -266,7 +285,7 @@ def pack_combos(src, out, boxes, pidx, sidx, P, S, deposits):
             "set": set_label or "main candidates",
             "regions": regions,
             "maps": maps,
-            "ranked": f"riftsclimate/molchan/combos/{folder}/ranked.json.gz",
+            "ranked": f"{SECTION}/combos/{folder}/ranked.json.gz",
             "count": len(r),
             "gains": {k: [{"group": x.group, "factor": x.factor, "gain": round(float(x.gain), 4),
                            "worlds": int(x.worlds) if np.isfinite(x.worlds) else 0,
@@ -290,9 +309,13 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--riftsclimate", type=Path, default=RIFTSCLIMATE)
     ap.add_argument("--archive", type=Path, default=Path("archive"))
+    ap.add_argument("--run", choices=sorted(RUNS), help="another run of the analysis, in its own section")
     args = ap.parse_args()
-    src = args.riftsclimate / "data" / "geode" / "molchan"
-    out = args.archive / "riftsclimate" / "molchan"
+    global SECTION, DATA
+    if args.run:
+        SECTION, DATA = f"riftsclimate/molchan-{args.run}", f"data/geode-{args.run}/molchan"
+    src = args.riftsclimate / DATA
+    out = args.archive / SECTION
 
     boxes = pd.read_csv(src / "boxes.csv.gz")
     deposits = pd.read_csv(src / "deposits.csv")
@@ -389,7 +412,7 @@ def main():
         "counts": {"places": P, "snapshots": S, "boxes": len(boxes),
                    "boxes_in_test": int((boxes.weight_in_test > 0).sum()),
                    "deposits": deposits.deposit_class.value_counts().to_dict()},
-        "files": {"boxes": "riftsclimate/molchan/boxes.json.gz", "deposits": "riftsclimate/molchan/deposits.json.gz",
+        "files": {"boxes": f"{SECTION}/boxes.json.gz", "deposits": f"{SECTION}/deposits.json.gz",
                   "boundaries": boundaries_file},
         "built_from": provenance(args.riftsclimate),
         # subduction teeth: the Boundary Frames to draw them from (polarity), or null
@@ -398,6 +421,9 @@ def main():
         "combos": combos,
         "place_region": place_region,
     }
+    if args.run:
+        index["grid"] = RUNS[args.run]
+        index["title"] += f" ({RUNS[args.run]['name']})"
     (out / "index.json").write_text(json.dumps(index, indent=1))
     print(f"wrote {out}/index.json")
 

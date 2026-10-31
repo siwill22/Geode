@@ -63,6 +63,9 @@ export interface MolchanIndex {
   combos: Record<string, ComboEntry>;
   /** The region each place lies in today (as RiftsClimate's region_of), by place index. */
   place_region: string[];
+  /** The grid the ground's places sit on, when it is not the usual Fibonacci lattice of about
+   *  290 km (a run opened with ?run=<name>, e.g. HEALPix Nside 32 rebuilt on kunanyi). */
+  grid?: { name: string; spacing_km: number };
 }
 
 /** One combination map: its held-out map (each region set aside rated by the map made

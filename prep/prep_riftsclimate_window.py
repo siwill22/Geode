@@ -18,6 +18,10 @@ Writes, under archive/riftsclimate/window/:
 
 Run:
     python prep/prep_riftsclimate_window.py
+
+Another run of the same analysis (e.g. on a different grid): --run healpix32 reads RiftsClimate's
+data/geode-healpix32/window/ and writes archive/riftsclimate/window-healpix32/, with the grid named in
+its index (skillwindow.html?run=healpix32). The runs are prep_riftsclimate_molchan.py's RUNS.
 """
 
 import argparse
@@ -28,11 +32,13 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from prep_riftsclimate_molchan import RUNS   # the other runs of the analysis and their grids
+
 RIFTSCLIMATE = Path("/Users/simon/GIT/RiftsClimate")
 FORMAT = 1
 
 
-def provenance(rc):
+def provenance(rc, data):
     def git(*a):
         try:
             return subprocess.run(["git", "-C", str(rc), *a], capture_output=True, text=True,
@@ -46,9 +52,9 @@ def provenance(rc):
         "script": script,
         "script_state": ("untracked" if status.startswith("??") else
                          "uncommitted changes" if status else "committed"),
-        "data": "data/geode/window/",
+        "data": f"{data}/",
         "data_written": datetime.datetime.fromtimestamp(
-            (rc / "data/geode/window/ground.bin").stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
+            (rc / data / "ground.bin").stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
     }
 
 
@@ -61,9 +67,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--riftsclimate", type=Path, default=RIFTSCLIMATE)
     ap.add_argument("--archive", type=Path, default=Path("archive"))
+    ap.add_argument("--run", choices=sorted(RUNS), help="another run of the analysis, in its own section")
     args = ap.parse_args()
-    src = args.riftsclimate / "data/geode/window"
-    out = args.archive / "riftsclimate/window"
+    data = f"data/geode-{args.run}/window" if args.run else "data/geode/window"
+    src = args.riftsclimate / data
+    out = args.archive / ("riftsclimate/window" + (f"-{args.run}" if args.run else ""))
     out.mkdir(parents=True, exist_ok=True)
     index = json.loads((src / "index.json").read_text())
     gz(src / "ground.bin", out / "ground.bin.gz")
@@ -71,7 +79,9 @@ def main():
         gz(src / f"deposits_{t}.json", out / f"deposits_{t}.json.gz")
         gz(src / f"expected_{t}.json", out / f"expected_{t}.json.gz")
         index["types"][t].update(deposits_file=f"deposits_{t}.json.gz", expected_file=f"expected_{t}.json.gz")
-    index.update(format=FORMAT, ground_file="ground.bin.gz", built_from=provenance(args.riftsclimate))
+    index.update(format=FORMAT, ground_file="ground.bin.gz", built_from=provenance(args.riftsclimate, data))
+    if args.run:
+        index["grid"] = RUNS[args.run]
     (out / "index.json").write_text(json.dumps(index, indent=1))
     print(f"wrote {out}: {index['cells']} cells, {len(index['factors'])} factors, types {list(index['types'])}")
 

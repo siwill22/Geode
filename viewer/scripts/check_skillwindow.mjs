@@ -43,7 +43,8 @@ const shoot = async (name) => {
 const report = await page.evaluate(async () => {
   const sw = window.__skillwindow;
   const { fetchMaybeGzippedJSON } = await import('/vendor/petrify/js/gzipFetch.js');
-  const base = new URL('archive/riftsclimate/window/', location.href).href;
+  const run = new URLSearchParams(location.search).get('run');      // ?run=<name>: that run's section
+  const base = new URL(`archive/riftsclimate/window${run ? `-${run}` : ''}/`, location.href).href;
   const out = [];
   for (const [t, info] of Object.entries(sw.index.types)) {
     await sw.setType(t);
