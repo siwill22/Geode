@@ -24,6 +24,10 @@ Example
     python prep_convection.py \\
         --input /Users/simon/Data/zenodo/OPT1_temperature_anomaly_grids_dimensional \\
         --id opt1 --name "Muller 2022 OPT1" --age-max 200 --validate
+
+A series stored as ONE 3-D file per age (e.g. PlateDriver's mantle_temp_<AGE>Ma.nc,
+dVs(depth, lat, lon)) takes --volume-var <name>: the age still comes from the file
+name (--age-regex), the depth from the file's own depth coordinate.
 """
 
 import argparse
@@ -93,6 +97,34 @@ def scan(path, age_rx, depth_rx, age_min, age_max):
     return dict(sorted(groups.items())), np.array(sorted(depths.pop()))
 
 
+def scan_volumes(path, age_rx, age_min, age_max):
+    """One 3-D file per age: {age: [(None, file)]}, sorted by age."""
+    arx = re.compile(age_rx)
+    groups = {}
+    for f in path.iterdir():
+        if f.suffix.lower() not in (".nc", ".grd"):
+            continue
+        a = arx.search(f.name)
+        if a and age_min <= float(a.group(1)) <= age_max:
+            groups[float(a.group(1))] = [(None, f)]
+    if not groups:
+        raise SystemExit(f"nothing in {path} matched age {age_rx!r}")
+    return dict(sorted(groups.items()))
+
+
+def load_volume(files, varname):
+    """One age's 3-D variable as (depth, lat, lon), with its depth axis."""
+    (_, f), = files
+    ds = xr.open_dataset(f)
+    lon_n, lat_n = find_coord(ds, LON_NAMES), find_coord(ds, LAT_NAMES)
+    dep_n = find_coord(ds, ("depth", "depth_km", "z"))
+    da = ds[varname].transpose(dep_n, lat_n, lon_n)
+    out = (np.asarray(da.values, dtype=np.float32), np.asarray(ds[lon_n].values, dtype=np.float64),
+           np.asarray(ds[lat_n].values, dtype=np.float64), np.asarray(ds[dep_n].values, dtype=np.float64))
+    ds.close()
+    return out
+
+
 def load_frame(files, varname=None):
     """Stack one age's depth slices into (depth, lat, lon)."""
     slices, lon, lat = [], None, None
@@ -154,6 +186,8 @@ def main():
     ap.add_argument("--var-id", default="temp")
     ap.add_argument("--var-name", default="Temperature anomaly")
     ap.add_argument("--slice-var", default=None)
+    ap.add_argument("--volume-var", default=None,
+                    help="one 3-D file per age: the variable to read (depth from the file)")
     ap.add_argument("--units", default="K")
     ap.add_argument("--high-means", default="hot", choices=["fast", "hot"],
                     help="what a HIGH value means physically; selects the "
@@ -180,9 +214,13 @@ def main():
 
     colormap = choose_colormap(args.colormap, args.high_means, args.out, True)
 
-    groups, src_depth = scan(
-        args.input, args.age_regex, args.depth_regex, args.age_min, args.age_max
-    )
+    if args.volume_var:
+        groups = scan_volumes(args.input, args.age_regex, args.age_min, args.age_max)
+        src_depth = load_volume(next(iter(groups.values())), args.volume_var)[3]
+    else:
+        groups, src_depth = scan(
+            args.input, args.age_regex, args.depth_regex, args.age_min, args.age_max
+        )
     ages = list(groups)
     print(f"{len(ages)} ages {ages[0]:.0f}-{ages[-1]:.0f} Ma, "
           f"{len(src_depth)} depth levels {src_depth.min():.0f}-{src_depth.max():.0f} km")
@@ -195,7 +233,12 @@ def main():
     frames = {}
     raw_min, raw_max = np.inf, -np.inf
     for age in ages:
-        data, lon, lat = load_frame(groups[age], args.slice_var)
+        if args.volume_var:
+            data, lon, lat, d = load_volume(groups[age], args.volume_var)
+            if not np.array_equal(d, src_depth):
+                raise SystemExit(f"depth axis at {age} Ma differs from the first file")
+        else:
+            data, lon, lat = load_frame(groups[age], args.slice_var)
         if lat[0] > lat[-1]:
             lat, data = lat[::-1], data[:, ::-1, :]
         data, lon = normalise_longitude(data, lon)
@@ -295,7 +338,7 @@ def main():
         "variables": [{
             "id": args.var_id,
             "name": args.var_name,
-            "source_var": args.slice_var or "z",
+            "source_var": args.volume_var or args.slice_var or "z",
             "units": args.units,
             "diverging": True,
             "high_means": args.high_means,
