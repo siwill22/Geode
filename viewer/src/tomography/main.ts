@@ -349,6 +349,19 @@ function showSinkingSlice(inst: GlobeInstance): void {
   refreshGUI(inst);
 }
 
+/** A coloured depth slice at a fixed depth, in place of the outer surface. */
+const PD_SLICE_KM = 2700;
+
+function showDepthSlice(inst: GlobeInstance, depthKm: number): void {
+  inst.applySurfaceMode('none');
+  const ds = inst.view.depthSlice;
+  ds.enabled = true;
+  ds.sinkingEnabled = false;
+  ds.depthKm = depthKm;
+  inst.applyDepthSlice();
+  refreshGUI(inst);
+}
+
 /** "slow & fast" for seismic velocity, "cold & hot" for temperature -- the
  *  same naming the isosurface controls use (ui.ts setVariable). */
 function isoPairLabel(inst: GlobeInstance): string {
@@ -463,6 +476,33 @@ function comparisonPresets(): Preset[] {
         host.focused = host.instances[0];
         // One shared camera for every tile, pointed at the cut.
         setCamera(ATLANTIC_CAMERA);
+      },
+    });
+  }
+
+  // PlateDriver's kinematic mantle runs (ids pd-*, a local archive only): one run, OPT1
+  // and present-day tomography side by side, on one depth slice, age and depth synced.
+  const pd = modelById('pd-refined') ?? modelById('pd-dip-pile-sharp') ?? modelById('pd-dip-pile') ?? deps.archive.models.find((m) => m.id.startsWith('pd-'));
+  const others = [modelById('opt1'), modelById('reveal'), modelById('semucb')].filter(
+    (m): m is ModelEntry => m !== undefined);
+  if (pd && others.length) {
+    const set = [pd, ...others];
+    presets.push({
+      label: 'Kinematic model vs OPT1 vs tomography',
+      sub: `${set.map((m) => m.name).join(' | ')}: depth slice at ${PD_SLICE_KM} km, synced age & depth`,
+      apply: async () => {
+        await setGlobeCount(set.length);
+        setSyncAge(false);
+        setSyncDepthSlice(false);
+        for (const [i, m] of set.entries()) {
+          const inst = host.instances[i];
+          await inst.selectModel(m.id);
+          resetInstanceDisplayDefaults(inst);
+          showDepthSlice(inst, PD_SLICE_KM);
+        }
+        host.focused = host.instances[0];
+        setSyncAge(true);
+        setSyncDepthSlice(true);
       },
     });
   }
